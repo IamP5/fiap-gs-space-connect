@@ -2,6 +2,7 @@
 // a connection indicator (header), the task ledger (top-left), and the 2D
 // world canvas. No state libraries, no router — React + a canvas is enough.
 
+import { useState } from "react";
 import { useSnapshot } from "./useSnapshot";
 import { WorldCanvas } from "./WorldCanvas";
 import type { TaskStatus } from "./types";
@@ -14,7 +15,28 @@ const STATUS_CLASS: Record<TaskStatus, string> = {
 };
 
 export default function App() {
-  const { snapshot, wsOpen, url } = useSnapshot();
+  const { snapshot, wsOpen, url, send } = useSnapshot();
+
+  // Selection is the ONLY new client state — the dashboard stays a pure
+  // re-render of the snapshot otherwise (ADR-0004). Two-step kill: click a
+  // rover to select, then click KILL, so a stray click never kills.
+  const [selected, setSelected] = useState<string | null>(null);
+
+  // The currently-selected rover, resolved against the LATEST snapshot. If it
+  // has vanished from the snapshot, this is undefined → treated as deselected.
+  const selectedRover = selected
+    ? snapshot?.rovers.find((r) => r.id === selected)
+    : undefined;
+  const selectionLive = selectedRover !== undefined;
+  const selectedAlive = selectedRover?.alive === true;
+
+  const kill = () => {
+    if (!selected || !selectedAlive) return;
+    // Browser → server control frame; the gateway relays it onto NATS
+    // `control.command` and the rover flag-flips dead (<100ms).
+    send({ cmd: "kill", robot: selected });
+    setSelected(null);
+  };
 
   // The "all systems connected" indicator: green ONLY when the WebSocket is
   // open AND the latest snapshot reports the coordinator's bus is healthy
@@ -91,7 +113,41 @@ export default function App() {
           </div>
         </aside>
 
-        <WorldCanvas snapshot={snapshot} />
+        {selectionLive && selectedRover && (
+          <aside
+            className={`kill-panel ${selectedAlive ? "kill-panel-armed" : "kill-panel-down"}`}
+          >
+            <div className="kill-eyebrow">Selected rover</div>
+            <div className="kill-id">{selectedRover.id.toUpperCase()}</div>
+            <div className="kill-stat">
+              {selectedAlive
+                ? `${Math.round(Math.max(0, Math.min(1, selectedRover.battery)) * 100)}% battery`
+                : "status down"}
+            </div>
+            {selectedAlive ? (
+              <button type="button" className="kill-btn" onClick={kill}>
+                KILL
+              </button>
+            ) : (
+              <button type="button" className="kill-btn" disabled>
+                DOWN
+              </button>
+            )}
+            <button
+              type="button"
+              className="kill-dismiss"
+              onClick={() => setSelected(null)}
+            >
+              dismiss
+            </button>
+          </aside>
+        )}
+
+        <WorldCanvas
+          snapshot={snapshot}
+          selected={selectionLive ? selected : null}
+          onPick={setSelected}
+        />
       </main>
     </div>
   );

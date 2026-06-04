@@ -7,7 +7,8 @@
 // canvas with padding; it redraws on snapshot change and on resize.
 
 import { useEffect, useRef } from "react";
-import type { Snapshot, TaskStatus, Vec2 } from "./types";
+import type { Snapshot, TaskStatus } from "./types";
+import { ROVER_R as PROJ_ROVER_R, pickRover, project } from "./hitTest";
 
 // Functional telemetry encoding (DESIGN.md treats these as live-data signals,
 // not brand chrome — the brand palette itself is black + white only).
@@ -21,37 +22,12 @@ const STATUS_COLOR: Record<TaskStatus, string> = {
 const DISPLAY_FONT = '"D-DIN-Bold", "Arial Narrow", Arial, sans-serif';
 const UI_FONT = '"D-DIN", "Inter", Arial, sans-serif';
 
-const PADDING = 56;
-const ROVER_R = 11;
+// Projection layout constants live in hitTest.ts so the draw and the click
+// hit-test share one source of truth. Re-aliased here for local readability.
+const ROVER_R = PROJ_ROVER_R;
 const TASK_R = 9;
 
-type Bounds = { minX: number; minY: number; maxX: number; maxY: number };
-
-function computeBounds(points: Vec2[]): Bounds {
-  if (points.length === 0) return { minX: 0, minY: 0, maxX: 1, maxY: 1 };
-  let minX = Infinity,
-    minY = Infinity,
-    maxX = -Infinity,
-    maxY = -Infinity;
-  for (const p of points) {
-    if (p.X < minX) minX = p.X;
-    if (p.Y < minY) minY = p.Y;
-    if (p.X > maxX) maxX = p.X;
-    if (p.Y > maxY) maxY = p.Y;
-  }
-  // Avoid a zero-size span (single point / colinear worksite).
-  if (maxX - minX < 1) {
-    minX -= 1;
-    maxX += 1;
-  }
-  if (maxY - minY < 1) {
-    minY -= 1;
-    maxY += 1;
-  }
-  return { minX, minY, maxX, maxY };
-}
-
-function draw(canvas: HTMLCanvasElement, snapshot: Snapshot | null) {
+function draw(canvas: HTMLCanvasElement, snapshot: Snapshot | null, selected: string | null) {
   const ctx = canvas.getContext("2d");
   if (!ctx) return;
 
@@ -77,25 +53,14 @@ function draw(canvas: HTMLCanvasElement, snapshot: Snapshot | null) {
     return;
   }
 
-  const all: Vec2[] = [
-    ...snapshot.tasks.map((t) => t.pos),
-    ...snapshot.rovers.map((r) => r.pos),
-  ];
-  const b = computeBounds(all);
-
-  // Uniform scale so the worksite keeps its aspect ratio inside the padding.
-  const spanX = b.maxX - b.minX;
-  const spanY = b.maxY - b.minY;
-  const usableW = cssW - PADDING * 2;
-  const usableH = cssH - PADDING * 2;
-  const scale = Math.min(usableW / spanX, usableH / spanY);
-  // Center the scaled worksite.
-  const offX = PADDING + (usableW - spanX * scale) / 2;
-  const offY = PADDING + (usableH - spanY * scale) / 2;
-
-  // World → canvas. Y is flipped so +Y points up on screen.
-  const tx = (p: Vec2) => offX + (p.X - b.minX) * scale;
-  const ty = (p: Vec2) => offY + (b.maxY - p.Y) * scale;
+  // World → canvas projection: the SAME pure math the click hit-test uses, so a
+  // click always lands on the rover the user sees (see hitTest.ts).
+  const { tx, ty } = project(
+    snapshot.rovers.map((r) => r.pos),
+    snapshot.tasks.map((t) => t.pos),
+    cssW,
+    cssH,
+  );
 
   drawGrid(ctx, cssW, cssH);
 
@@ -146,6 +111,21 @@ function draw(canvas: HTMLCanvasElement, snapshot: Snapshot | null) {
     const x = tx(r.pos);
     const y = ty(r.pos);
     const dim = !r.alive;
+
+    // Selection indicator: an extra outer ring around the rover the user is
+    // about to act on. Drawn under the body/battery so it reads as a halo.
+    // Live selections glow danger-red (this is the KILL target); a dead rover
+    // selection is muted (it cannot be killed).
+    if (selected === r.id) {
+      ctx.save();
+      ctx.beginPath();
+      ctx.arc(x, y, ROVER_R + 9, 0, Math.PI * 2);
+      ctx.lineWidth = 2;
+      ctx.strokeStyle = dim ? "#5a5a5f" : "#e74c3c";
+      ctx.setLineDash([4, 3]);
+      ctx.stroke();
+      ctx.restore();
+    }
 
     // Rovers render monochrome — white on black, per the brand's no-accent rule.
     ctx.beginPath();
@@ -203,26 +183,53 @@ function drawGrid(ctx: CanvasRenderingContext2D, w: number, h: number) {
   ctx.restore();
 }
 
-export function WorldCanvas({ snapshot }: { snapshot: Snapshot | null }) {
+type WorldCanvasProps = {
+  snapshot: Snapshot | null;
+  selected: string | null;
+  onPick: (id: string | null) => void;
+};
+
+export function WorldCanvas({ snapshot, selected, onPick }: WorldCanvasProps) {
   const canvasRef = useRef<HTMLCanvasElement>(null);
 
   useEffect(() => {
     const canvas = canvasRef.current;
     if (!canvas) return;
-    draw(canvas, snapshot);
+    draw(canvas, snapshot, selected);
 
-    const onResize = () => draw(canvas, snapshot);
+    const onResize = () => draw(canvas, snapshot, selected);
     window.addEventListener("resize", onResize);
 
     // Also redraw if the canvas element itself is resized (layout changes).
-    const ro = new ResizeObserver(() => draw(canvas, snapshot));
+    const ro = new ResizeObserver(() => draw(canvas, snapshot, selected));
     ro.observe(canvas);
 
     return () => {
       window.removeEventListener("resize", onResize);
       ro.disconnect();
     };
-  }, [snapshot]);
+  }, [snapshot, selected]);
 
-  return <canvas ref={canvasRef} className="world-canvas" />;
+  const handleClick = (e: React.MouseEvent<HTMLCanvasElement>) => {
+    if (!snapshot) return;
+    const canvas = canvasRef.current;
+    if (!canvas) return;
+
+    // Click position in CSS px. offsetX/offsetY are relative to the target's
+    // padding box already; fall back to the bounding rect when unavailable.
+    const ne = e.nativeEvent;
+    let px = ne.offsetX;
+    let py = ne.offsetY;
+    if (px === undefined || py === undefined) {
+      const rect = canvas.getBoundingClientRect();
+      px = e.clientX - rect.left;
+      py = e.clientY - rect.top;
+    }
+
+    // Project against the displayed CSS size (the projection works in CSS px).
+    const id = pickRover(snapshot, px, py, canvas.clientWidth, canvas.clientHeight);
+    onPick(id); // null when empty space was clicked → deselect.
+  };
+
+  return <canvas ref={canvasRef} className="world-canvas" onClick={handleClick} />;
 }
