@@ -1,6 +1,7 @@
 #!/usr/bin/env bash
-# Pre-demo smoke test (TECHSPEC §7): bring the stack up and assert the bus,
-# gateway, and the end-to-end auction are healthy before presenting.
+# Pre-demo smoke test (TECHSPEC §7): bring the stack up and assert the bus and
+# gateway are healthy, the scripted kill triggers self-heal, and the swarm closes
+# the dome end-to-end — before presenting.
 #
 #   ./deploy/smoke.sh            # build, bring up, assert, then tear down
 #   ./deploy/smoke.sh --keep     # leave the stack running after asserting
@@ -30,19 +31,33 @@ for i in $(seq 1 60); do
 done
 [[ $ok -eq 1 ]] || { echo "✗ gateway never reported connected"; $COMPOSE logs --tail=40; exit 1; }
 
-echo "▶ waiting for the auction to drive both tasks to DONE…"
+echo "▶ waiting for the scripted kill to trigger self-heal (wall-1 expiry → re-auction)…"
+heal_ok=0
+for i in $(seq 1 40); do
+  # slog renders as: msg=expiry task=wall-1 … note="returned to UNCLAIMED"
+  if $COMPOSE logs coordinator 2>/dev/null | grep -q "msg=expiry task=wall-1"; then
+    echo "  ✓ wall-1 lease expired and returned to UNCLAIMED for re-auction"
+    heal_ok=1
+    break
+  fi
+  sleep 1
+done
+[[ $heal_ok -eq 1 ]] || { echo "✗ self-heal never triggered (no wall-1 expiry)"; $COMPOSE logs coordinator --tail=40; exit 1; }
+
+echo "▶ waiting for the swarm to close the dome (dome-cap DONE)…"
 done_ok=0
-for i in $(seq 1 30); do
-  if $COMPOSE logs coordinator 2>/dev/null | grep -q "complete task=task-b"; then
-    echo "  ✓ both tasks completed end-to-end"
+for i in $(seq 1 60); do
+  # The keystone completing means every foundation + wall is DONE and the dome closed.
+  if $COMPOSE logs coordinator 2>/dev/null | grep -q "msg=complete task=dome-cap"; then
+    echo "  ✓ dome-cap complete — the dome closed end-to-end after self-heal"
     done_ok=1
     break
   fi
   sleep 1
 done
-[[ $done_ok -eq 1 ]] || { echo "✗ tasks did not complete"; $COMPOSE logs coordinator --tail=40; exit 1; }
+[[ $done_ok -eq 1 ]] || { echo "✗ dome never closed (dome-cap not complete)"; $COMPOSE logs coordinator --tail=40; exit 1; }
 
-echo "✅ SMOKE PASS — NATS + coordinator + gateway healthy; auction completed."
+echo "✅ SMOKE PASS — NATS + coordinator + gateway healthy; self-heal fired and the dome closed."
 if [[ $KEEP -eq 1 ]]; then
   echo "ℹ stack left running: web http://localhost:5173 · gateway :8080 (--keep)"
 fi

@@ -8,19 +8,31 @@ package main
 import (
 	"context"
 	"flag"
-	"log"
+	"log/slog"
 	"os"
 	"os/signal"
 	"strings"
+	"swarmbuild/internal/agent"
+	"swarmbuild/internal/bus"
+	"swarmbuild/internal/core/domain"
 	"syscall"
 	"time"
-
-	"swarmbuild/agent"
-	"swarmbuild/bus"
-	"swarmbuild/core/domain"
 )
 
 func main() {
+	slog.SetDefault(slog.New(slog.NewTextHandler(os.Stderr, &slog.HandlerOptions{Level: slog.LevelInfo})))
+
+	if err := run(); err != nil {
+		slog.Error("agent failed", "error", err)
+		os.Exit(1)
+	}
+}
+
+// run wires the rover from flags, connects to the bus, and drives it until the
+// context is cancelled. It is split out from main so the deferred cleanup
+// (signal stop, connection close) actually runs before the process exits on
+// error — a fatal log inside main would skip every defer.
+func run() error {
 	var (
 		mode    = flag.String("mode", "inproc", "rover host: inproc|container (container = standalone)")
 		id      = flag.String("id", "R1", "rover id")
@@ -41,33 +53,32 @@ func main() {
 		url = "nats://127.0.0.1:4222"
 	}
 
-	capabilities := parseCapabilities(*caps)
-
 	cfg := agent.Config{
 		ID:             domain.RobotID(*id),
 		Pos:            domain.Vec2{X: *posX, Y: *posY},
 		Battery:        *battery,
-		Capabilities:   capabilities,
+		Capabilities:   parseCapabilities(*caps),
 		HeartbeatEvery: time.Duration(*hbMS) * time.Millisecond,
 	}
 
 	ctx, stop := signal.NotifyContext(context.Background(), syscall.SIGINT, syscall.SIGTERM)
 	defer stop()
 
-	log.Printf("agent %s: mode=%s connecting to %s", cfg.ID, *mode, url)
+	slog.Info("agent connecting", "rover", cfg.ID, "mode", *mode, "nats_url", url)
 	conn, err := bus.Connect(ctx, url, bus.ConnectOptions{
 		Name:    "rover-" + *id,
 		MaxWait: 30 * time.Second,
 	})
 	if err != nil {
-		log.Fatalf("agent %s: connect: %v", cfg.ID, err)
+		return err
 	}
 	defer conn.Close()
 
 	if err := agent.Run(ctx, cfg, conn); err != nil && ctx.Err() == nil {
-		log.Fatalf("agent %s: %v", cfg.ID, err)
+		return err
 	}
-	log.Printf("agent %s: shut down", cfg.ID)
+	slog.Info("agent shut down", "rover", cfg.ID)
+	return nil
 }
 
 func parseCapabilities(s string) []domain.Capability {
