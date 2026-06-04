@@ -33,10 +33,41 @@ type Config struct {
 	HeartbeatEvery time.Duration // e.g. 500ms
 }
 
-// executeBeat is the skeleton's stand-in for doing the work: the rover holds the
-// lease for a short fixed beat (no movement yet, ADR-0001) then reports
-// completion. Real behaviour-tree execution arrives in a later slice.
-const executeBeat = 300 * time.Millisecond
+// Movement and work tuning. Movement is visual interpolation only — the rover
+// lerps its position toward the task each tick, no physics (ADR-0001). The
+// constants are chosen so a ~10-unit drive is watchable (~0.5s) yet keeps the
+// demo and tests fast.
+const (
+	// moveStep is the movement integration tick: the rover advances its
+	// position toward the target this often during the drive.
+	moveStep = 50 * time.Millisecond
+
+	// roverSpeed is the constant cruise speed in world-units per second. At
+	// 18 u/s a 10-unit drive takes ~0.55s: long enough to see on the web,
+	// short enough that a test converges in a handful of ticks.
+	roverSpeed = 18.0
+
+	// arriveEps is the arrival epsilon: within this distance of the target the
+	// rover is considered to have arrived (avoids asymptotic crawl).
+	arriveEps = 0.05
+
+	// drainPerUnit is battery drained per world-unit travelled. Small so a
+	// full demo route (tens of units) costs a fraction of a charge but the
+	// drop is still visible in telemetry. Fraction units (battery ∈ (0,1]).
+	drainPerUnit = 0.004
+
+	// drainPerWorkSec is battery drained per second of the work phase. Working
+	// a task costs a little charge even when stationary.
+	drainPerWorkSec = 0.05
+
+	// workDuration is how long the rover "works" the task after arriving,
+	// before reporting completion.
+	workDuration = 600 * time.Millisecond
+
+	// minBattery floors the charge so 1/battery (used by the cost function for
+	// bidding) stays finite — the rover never bricks itself in the demo.
+	minBattery = 0.02
+)
 
 // telemetryEvery is how often a rover self-reports position/battery/health/load.
 const telemetryEvery = 200 * time.Millisecond
@@ -50,6 +81,11 @@ type rover struct {
 	battery float64
 	load    int // tasks currently held
 	alive   bool
+
+	// inFlight is the set of tasks currently being executed by this rover. It
+	// guards against a redelivered/duplicate wire.Award spawning a second
+	// execute goroutine for the same task. Guarded by mu.
+	inFlight map[domain.TaskID]struct{}
 }
 
 // snapshot returns a consistent copy of the rover's scoring-relevant state.
@@ -66,6 +102,76 @@ func (r *rover) addLoad(delta int) {
 		r.load = 0
 	}
 	r.mu.Unlock()
+}
+
+// claim marks task as in flight for this rover, returning false if it was
+// already in flight (a duplicate/redelivered award). The matching release()
+// clears it. Both run under the rover mutex.
+func (r *rover) claim(task domain.TaskID) bool {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	if r.inFlight == nil {
+		r.inFlight = make(map[domain.TaskID]struct{})
+	}
+	if _, dup := r.inFlight[task]; dup {
+		return false
+	}
+	r.inFlight[task] = struct{}{}
+	return true
+}
+
+func (r *rover) release(task domain.TaskID) {
+	r.mu.Lock()
+	delete(r.inFlight, task)
+	r.mu.Unlock()
+}
+
+// moveToward advances the rover's position toward target by at most maxStep
+// world-units (visual interpolation only, no physics — ADR-0001), draining
+// battery by the distance actually moved × drainPerUnit. It returns true once
+// the rover is within arriveEps of the target, snapping exactly onto it; an
+// already-arrived call drains nothing and reports arrived.
+func (r *rover) moveToward(target domain.Vec2, maxStep float64) (arrived bool) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+
+	d := r.pos.Dist(target)
+	if d <= arriveEps {
+		r.pos = target
+		return true
+	}
+	step := maxStep
+	if step >= d {
+		// Final step: land exactly on the target.
+		r.drainLocked(d * drainPerUnit)
+		r.pos = target
+		return true
+	}
+	// Partial step: lerp along the straight line toward the target.
+	t := step / d
+	r.pos = domain.Vec2{
+		X: r.pos.X + (target.X-r.pos.X)*t,
+		Y: r.pos.Y + (target.Y-r.pos.Y)*t,
+	}
+	r.drainLocked(step * drainPerUnit)
+	return false
+}
+
+// drainOverTime drains battery by amount (a fraction), flooring at minBattery.
+// Used by the work phase, which drains drainPerWorkSec per elapsed second.
+func (r *rover) drainOverTime(amount float64) {
+	r.mu.Lock()
+	r.drainLocked(amount)
+	r.mu.Unlock()
+}
+
+// drainLocked subtracts amount from battery, flooring at minBattery so 1/battery
+// stays finite for bidding. Caller must hold r.mu.
+func (r *rover) drainLocked(amount float64) {
+	r.battery -= amount
+	if r.battery < minBattery {
+		r.battery = minBattery
+	}
 }
 
 // Run drives one rover until ctx is cancelled. It connects to NATS (hardened),
@@ -153,35 +259,95 @@ func Run(ctx context.Context, cfg Config, conn *bus.Conn) error {
 	}
 }
 
-// execute runs the skeleton work for one awarded task: bump load, heartbeat the
-// lease until the fixed beat elapses, then report completion and drop load.
+// execute runs one awarded task: bump load, drive toward aw.Pos by visual
+// interpolation (draining battery with distance), then work the task for a
+// short phase (draining battery with time), then report completion and drop
+// load. Heartbeats are sent at the hb cadence THROUGHOUT both the drive and the
+// work phase so the coordinator's lease (TTL ≥ 3× hb) never false-expires while
+// the rover is still driving (ADR-0001: movement is visual interpolation only,
+// there is no physics).
+//
+// A duplicate/redelivered award for the same task is dropped (st.claim) so one
+// rover never runs two concurrent execute goroutines for one task.
 func execute(ctx context.Context, cfg Config, conn *bus.Conn, st *rover, hb time.Duration, aw wire.Award) {
+	if !st.claim(aw.TaskID) {
+		return // already executing this task (duplicate award)
+	}
+	defer st.release(aw.TaskID)
+
 	st.addLoad(1)
 	defer st.addLoad(-1)
 
-	log.Printf("rover %s: awarded %s, executing", cfg.ID, aw.TaskID)
+	log.Printf("rover %s: awarded %s, driving to %v", cfg.ID, aw.TaskID, aw.Pos)
 
-	beat := time.NewTimer(executeBeat)
-	defer beat.Stop()
 	heart := time.NewTicker(hb)
 	defer heart.Stop()
 
 	// Heartbeat immediately so the lease is renewed before the first TTL window
-	// can lapse, then on every tick until the work beat completes.
+	// can lapse, then on every tick throughout the drive and work phases below.
 	sendHeartbeat(conn, cfg.ID, aw.TaskID)
+
+	if !drive(ctx, cfg, conn, st, heart, aw) {
+		return // ctx cancelled mid-drive
+	}
+	if !workPhase(ctx, cfg, conn, st, heart, aw) {
+		return // ctx cancelled mid-work
+	}
+
+	_ = conn.PublishJSON(wire.SubjTaskComplete, wire.Complete{
+		TaskID: aw.TaskID,
+		Robot:  cfg.ID,
+	})
+	log.Printf("rover %s: completed %s", cfg.ID, aw.TaskID)
+}
+
+// drive interpolates the rover toward aw.Pos, one moveStep of travel per move
+// tick, heartbeating on the heart ticker meanwhile. It returns true on arrival,
+// false if ctx is cancelled first.
+func drive(ctx context.Context, cfg Config, conn *bus.Conn, st *rover, heart *time.Ticker, aw wire.Award) bool {
+	// maxStep is how far the rover may advance per move tick at cruise speed.
+	maxStep := roverSpeed * moveStep.Seconds()
+
+	move := time.NewTicker(moveStep)
+	defer move.Stop()
+
+	// Snap onto the target immediately if we are already there.
+	if st.moveToward(aw.Pos, maxStep) {
+		return true
+	}
 	for {
 		select {
 		case <-ctx.Done():
-			return
+			return false
 		case <-heart.C:
 			sendHeartbeat(conn, cfg.ID, aw.TaskID)
-		case <-beat.C:
-			_ = conn.PublishJSON(wire.SubjTaskComplete, wire.Complete{
-				TaskID: aw.TaskID,
-				Robot:  cfg.ID,
-			})
-			log.Printf("rover %s: completed %s", cfg.ID, aw.TaskID)
-			return
+		case <-move.C:
+			if st.moveToward(aw.Pos, maxStep) {
+				return true
+			}
+		}
+	}
+}
+
+// workPhase holds the rover at the worksite for workDuration, draining battery
+// over time and heartbeating the lease. It returns true on completion, false if
+// ctx is cancelled first.
+func workPhase(ctx context.Context, cfg Config, conn *bus.Conn, st *rover, heart *time.Ticker, aw wire.Award) bool {
+	done := time.NewTimer(workDuration)
+	defer done.Stop()
+	tick := time.NewTicker(moveStep)
+	defer tick.Stop()
+
+	for {
+		select {
+		case <-ctx.Done():
+			return false
+		case <-heart.C:
+			sendHeartbeat(conn, cfg.ID, aw.TaskID)
+		case <-tick.C:
+			st.drainOverTime(drainPerWorkSec * moveStep.Seconds())
+		case <-done.C:
+			return true
 		}
 	}
 }

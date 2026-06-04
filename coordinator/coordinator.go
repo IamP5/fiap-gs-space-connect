@@ -423,6 +423,7 @@ func (st *state) award(ctx context.Context, t domain.Task, winner domain.RobotID
 	_ = st.conn.PublishJSON(wire.SubjTaskAward, wire.Award{
 		TaskID:   t.ID,
 		Robot:    winner,
+		Pos:      st.pos[t.ID], // where the winner must drive to (slice 02)
 		LeaseTTL: st.ttl,
 		Version:  next.Version,
 	})

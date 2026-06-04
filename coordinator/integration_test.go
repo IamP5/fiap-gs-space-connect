@@ -74,7 +74,10 @@ func TestWalkingSkeleton(t *testing.T) {
 		return tk, ok
 	}
 
-	deadline := time.Now().Add(5 * time.Second)
+	// Slice 02: rovers now drive toward their task and run a work phase before
+	// completing, so end-to-end takes real wall time (auction windows + drive +
+	// work, twice). Budget generously so a loaded -race run is never flaky.
+	deadline := time.Now().Add(15 * time.Second)
 	poll := func(desc string, cond func() bool) {
 		t.Helper()
 		for time.Now().Before(deadline) {

@@ -36,12 +36,14 @@ func main() {
 		},
 	}
 
-	// Two rovers with differing positions/battery so the auction has a clear
-	// winner (R1 sits on task-a, fresher battery → lower cost).
+	// Two rovers parked away from the worksite so each award triggers a visible
+	// drive (slice 02). R1 starts nearer/fresher, so it is the clear lower-cost
+	// winner and you watch it interpolate to task-a, work, then drive on to
+	// task-b once the dependency clears; R2 idles far off as the standby bidder.
 	rovers := []agent.Config{
 		{
 			ID:           "R1",
-			Pos:          domain.Vec2{X: 0, Y: 0},
+			Pos:          domain.Vec2{X: -6, Y: 14},
 			Battery:      1.0,
 			Capabilities: []domain.Capability{"foundation"},
 		},

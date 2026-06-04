@@ -67,10 +67,13 @@ type Bid struct {
 	Cost   float64        `json:"cost"`
 }
 
-// Award grants a task to the winning rover as a lease.
+// Award grants a task to the winning rover as a lease. Pos is the task's
+// worksite location so the winning rover knows where to drive (slice 02: the
+// rover interpolates toward Pos, draining battery, before it works the task).
 type Award struct {
 	TaskID   domain.TaskID  `json:"task_id"`
 	Robot    domain.RobotID `json:"robot_id"`
+	Pos      domain.Vec2    `json:"pos"`
 	LeaseTTL domain.Tick    `json:"lease_ttl"`
 	Version  domain.Lamport `json:"version"`
 }
