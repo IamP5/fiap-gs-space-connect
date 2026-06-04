@@ -177,6 +177,19 @@ type Snapshot struct {
 	At        domain.Tick `json:"at"`
 }
 
+// EarthUplink is the delayed Earth-bound telemetry view (issue 09). It rides
+// the earth.uplink subject ONLY (ADR-0002 / TECHSPEC §8: the latency shim never
+// touches heartbeats or the tactical loop). It is a lagging copy of the world so
+// the Earth panel can show telemetry still in-flight while the swarm has already
+// healed locally. Type is always "earth" so the browser routes it apart from a
+// Snapshot.
+type EarthUplink struct {
+	Type   string      `json:"type"` // always "earth"
+	Rovers []RoverView `json:"rovers"`
+	Tasks  []TaskView  `json:"tasks"`
+	At     domain.Tick `json:"at"` // the world time this view reflects (lag = now - At)
+}
+
 // --- Browser → server control (TECHSPEC §4) ---
 
 // Control is a command from the dashboard. Skeleton wires the relay path; the

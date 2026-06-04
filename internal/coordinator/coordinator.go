@@ -131,6 +131,13 @@ type state struct {
 	clk    domain.Clock
 	ttl    domain.Tick
 	window time.Duration
+
+	// earthCh hands a copy of each freshly-published tactical snapshot to the
+	// Earth-uplink shim (runEarthUplink) over a buffered channel. publishSnapshot
+	// sends NON-BLOCKING (drop on full), so the single writer never blocks on the
+	// shim and the tactical loop is provably untouched by latency (ADR-0002):
+	// snapshots are full-state and drop-safe, so a slow shim just loses frames.
+	earthCh chan wire.EarthUplink
 }
 
 // Run loads the blueprint, spawns the in-process rovers, and runs the
@@ -192,7 +199,16 @@ func Run(ctx context.Context, cfg Config) error {
 		// Copy the scripted kills so arming them (setting fired) never mutates the
 		// caller's Config slice.
 		scriptedKills: append([]ScriptedKill(nil), cfg.ScriptedKills...),
+		// Buffered so publishSnapshot's non-blocking send rarely drops; the shim
+		// owns the channel's receive side.
+		earthCh: make(chan wire.EarthUplink, 64),
 	}
+
+	// --- Earth-uplink shim (issue 09): a SEPARATE goroutine owns the artificial
+	// delay and the earth.uplink publish. It NEVER touches single-writer state,
+	// heartbeats, telemetry, awards, or world.snapshot — only the new earth.uplink
+	// feed is delayed (ADR-0002 / TECHSPEC §8). Latency is read atomically. ---
+	shim := newEarthShim(conn, st.earthCh)
 
 	// --- Inbound event channel: the ONLY way state is mutated. ---
 	events := make(chan any, 256)
@@ -203,6 +219,28 @@ func Run(ctx context.Context, cfg Config) error {
 		return err
 	}
 	defer unsub()
+
+	// setLatency control: runs on the NATS dispatcher and ONLY does an atomic
+	// store on the shim. It deliberately does NOT enqueue onto the single-writer
+	// events channel, so changing latency cannot perturb auctions/leases/snapshots
+	// (ADR-0002). "kill" / "setFailureProb" are handled by the agents, not here.
+	unsubCtl, err := bus.SubscribeJSON(conn, wire.SubjControl, func(c wire.Control) {
+		if c.Cmd == "setLatency" {
+			shim.setLatency(c.Value)
+		}
+	})
+	if err != nil {
+		return fmt.Errorf("coordinator: subscribe control: %w", err)
+	}
+	defer unsubCtl()
+
+	// Start the shim goroutine; its lifecycle is tied to ctx.
+	shimDone := make(chan struct{})
+	go func() {
+		defer close(shimDone)
+		shim.run(ctx)
+	}()
+	defer func() { <-shimDone }()
 
 	// --- Spawn in-process rovers, each its own independent NATS client. ---
 	roverCtx, cancelRovers := context.WithCancel(ctx)
@@ -708,12 +746,24 @@ func (st *state) publishSnapshot() {
 	events := st.pendingEvents
 	st.pendingEvents = nil
 
+	at := st.clk.Now()
 	_ = st.conn.PublishJSON(wire.SubjSnapshot, wire.Snapshot{
 		Type:      "snapshot",
 		Connected: st.conn.Connected(),
 		Rovers:    roverViews,
 		Tasks:     taskViews,
 		Events:    events,
-		At:        st.clk.Now(),
+		At:        at,
 	})
+
+	// AFTER the tactical snapshot is on the wire, hand a copy to the Earth-uplink
+	// shim with a NON-BLOCKING send: the single writer must never block, so a slow
+	// shim simply drops this frame (snapshots are full-state, drop-safe). No
+	// network or delay work happens on this writer goroutine — the shim owns it.
+	// This is the ONLY thing latency affects; world.snapshot above already went
+	// out undelayed (ADR-0002 / TECHSPEC §8).
+	select {
+	case st.earthCh <- wire.EarthUplink{Type: "earth", Rovers: roverViews, Tasks: taskViews, At: at}:
+	default:
+	}
 }
