@@ -1,7 +1,7 @@
 # SwarmBuild walking-skeleton stack (issue 01): NATS + coordinator + gateway + web.
 #   docker compose -f deploy/docker-compose.yml up --build
 # Then open http://localhost:5173 — the "all systems connected" indicator goes
-# green once the gateway's bus is up, and the two-task auction runs.
+# green once the gateway's bus is up, and the swarm builds the dome (kill → heal).
 name: swarmbuild
 
 services:
