@@ -64,6 +64,12 @@ func TestConnect_RetriesUntilDeadline(t *testing.T) {
 	}
 }
 
+// sameTaskView compares the fields the mirror round-trip cares about, keeping
+// the multi-field equality check out of the test's cyclomatic budget.
+func sameTaskView(a, b wire.TaskView) bool {
+	return a.ID == b.ID && a.Status == b.Status && a.Assignee == b.Assignee && a.Version == b.Version
+}
+
 func TestKV_MirrorRoundTrip(t *testing.T) {
 	c := dial(t)
 	ctx := context.Background()
@@ -75,21 +81,32 @@ func TestKV_MirrorRoundTrip(t *testing.T) {
 	if err := kv.PutJSON(ctx, string(rec.ID), rec); err != nil {
 		t.Fatalf("put: %v", err)
 	}
+
 	got, ok, err := bus.GetJSON[wire.TaskView](ctx, kv, string(rec.ID))
-	if err != nil || !ok {
-		t.Fatalf("get: ok=%v err=%v", ok, err)
+	if err != nil {
+		t.Fatalf("get: %v", err)
 	}
-	if got.ID != rec.ID || got.Status != rec.Status || got.Assignee != rec.Assignee || got.Version != rec.Version {
+	if !ok {
+		t.Fatal("get: key not found")
+	}
+	if !sameTaskView(got, rec) {
 		t.Fatalf("kv mismatch: got %+v want %+v", got, rec)
 	}
+
 	keys, err := kv.Keys(ctx)
-	if err != nil || len(keys) != 1 || keys[0] != string(rec.ID) {
-		t.Fatalf("keys: %v err=%v", keys, err)
+	if err != nil {
+		t.Fatalf("keys: %v", err)
+	}
+	if len(keys) != 1 || keys[0] != string(rec.ID) {
+		t.Fatalf("keys: got %v want [%s]", keys, rec.ID)
 	}
 
 	// Absent key → (zero, false, nil).
 	_, ok, err = bus.GetJSON[wire.TaskView](ctx, kv, "nope")
-	if err != nil || ok {
-		t.Fatalf("absent key: ok=%v err=%v", ok, err)
+	if err != nil {
+		t.Fatalf("absent key: %v", err)
+	}
+	if ok {
+		t.Fatal("absent key: expected ok=false")
 	}
 }

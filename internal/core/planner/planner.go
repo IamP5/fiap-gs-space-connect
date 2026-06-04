@@ -14,7 +14,6 @@ import (
 	"fmt"
 	"slices"
 	"sort"
-
 	"swarmbuild/internal/core/domain"
 )
 

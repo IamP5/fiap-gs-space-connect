@@ -22,20 +22,22 @@ import (
 //   - the winner holds a LEASED task that then reaches DONE,
 //   - BOTH tasks reach DONE end-to-end,
 //   - the World Model is mirrored to NATS KV (read back via bus.GetJSON).
+//
+//nolint:gocyclo // end-to-end walking-skeleton test: sequential poll/assert stages over real timing read as one narrative; splitting would obscure it.
 func TestWalkingSkeleton(t *testing.T) {
 	url, shutdown := bustest.RunServer(t)
 	defer shutdown()
 
 	blueprint := []coordinator.BlueprintTask{
-		{Task: domain.Task{ID: "task-a", Type: "foundation"}, Pos: domain.Vec2{X: 0, Y: 0}},
-		{Task: domain.Task{ID: "task-b", Type: "foundation", Deps: []domain.TaskID{"task-a"}}, Pos: domain.Vec2{X: 10, Y: 0}},
+		{Task: domain.Task{ID: "task-a", Type: typeFoundation}, Pos: domain.Vec2{X: 0, Y: 0}},
+		{Task: domain.Task{ID: "task-b", Type: typeFoundation, Deps: []domain.TaskID{"task-a"}}, Pos: domain.Vec2{X: 10, Y: 0}},
 	}
 
 	// R1 sits on task-a with a full battery; R2 is far away with less charge, so
 	// R1 is the clear lower-cost winner. (Even at equal cost, R1 < R2 wins.)
 	rovers := []agent.Config{
-		{ID: "R1", Pos: domain.Vec2{X: 0, Y: 0}, Battery: 1.0, Capabilities: []domain.Capability{"foundation"}},
-		{ID: "R2", Pos: domain.Vec2{X: 50, Y: 50}, Battery: 0.6, Capabilities: []domain.Capability{"foundation"}},
+		{ID: "R1", Pos: domain.Vec2{X: 0, Y: 0}, Battery: 1.0, Capabilities: []domain.Capability{typeFoundation}},
+		{ID: "R2", Pos: domain.Vec2{X: 50, Y: 50}, Battery: 0.6, Capabilities: []domain.Capability{typeFoundation}},
 	}
 
 	cfg := coordinator.Config{

@@ -71,15 +71,17 @@ func subscribeBeats(t *testing.T, h *selfHealHarness) *beatCollector {
 // through the REAL wire.Control path once task-x is leased, the task orphans and
 // self-heals to a different rover, and the whole arc emits genuine choreography
 // beats derived from real engine events (bid/won/killed/expired/solidify).
+//
+//nolint:gocyclo // end-to-end choreography test: sequential poll/assert beats (bid→won→killed→expired→solidify) read as one narrative; splitting would obscure it.
 func TestChoreography_ScriptedKillHealsAndEmitsBeats(t *testing.T) {
 	blueprint := []coordinator.BlueprintTask{
-		{Task: domain.Task{ID: "task-x", Type: "foundation"}, Pos: domain.Vec2{X: 30, Y: 0}},
+		{Task: domain.Task{ID: taskX, Type: typeFoundation}, Pos: domain.Vec2{X: 30, Y: 0}},
 	}
 	// R1 is the clear winner (on the task, full battery); R2 is the standby that
 	// can only win once R1 is killed and the lease TTL-expires.
 	rovers := []agent.Config{
-		{ID: "R1", Pos: domain.Vec2{X: 30, Y: 0}, Battery: 1.0, Capabilities: []domain.Capability{"foundation"}},
-		{ID: "R2", Pos: domain.Vec2{X: 0, Y: 60}, Battery: 0.6, Capabilities: []domain.Capability{"foundation"}},
+		{ID: "R1", Pos: domain.Vec2{X: 30, Y: 0}, Battery: 1.0, Capabilities: []domain.Capability{typeFoundation}},
+		{ID: "R2", Pos: domain.Vec2{X: 0, Y: 60}, Battery: 0.6, Capabilities: []domain.Capability{typeFoundation}},
 	}
 
 	cfg := coordinator.Config{
@@ -92,29 +94,29 @@ func TestChoreography_ScriptedKillHealsAndEmitsBeats(t *testing.T) {
 		// The SCRIPTED kill: once task-x is leased, its holder is killed 150ms
 		// later over the real control path. The test itself publishes no kill.
 		ScriptedKills: []coordinator.ScriptedKill{
-			{WhenTaskLeased: "task-x", After: 150 * time.Millisecond},
+			{WhenTaskLeased: taskX, After: 150 * time.Millisecond},
 		},
 	}
 
-	h := newSelfHealHarness(t, cfg, "task-x")
+	h := newSelfHealHarness(t, cfg, taskX)
 	bc := subscribeBeats(t, h)
 
 	// 1) task-x is first LEASED to R1 (the clear winner).
 	h.poll("task-x LEASED to R1", func() bool {
-		x, ok := h.getTask("task-x")
+		x, ok := h.getTask(taskX)
 		return ok && x.Status == domain.Leased && x.Assignee == "R1"
 	})
 
 	// 2) The SCRIPTED kill fires (no test publish): R1 stops heartbeating, the
 	//    lease TTL-expires, and the task is re-auctioned and re-leased to R2.
 	h.poll("task-x re-LEASED to R2 (after scripted kill)", func() bool {
-		x, ok := h.getTask("task-x")
+		x, ok := h.getTask(taskX)
 		return ok && x.Status == domain.Leased && x.Assignee == "R2"
 	})
 
 	// 3) R2 carries it to DONE end-to-end.
 	h.poll("task-x DONE", func() bool {
-		x, ok := h.getTask("task-x")
+		x, ok := h.getTask(taskX)
 		return ok && x.Status == domain.Done
 	})
 
@@ -183,11 +185,11 @@ func TestChoreography_ScriptedKillHealsAndEmitsBeats(t *testing.T) {
 // EventSolidify do. Beats otherwise reflect a clean, uninterrupted build.
 func TestChoreography_NoScriptedKillNoKillBeat(t *testing.T) {
 	blueprint := []coordinator.BlueprintTask{
-		{Task: domain.Task{ID: "task-x", Type: "foundation"}, Pos: domain.Vec2{X: 30, Y: 0}},
+		{Task: domain.Task{ID: taskX, Type: typeFoundation}, Pos: domain.Vec2{X: 30, Y: 0}},
 	}
 	rovers := []agent.Config{
-		{ID: "R1", Pos: domain.Vec2{X: 30, Y: 0}, Battery: 1.0, Capabilities: []domain.Capability{"foundation"}},
-		{ID: "R2", Pos: domain.Vec2{X: 0, Y: 60}, Battery: 0.6, Capabilities: []domain.Capability{"foundation"}},
+		{ID: "R1", Pos: domain.Vec2{X: 30, Y: 0}, Battery: 1.0, Capabilities: []domain.Capability{typeFoundation}},
+		{ID: "R2", Pos: domain.Vec2{X: 0, Y: 60}, Battery: 0.6, Capabilities: []domain.Capability{typeFoundation}},
 	}
 
 	cfg := coordinator.Config{
@@ -200,12 +202,12 @@ func TestChoreography_NoScriptedKillNoKillBeat(t *testing.T) {
 		ScriptedKills:  nil, // opt-in: no kill this run
 	}
 
-	h := newSelfHealHarness(t, cfg, "task-x")
+	h := newSelfHealHarness(t, cfg, taskX)
 	bc := subscribeBeats(t, h)
 
 	// Run a clean build straight through to DONE.
 	h.poll("task-x DONE (clean build)", func() bool {
-		x, ok := h.getTask("task-x")
+		x, ok := h.getTask(taskX)
 		return ok && x.Status == domain.Done
 	})
 

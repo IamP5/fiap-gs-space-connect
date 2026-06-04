@@ -12,7 +12,7 @@ package agent
 
 import (
 	"context"
-	"log"
+	"log/slog"
 	"swarmbuild/internal/bus"
 	"swarmbuild/internal/core/allocation"
 	"swarmbuild/internal/core/domain"
@@ -250,12 +250,35 @@ func Run(ctx context.Context, cfg Config, conn *bus.Conn) error {
 		alive:   true,
 		dead:    make(chan struct{}),
 	}
-	weights := allocation.DefaultWeights()
 
-	// Bid on every announced task this rover is eligible for. The callback runs
-	// on the NATS dispatcher goroutine; it only reads rover state (under the
-	// rover mutex) and publishes — it mutates no shared coordinator state.
-	unsubAnnounce, err := bus.SubscribeJSON(conn, wire.SubjTaskAnnounce, func(a wire.Announce) {
+	unsubAnnounce, err := subscribeAnnounce(conn, cfg, st)
+	if err != nil {
+		return err
+	}
+	defer unsubAnnounce()
+
+	unsubAward, err := subscribeAward(ctx, conn, cfg, st, hb)
+	if err != nil {
+		return err
+	}
+	defer unsubAward()
+
+	unsubControl, err := subscribeControl(conn, cfg, st)
+	if err != nil {
+		return err
+	}
+	defer unsubControl()
+
+	return telemetryLoop(ctx, conn, cfg, st)
+}
+
+// subscribeAnnounce makes the rover bid on every announced task it is eligible
+// for. The callback runs on the NATS dispatcher goroutine; it only reads rover
+// state (under the rover mutex) and publishes — it mutates no shared coordinator
+// state.
+func subscribeAnnounce(conn *bus.Conn, cfg Config, st *rover) (func(), error) {
+	weights := allocation.DefaultWeights()
+	return bus.SubscribeJSON(conn, wire.SubjTaskAnnounce, func(a wire.Announce) {
 		pos, battery, load, alive := st.snapshot()
 		if !alive {
 			return
@@ -280,15 +303,13 @@ func Run(ctx context.Context, cfg Config, conn *bus.Conn) error {
 			Cost:   cost,
 		})
 	})
-	if err != nil {
-		return err
-	}
-	defer unsubAnnounce()
+}
 
-	// Execute any task awarded to THIS rover. The award callback hands work off
-	// to its own goroutine so the short execute beat never blocks the NATS
-	// dispatcher.
-	unsubAward, err := bus.SubscribeJSON(conn, wire.SubjTaskAward, func(aw wire.Award) {
+// subscribeAward executes any task awarded to THIS rover. The award callback
+// hands work off to its own goroutine so the short execute beat never blocks the
+// NATS dispatcher.
+func subscribeAward(ctx context.Context, conn *bus.Conn, cfg Config, st *rover, hb time.Duration) (func(), error) {
+	return bus.SubscribeJSON(conn, wire.SubjTaskAward, func(aw wire.Award) {
 		if aw.Robot != cfg.ID {
 			return // not ours
 		}
@@ -297,27 +318,26 @@ func Run(ctx context.Context, cfg Config, conn *bus.Conn) error {
 		}
 		go execute(ctx, cfg, conn, st, hb, aw)
 	})
-	if err != nil {
-		return err
-	}
-	defer unsubAward()
+}
 
-	// Control commands from the dashboard/coordinator. A "kill" naming THIS rover
-	// triggers a silent death: it stops bidding, heartbeating, executing and
-	// telemetering so the coordinator self-heals the lease by TTL expiry. Kills
-	// for other robots are ignored; a repeated kill is a no-op (kill is
-	// idempotent).
-	unsubControl, err := bus.SubscribeJSON(conn, wire.SubjControl, func(c wire.Control) {
+// subscribeControl wires control commands from the dashboard/coordinator. A
+// "kill" naming THIS rover triggers a silent death: it stops bidding,
+// heartbeating, executing and telemetering so the coordinator self-heals the
+// lease by TTL expiry. Kills for other robots are ignored; a repeated kill is a
+// no-op (kill is idempotent).
+func subscribeControl(conn *bus.Conn, cfg Config, st *rover) (func(), error) {
+	return bus.SubscribeJSON(conn, wire.SubjControl, func(c wire.Control) {
 		if c.Cmd == "kill" && c.Robot == cfg.ID {
 			st.kill()
 		}
 	})
-	if err != nil {
-		return err
-	}
-	defer unsubControl()
+}
 
-	// Telemetry ticker: the rover's self-report stream.
+// telemetryLoop runs the rover's self-report stream until ctx is cancelled or
+// the rover suffers a silent death. On death it emits one final alive=false
+// telemetry so the dashboard shows the rover down, then goes silent on the bus
+// (a dead rover is silent); kill() has already cleared alive.
+func telemetryLoop(ctx context.Context, conn *bus.Conn, cfg Config, st *rover) error {
 	ticker := time.NewTicker(telemetryEvery)
 	defer ticker.Stop()
 
@@ -327,9 +347,6 @@ func Run(ctx context.Context, cfg Config, conn *bus.Conn) error {
 		case <-ctx.Done():
 			return ctx.Err()
 		case <-st.dead:
-			// Silent death: emit one final alive=false telemetry so the
-			// dashboard shows the rover down, then go silent on the bus (a dead
-			// rover is silent). kill() has already cleared alive.
 			publishTelemetry(conn, cfg, st)
 			return nil
 		case <-ticker.C:
@@ -357,7 +374,7 @@ func execute(ctx context.Context, cfg Config, conn *bus.Conn, st *rover, hb time
 	st.addLoad(1)
 	defer st.addLoad(-1)
 
-	log.Printf("rover %s: awarded %s, driving to %v", cfg.ID, aw.TaskID, aw.Pos)
+	slog.Info("award", "rover", cfg.ID, "task", aw.TaskID, "pos", aw.Pos)
 
 	heart := time.NewTicker(hb)
 	defer heart.Stop()
@@ -383,7 +400,7 @@ func execute(ctx context.Context, cfg Config, conn *bus.Conn, st *rover, hb time
 			Robot:  cfg.ID,
 			Reason: "execution failure",
 		})
-		log.Printf("rover %s: failed %s (execution failure)", cfg.ID, aw.TaskID)
+		slog.Warn("failed", "rover", cfg.ID, "task", aw.TaskID, "reason", "execution failure")
 		return
 	}
 
@@ -395,7 +412,7 @@ func execute(ctx context.Context, cfg Config, conn *bus.Conn, st *rover, hb time
 		TaskID: aw.TaskID,
 		Robot:  cfg.ID,
 	})
-	log.Printf("rover %s: completed %s", cfg.ID, aw.TaskID)
+	slog.Info("complete", "rover", cfg.ID, "task", aw.TaskID)
 }
 
 // drive interpolates the rover toward aw.Pos, one moveStep of travel per move

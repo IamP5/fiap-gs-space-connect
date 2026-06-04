@@ -25,6 +25,15 @@ import (
 	"time"
 )
 
+// Task-type names of the dome blueprint. These exact string values are part of
+// the blueprint contract (rovers advertise them as capabilities and the auction
+// matches on them), so they MUST NOT change.
+const (
+	taskFoundation domain.TaskType = "foundation"
+	taskWall       domain.TaskType = "wall"
+	taskDomeCap    domain.TaskType = "dome-cap"
+)
+
 // Config is the ONE place every demo-pacing timing is tuned. The defaults
 // (Rehearsal) widen the real engine windows so the kill→heal arc reads in
 // ~12–20 s; shrink them for a faster rehearsal or a CI smoke run. These map
@@ -105,7 +114,7 @@ func DomeBlueprint() []coordinator.BlueprintTask {
 	var bp []coordinator.BlueprintTask
 	for i := 1; i <= 4; i++ {
 		bp = append(bp, coordinator.BlueprintTask{
-			Task: domain.Task{ID: domain.TaskID(fmt.Sprintf("foundation-%d", i)), Type: "foundation"},
+			Task: domain.Task{ID: domain.TaskID(fmt.Sprintf("foundation-%d", i)), Type: taskFoundation},
 			Pos:  foundationPos[i-1],
 		})
 	}
@@ -115,12 +124,12 @@ func DomeBlueprint() []coordinator.BlueprintTask {
 		wallIDs = append(wallIDs, id)
 		foundation := domain.TaskID(fmt.Sprintf("foundation-%d", (i-1)/2+1))
 		bp = append(bp, coordinator.BlueprintTask{
-			Task: domain.Task{ID: id, Type: "wall", Deps: []domain.TaskID{foundation}},
+			Task: domain.Task{ID: id, Type: taskWall, Deps: []domain.TaskID{foundation}},
 			Pos:  wallPos[i-1],
 		})
 	}
 	bp = append(bp, coordinator.BlueprintTask{
-		Task: domain.Task{ID: "dome-cap", Type: "dome-cap", Deps: wallIDs},
+		Task: domain.Task{ID: domain.TaskID(taskDomeCap), Type: taskDomeCap, Deps: wallIDs},
 		Pos:  domain.Vec2{X: 0, Y: 0},
 	})
 	return bp
@@ -130,7 +139,11 @@ func DomeBlueprint() []coordinator.BlueprintTask {
 // capable of every task type so any standby can heal any wall. Fixed positions
 // and staggered batteries make every auction's winner deterministic.
 func DomeRovers() []agent.Config {
-	caps := []domain.Capability{"foundation", "wall", "dome-cap"}
+	caps := []domain.Capability{
+		domain.Capability(taskFoundation),
+		domain.Capability(taskWall),
+		domain.Capability(taskDomeCap),
+	}
 	rovers := make([]agent.Config, 0, 6)
 	for i := range 6 {
 		rovers = append(rovers, agent.Config{

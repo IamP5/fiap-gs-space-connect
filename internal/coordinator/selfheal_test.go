@@ -12,6 +12,14 @@ import (
 	"time"
 )
 
+// typeFoundation is the foundation task type shared across the coordinator test
+// blueprints (rovers carry the matching capability).
+const typeFoundation = "foundation"
+
+// taskX is the single-task id reused across the self-heal / kill / choreography
+// blueprints that exercise one task through the auction→lease→heal arc.
+const taskX domain.TaskID = "task-x"
+
 // selfHealHarness boots an embedded NATS server, runs a coordinator with the
 // given config, and returns an independent observer's getTask (reading the
 // KV-mirrored World Model) plus a poll helper bounded by a generous deadline.
@@ -87,14 +95,14 @@ func TestSelfHeal_TTLExpiryReassigns(t *testing.T) {
 	// One task far enough that the winner must drive (so we can kill it mid-flight
 	// or after the lease, before it completes).
 	blueprint := []coordinator.BlueprintTask{
-		{Task: domain.Task{ID: "task-x", Type: "foundation"}, Pos: domain.Vec2{X: 30, Y: 0}},
+		{Task: domain.Task{ID: taskX, Type: typeFoundation}, Pos: domain.Vec2{X: 30, Y: 0}},
 	}
 	// R1 is the clear winner (on the task, full battery). R2 is the standby:
 	// also capable, but further away and less charged so it only wins once R1 is
 	// gone.
 	rovers := []agent.Config{
-		{ID: "R1", Pos: domain.Vec2{X: 30, Y: 0}, Battery: 1.0, Capabilities: []domain.Capability{"foundation"}},
-		{ID: "R2", Pos: domain.Vec2{X: 0, Y: 60}, Battery: 0.6, Capabilities: []domain.Capability{"foundation"}},
+		{ID: "R1", Pos: domain.Vec2{X: 30, Y: 0}, Battery: 1.0, Capabilities: []domain.Capability{typeFoundation}},
+		{ID: "R2", Pos: domain.Vec2{X: 0, Y: 60}, Battery: 0.6, Capabilities: []domain.Capability{typeFoundation}},
 	}
 
 	cfg := coordinator.Config{
@@ -106,11 +114,11 @@ func TestSelfHeal_TTLExpiryReassigns(t *testing.T) {
 		SnapshotHz:     20,
 	}
 
-	h := newSelfHealHarness(t, cfg, "task-x")
+	h := newSelfHealHarness(t, cfg, taskX)
 
 	// 1) task-x is LEASED to R1 (the clear winner).
 	h.poll("task-x LEASED to R1", func() bool {
-		x, ok := h.getTask("task-x")
+		x, ok := h.getTask(taskX)
 		return ok && x.Status == domain.Leased && x.Assignee == "R1"
 	})
 
@@ -125,17 +133,17 @@ func TestSelfHeal_TTLExpiryReassigns(t *testing.T) {
 	// 3) task-x is re-auctioned and re-leased to a DIFFERENT rover (R2). This is
 	//    the self-heal: assignee changes away from R1.
 	h.poll("task-x re-LEASED to R2", func() bool {
-		x, ok := h.getTask("task-x")
+		x, ok := h.getTask(taskX)
 		return ok && x.Status == domain.Leased && x.Assignee == "R2"
 	})
 
 	// 4) R2 carries it to DONE end-to-end.
 	h.poll("task-x DONE", func() bool {
-		x, ok := h.getTask("task-x")
+		x, ok := h.getTask(taskX)
 		return ok && x.Status == domain.Done
 	})
 
-	x, _ := h.getTask("task-x")
+	x, _ := h.getTask(taskX)
 	if x.Assignee != "" {
 		t.Fatalf("done task-x assignee = %q, want empty", x.Assignee)
 	}
@@ -152,13 +160,13 @@ func TestSelfHeal_TTLExpiryReassigns(t *testing.T) {
 // re-auctions, and R2 (which does not fail) wins, leases, and completes it.
 func TestSelfHeal_ReportedFailureReassignsPromptly(t *testing.T) {
 	blueprint := []coordinator.BlueprintTask{
-		{Task: domain.Task{ID: "task-x", Type: "foundation"}, Pos: domain.Vec2{X: 30, Y: 0}},
+		{Task: domain.Task{ID: taskX, Type: typeFoundation}, Pos: domain.Vec2{X: 30, Y: 0}},
 	}
 	// R1 is the clear winner but is rigged to FAIL task-x cooperatively. R2 is the
 	// standby that will pick it up after the prompt release.
 	rovers := []agent.Config{
-		{ID: "R1", Pos: domain.Vec2{X: 30, Y: 0}, Battery: 1.0, Capabilities: []domain.Capability{"foundation"}, FailTask: "task-x"},
-		{ID: "R2", Pos: domain.Vec2{X: 0, Y: 60}, Battery: 0.6, Capabilities: []domain.Capability{"foundation"}},
+		{ID: "R1", Pos: domain.Vec2{X: 30, Y: 0}, Battery: 1.0, Capabilities: []domain.Capability{typeFoundation}, FailTask: taskX},
+		{ID: "R2", Pos: domain.Vec2{X: 0, Y: 60}, Battery: 0.6, Capabilities: []domain.Capability{typeFoundation}},
 	}
 
 	cfg := coordinator.Config{
@@ -170,7 +178,7 @@ func TestSelfHeal_ReportedFailureReassignsPromptly(t *testing.T) {
 		SnapshotHz:     20,
 	}
 
-	h := newSelfHealHarness(t, cfg, "task-x")
+	h := newSelfHealHarness(t, cfg, taskX)
 
 	// 1) task-x is first awarded to R1 (the clear winner). The release is PROMPT —
 	//    R1 drives then fails fast — so the transient LEASED-to-R1 state may slip
@@ -178,7 +186,7 @@ func TestSelfHeal_ReportedFailureReassignsPromptly(t *testing.T) {
 	//    was the awarded winner (R2 only ever wins after R1's release, asserted
 	//    next). A direct R2 award without R1 ever winning would be a real bug.
 	h.poll("task-x awarded to R1 (then released)", func() bool {
-		x, ok := h.getTask("task-x")
+		x, ok := h.getTask(taskX)
 		if !ok {
 			return false
 		}
@@ -191,17 +199,17 @@ func TestSelfHeal_ReportedFailureReassignsPromptly(t *testing.T) {
 	// 2) R1 reports failure; the lease is released PROMPTLY and re-auctioned to
 	//    R2 (a different rover). R1 refuses to re-bid task-x, so R2 must win.
 	h.poll("task-x re-LEASED to R2", func() bool {
-		x, ok := h.getTask("task-x")
+		x, ok := h.getTask(taskX)
 		return ok && x.Status == domain.Leased && x.Assignee == "R2"
 	})
 
 	// 3) R2 carries it to DONE end-to-end.
 	h.poll("task-x DONE", func() bool {
-		x, ok := h.getTask("task-x")
+		x, ok := h.getTask(taskX)
 		return ok && x.Status == domain.Done
 	})
 
-	x, _ := h.getTask("task-x")
+	x, _ := h.getTask(taskX)
 	if x.Assignee != "" {
 		t.Fatalf("done task-x assignee = %q, want empty", x.Assignee)
 	}
@@ -217,7 +225,7 @@ func TestSelfHeal_NoEligibleRoverStaysUnclaimed(t *testing.T) {
 	}
 	// The only rover can do "foundation", not "welding": it never bids.
 	rovers := []agent.Config{
-		{ID: "R1", Pos: domain.Vec2{X: 0, Y: 0}, Battery: 1.0, Capabilities: []domain.Capability{"foundation"}},
+		{ID: "R1", Pos: domain.Vec2{X: 0, Y: 0}, Battery: 1.0, Capabilities: []domain.Capability{typeFoundation}},
 	}
 
 	cfg := coordinator.Config{

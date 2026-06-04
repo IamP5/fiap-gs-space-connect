@@ -12,12 +12,13 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
-	"log"
+	"log/slog"
 	"net"
 	"net/http"
 	"swarmbuild/internal/bus"
 	"swarmbuild/internal/wire"
 	"sync"
+	"time"
 
 	"github.com/coder/websocket"
 )
@@ -78,7 +79,7 @@ func New(b busConn) *Gateway {
 // return every client is closed and the subscription is torn down. It is the
 // gateway's lifecycle: the HTTP handlers may be wired up independently via
 // Handler.
-func Run(ctx context.Context, b *bus.Conn) (*Gateway, func() error, error) {
+func Run(_ context.Context, b *bus.Conn) (*Gateway, func() error, error) {
 	g := New(b)
 	unsub, err := bus.SubscribeJSON(b, wire.SubjSnapshot, g.onSnapshot)
 	if err != nil {
@@ -137,7 +138,7 @@ type healthStatus struct {
 	Clients   int  `json:"clients"`
 }
 
-func (g *Gateway) serveHealthz(w http.ResponseWriter, r *http.Request) {
+func (g *Gateway) serveHealthz(w http.ResponseWriter, _ *http.Request) {
 	g.mu.RLock()
 	n := len(g.clients)
 	g.mu.RUnlock()
@@ -269,15 +270,25 @@ func (g *Gateway) Clients() int {
 // handler until ctx is cancelled, then shuts the HTTP server down gracefully.
 // It returns the resolved listen address (useful when addr uses :0).
 func (g *Gateway) ListenAndServe(ctx context.Context, addr string) (string, func(context.Context) error, error) {
-	ln, err := net.Listen("tcp", addr)
+	ln, err := (&net.ListenConfig{}).Listen(ctx, "tcp", addr)
 	if err != nil {
 		return "", nil, err
 	}
-	srv := &http.Server{Handler: g.Handler()}
+	// ReadHeaderTimeout bounds how long a client may dribble request headers,
+	// closing the Slowloris hole (gosec G112). The remaining timeouts keep a
+	// stuck or hostile peer from pinning a connection indefinitely; the WS
+	// upgrade hijacks the conn before WriteTimeout would bite long-lived streams.
+	srv := &http.Server{
+		Handler:           g.Handler(),
+		ReadHeaderTimeout: 5 * time.Second,
+		ReadTimeout:       10 * time.Second,
+		WriteTimeout:      10 * time.Second,
+		IdleTimeout:       60 * time.Second,
+	}
 
 	go func() {
 		if err := srv.Serve(ln); err != nil && !errors.Is(err, http.ErrServerClosed) {
-			log.Printf("gateway: http serve: %v", err)
+			slog.Error("gateway http serve failed", "error", err)
 		}
 	}()
 

@@ -28,7 +28,7 @@ func domeBlueprint() []coordinator.BlueprintTask {
 		bp = append(bp, coordinator.BlueprintTask{
 			Task: domain.Task{
 				ID:     domain.TaskID(fmt.Sprintf("foundation-%d", i)),
-				Type:   "foundation",
+				Type:   typeFoundation,
 				Status: domain.Unclaimed,
 			},
 			Pos: foundationPos[i-1],
@@ -94,7 +94,7 @@ func domeTaskIDs() []domain.TaskID {
 // distinct positions below the worksite (Y:-70, X spread -50..50) with staggered
 // batteries so bids are not all identical.
 func domeRovers() []agent.Config {
-	caps := []domain.Capability{"foundation", "wall", "dome-cap"}
+	caps := []domain.Capability{typeFoundation, "wall", "dome-cap"}
 	xs := []float64{-50, -30, -10, 10, 30, 50}
 	batteries := []float64{1.0, 0.95, 0.9, 0.85, 0.8, 0.75}
 	rovers := make([]agent.Config, 6)
@@ -127,6 +127,8 @@ func domeConfig() coordinator.Config {
 // one-task-per-rover invariant is NEVER violated (no rover ever holds two leased
 // tasks at the same time), and (c) the dome fully closes (all 15 tasks reach DONE
 // with no lingering assignees).
+//
+//nolint:gocyclo // end-to-end parallel-build test: one polling loop interleaves the invariant check, parallelism witness, and completion detection; splitting would break the single observation window.
 func TestDome_ParallelBuildOneTaskPerRover(t *testing.T) {
 	ids := domeTaskIDs()
 	h := newSelfHealHarness(t, domeConfig(), ids...)
@@ -229,6 +231,8 @@ func TestDome_ParallelBuildOneTaskPerRover(t *testing.T) {
 // path, and asserts the dome STILL fully closes: the killed wall's lease TTL-
 // expires, the task is re-auctioned, another rover finishes it, and the build
 // completes end-to-end. Killing a builder mid-wall does not stop the dome.
+//
+//nolint:gocyclo // end-to-end kill-mid-wall test: sequential poll → kill → re-heal stages over real timing read as one narrative; splitting would obscure it.
 func TestDome_KillMidWallStillCloses(t *testing.T) {
 	ids := domeTaskIDs()
 	h := newSelfHealHarness(t, domeConfig(), ids...)

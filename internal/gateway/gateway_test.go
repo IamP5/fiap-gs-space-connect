@@ -71,10 +71,21 @@ func sampleSnapshot() wire.Snapshot {
 	}
 }
 
-// dialWS opens a websocket client to the gateway's /ws endpoint.
-func dialWS(t *testing.T, ctx context.Context, addr string) *websocket.Conn {
+// closeWS closes a websocket client and ignores the error: in tests the peer is
+// the gateway under test and a close-race on teardown is not a failure.
+func closeWS(ws *websocket.Conn) {
+	_ = ws.Close(websocket.StatusNormalClosure, "")
+}
+
+// dialWS opens a websocket client to the gateway's /ws endpoint. The upgrade
+// response body is drained/closed (bodyclose): on a successful 101 the body is
+// empty, but it must still be closed.
+func dialWS(ctx context.Context, t *testing.T, addr string) *websocket.Conn {
 	t.Helper()
-	ws, _, err := websocket.Dial(ctx, fmt.Sprintf("ws://%s/ws", addr), nil)
+	ws, resp, err := websocket.Dial(ctx, fmt.Sprintf("ws://%s/ws", addr), nil)
+	if resp != nil && resp.Body != nil {
+		_ = resp.Body.Close()
+	}
 	if err != nil {
 		t.Fatalf("ws dial: %v", err)
 	}
@@ -82,7 +93,7 @@ func dialWS(t *testing.T, ctx context.Context, addr string) *websocket.Conn {
 }
 
 // readSnapshot reads one text frame and unmarshals it as a wire.Snapshot.
-func readSnapshot(t *testing.T, ctx context.Context, ws *websocket.Conn) wire.Snapshot {
+func readSnapshot(ctx context.Context, t *testing.T, ws *websocket.Conn) wire.Snapshot {
 	t.Helper()
 	typ, data, err := ws.Read(ctx)
 	if err != nil {
@@ -106,13 +117,13 @@ func TestSnapshotRoundTrip(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancel()
 
-	ws := dialWS(t, ctx, addr)
-	defer ws.Close(websocket.StatusNormalClosure, "")
+	ws := dialWS(ctx, t, addr)
+	defer closeWS(ws)
 
 	want := sampleSnapshot()
 	// Publish repeatedly until the client receives one: the client may connect
 	// a hair after the first publish, so we drive the fan-out deterministically.
-	got := publishUntilReceived(t, ctx, conn, ws, want)
+	got := publishUntilReceived(ctx, t, conn, ws, want)
 
 	if got.Type != want.Type || got.At != want.At || got.Connected != want.Connected {
 		t.Fatalf("snapshot mismatch: got %+v want %+v", got, want)
@@ -127,7 +138,7 @@ func TestSnapshotRoundTrip(t *testing.T) {
 
 // publishUntilReceived publishes want every 50ms until ws delivers a matching
 // snapshot or ctx expires. Deterministic: no fixed sleeps to "hope" past races.
-func publishUntilReceived(t *testing.T, ctx context.Context, conn *bus.Conn, ws *websocket.Conn, want wire.Snapshot) wire.Snapshot {
+func publishUntilReceived(ctx context.Context, t *testing.T, conn *bus.Conn, ws *websocket.Conn, want wire.Snapshot) wire.Snapshot {
 	t.Helper()
 
 	type result struct {
@@ -192,8 +203,8 @@ func TestControlRelay(t *testing.T) {
 		t.Fatalf("flush: %v", err)
 	}
 
-	ws := dialWS(t, ctx, addr)
-	defer ws.Close(websocket.StatusNormalClosure, "")
+	ws := dialWS(ctx, t, addr)
+	defer closeWS(ws)
 
 	want := wire.Control{Cmd: "kill", Robot: "R1"}
 	payload, _ := json.Marshal(want)
@@ -231,15 +242,15 @@ func TestMalformedControlIgnored(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancel()
 
-	ws := dialWS(t, ctx, addr)
-	defer ws.Close(websocket.StatusNormalClosure, "")
+	ws := dialWS(ctx, t, addr)
+	defer closeWS(ws)
 
 	if err := ws.Write(ctx, websocket.MessageText, []byte("{not json")); err != nil {
 		t.Fatalf("ws write garbage: %v", err)
 	}
 
 	// Connection must survive: a published snapshot still arrives.
-	got := publishUntilReceived(t, ctx, conn, ws, sampleSnapshot())
+	got := publishUntilReceived(ctx, t, conn, ws, sampleSnapshot())
 	if got.Type != "snapshot" {
 		t.Fatalf("expected snapshot after malformed frame, got %+v", got)
 	}
@@ -258,15 +269,15 @@ func TestSnapshotOnConnect(t *testing.T) {
 
 	// First client primes the gateway's latest-snapshot cache. We wait until it
 	// actually receives one, so we know the gateway has cached it.
-	primer := dialWS(t, ctx, addr)
-	_ = publishUntilReceived(t, ctx, conn, primer, want)
-	primer.Close(websocket.StatusNormalClosure, "")
+	primer := dialWS(ctx, t, addr)
+	_ = publishUntilReceived(ctx, t, conn, primer, want)
+	closeWS(primer)
 
 	// Second client connects with no new publish and must get the cached state.
-	ws := dialWS(t, ctx, addr)
-	defer ws.Close(websocket.StatusNormalClosure, "")
+	ws := dialWS(ctx, t, addr)
+	defer closeWS(ws)
 
-	got := readSnapshot(t, ctx, ws)
+	got := readSnapshot(ctx, t, ws)
 	if got.At != want.At {
 		t.Fatalf("cached snapshot mismatch: got At=%d want At=%d", got.At, want.At)
 	}
@@ -276,11 +287,18 @@ func TestSnapshotOnConnect(t *testing.T) {
 func TestHealthz(t *testing.T) {
 	_, addr := startGateway(t)
 
-	resp, err := http.Get(fmt.Sprintf("http://%s/healthz", addr))
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, fmt.Sprintf("http://%s/healthz", addr), nil)
+	if err != nil {
+		t.Fatalf("new request: %v", err)
+	}
+	resp, err := http.DefaultClient.Do(req)
 	if err != nil {
 		t.Fatalf("GET /healthz: %v", err)
 	}
-	defer resp.Body.Close()
+	defer func() { _ = resp.Body.Close() }()
 
 	if resp.StatusCode != http.StatusOK {
 		t.Fatalf("status: got %d want 200", resp.StatusCode)
@@ -314,6 +332,9 @@ func TestCrossOriginUpgradeSucceeds(t *testing.T) {
 	ws, resp, err := websocket.Dial(ctx, fmt.Sprintf("ws://%s/ws", addr), &websocket.DialOptions{
 		HTTPHeader: http.Header{"Origin": []string{"http://example.com:5173"}},
 	})
+	if resp != nil && resp.Body != nil {
+		defer func() { _ = resp.Body.Close() }()
+	}
 	if err != nil {
 		got := -1
 		if resp != nil {
@@ -321,13 +342,13 @@ func TestCrossOriginUpgradeSucceeds(t *testing.T) {
 		}
 		t.Fatalf("cross-origin ws dial: %v (status %d)", err, got)
 	}
-	defer ws.Close(websocket.StatusNormalClosure, "")
+	defer closeWS(ws)
 
 	if resp.StatusCode != http.StatusSwitchingProtocols {
 		t.Fatalf("upgrade status: got %d want %d (101)", resp.StatusCode, http.StatusSwitchingProtocols)
 	}
 
-	got := publishUntilReceived(t, ctx, conn, ws, sampleSnapshot())
+	got := publishUntilReceived(ctx, t, conn, ws, sampleSnapshot())
 	if got.Type != "snapshot" {
 		t.Fatalf("expected snapshot over cross-origin connection, got %+v", got)
 	}
@@ -343,12 +364,12 @@ func TestSlowClientDoesNotBlock(t *testing.T) {
 	defer cancel()
 
 	// Laggard: connects but never reads after the initial frame.
-	laggard := dialWS(t, ctx, addr)
-	defer laggard.Close(websocket.StatusNormalClosure, "")
+	laggard := dialWS(ctx, t, addr)
+	defer closeWS(laggard)
 
 	// Fast client.
-	fast := dialWS(t, ctx, addr)
-	defer fast.Close(websocket.StatusNormalClosure, "")
+	fast := dialWS(ctx, t, addr)
+	defer closeWS(fast)
 
 	// Flood snapshots so the laggard's buffer overflows and it is dropped, while
 	// the fast client keeps draining. We assert the fast client receives an

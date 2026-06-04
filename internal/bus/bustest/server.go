@@ -13,24 +13,24 @@ import (
 // RunServer starts an embedded NATS server with JetStream on a random port and
 // returns its client URL plus a shutdown func. It fails the test if the server
 // does not come up promptly.
-func RunServer(t testing.TB) (url string, shutdown func()) {
-	t.Helper()
+func RunServer(tb testing.TB) (url string, shutdown func()) {
+	tb.Helper()
 	opts := &natsserver.Options{
 		Host:      "127.0.0.1",
 		Port:      -1, // random free port
 		JetStream: true,
-		StoreDir:  t.TempDir(),
+		StoreDir:  tb.TempDir(),
 		NoLog:     true,
 		NoSigs:    true,
 	}
 	srv, err := natsserver.NewServer(opts)
 	if err != nil {
-		t.Fatalf("embedded nats: new server: %v", err)
+		tb.Fatalf("embedded nats: new server: %v", err)
 	}
 	go srv.Start()
 	if !srv.ReadyForConnections(5 * time.Second) {
 		srv.Shutdown()
-		t.Fatal("embedded nats: not ready within 5s")
+		tb.Fatal("embedded nats: not ready within 5s")
 	}
 	return srv.ClientURL(), srv.Shutdown
 }

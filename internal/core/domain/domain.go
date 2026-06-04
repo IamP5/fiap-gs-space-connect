@@ -30,12 +30,12 @@ type Capability string
 type TaskStatus uint8
 
 const (
-	// Unclaimed: the task needs a rover (the only status eligible for auction
-	// once its dependencies are complete).
+	// Unclaimed is the status of a task that needs a rover; it is the only
+	// status eligible for auction once its dependencies are complete.
 	Unclaimed TaskStatus = iota
-	// Leased: a rover holds a time-bounded grant on the task.
+	// Leased is the status of a task on which a rover holds a time-bounded grant.
 	Leased
-	// Done: the task is complete. Terminal.
+	// Done is the status of a completed task. It is terminal.
 	Done
 )
 

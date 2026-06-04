@@ -45,9 +45,13 @@ func taskEqual(a, b domain.Task) bool {
 // the interesting cases — actually occur often enough to be exercised.
 type genTask struct{ domain.Task }
 
+// domeCap is the "dome-cap" task type/id literal, reused across the sample
+// fixtures below and extracted so the fixtures share a single spelling.
+const domeCap = "dome-cap"
+
 var (
-	sampleIDs       = []domain.TaskID{"wall-1", "wall-2", "dome-cap", "foundation-3"}
-	sampleTypes     = []domain.TaskType{"wall", "foundation", "dome-cap"}
+	sampleIDs       = []domain.TaskID{"wall-1", "wall-2", domeCap, "foundation-3"}
+	sampleTypes     = []domain.TaskType{"wall", "foundation", domeCap}
 	sampleAssignees = []domain.RobotID{"", "R1", "R2", "R3", "R6"}
 	sampleStatuses  = []domain.TaskStatus{domain.Unclaimed, domain.Leased, domain.Done}
 	sampleDeps      = []domain.TaskID{"foundation-1", "foundation-2", "wall-7"}
@@ -60,7 +64,8 @@ func (genTask) Generate(rnd *rand.Rand, _ int) reflect.Value {
 		Status:      sampleStatuses[rnd.Intn(len(sampleStatuses))],
 		Assignee:    sampleAssignees[rnd.Intn(len(sampleAssignees))],
 		LeaseExpiry: domain.Tick(rnd.Intn(5)),
-		Version:     domain.Lamport(rnd.Intn(4)), // small range → frequent ties
+		//nolint:gosec // deterministic test fixture, not security-sensitive: rnd.Intn(4) is a small non-negative bound, no overflow possible.
+		Version: domain.Lamport(rnd.Intn(4)), // small range → frequent ties
 	}
 	n := rnd.Intn(len(sampleDeps) + 1)
 	if n > 0 {
@@ -260,6 +265,7 @@ func TestApplyPermutationInvariant(t *testing.T) {
 
 		shuffled := make([]genTask, len(records))
 		copy(shuffled, records)
+		//nolint:gosec // deterministic test fixture, not security-sensitive: a seeded PRNG is required to reproduce shuffles.
 		rnd := rand.New(rand.NewSource(seed))
 		rnd.Shuffle(len(shuffled), func(i, j int) {
 			shuffled[i], shuffled[j] = shuffled[j], shuffled[i]
@@ -361,11 +367,11 @@ func TestApplyDuplicateIsNoOpProperty(t *testing.T) {
 
 func TestSnapshotSortedByID(t *testing.T) {
 	m := NewModel()
-	for _, id := range []domain.TaskID{"wall-2", "dome-cap", "foundation-1", "wall-1"} {
+	for _, id := range []domain.TaskID{"wall-2", domeCap, "foundation-1", "wall-1"} {
 		m.Apply(domain.Task{ID: id, Version: 1})
 	}
 	snap := m.Snapshot()
-	want := []domain.TaskID{"dome-cap", "foundation-1", "wall-1", "wall-2"}
+	want := []domain.TaskID{domeCap, "foundation-1", "wall-1", "wall-2"}
 	if len(snap) != len(want) {
 		t.Fatalf("snapshot len = %d, want %d", len(snap), len(want))
 	}

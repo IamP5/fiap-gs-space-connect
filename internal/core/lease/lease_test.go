@@ -16,6 +16,10 @@ func (c *fakeClock) set(t domain.Tick)     { c.now = t }
 
 const ttl = domain.Tick(30) // ≥ 3× a heartbeat interval of 10
 
+// wall7 is the task id exercised throughout these tests, extracted so every
+// case names the same task with one spelling.
+const wall7 = domain.TaskID("wall-7")
+
 func newFixture(start domain.Tick) (*fakeClock, *Manager) {
 	clk := &fakeClock{now: start}
 	return clk, NewManager(clk, ttl)
@@ -34,15 +38,15 @@ func TestGrant(t *testing.T) {
 	}{
 		{
 			name:      "grant on unclaimed succeeds and sets LEASED",
-			task:      "wall-7",
+			task:      wall7,
 			rover:     "R3",
 			wantOK:    true,
 			wantState: domain.Leased,
 		},
 		{
 			name:      "grant on already-leased task is rejected",
-			setup:     func(m *Manager) { m.Grant("wall-7", "R3") },
-			task:      "wall-7",
+			setup:     func(m *Manager) { m.Grant(wall7, "R3") },
+			task:      wall7,
 			rover:     "R5",
 			wantOK:    false,
 			wantState: domain.Leased, // still held by original rover
@@ -50,10 +54,10 @@ func TestGrant(t *testing.T) {
 		{
 			name: "grant on done task is rejected",
 			setup: func(m *Manager) {
-				m.Grant("wall-7", "R3")
-				m.Complete("wall-7", "R3")
+				m.Grant(wall7, "R3")
+				m.Complete(wall7, "R3")
 			},
-			task:      "wall-7",
+			task:      wall7,
 			rover:     "R5",
 			wantOK:    false,
 			wantState: domain.Done,
@@ -61,10 +65,10 @@ func TestGrant(t *testing.T) {
 		{
 			name: "re-grant after release succeeds",
 			setup: func(m *Manager) {
-				m.Grant("wall-7", "R3")
-				m.Release("wall-7", "R3")
+				m.Grant(wall7, "R3")
+				m.Release(wall7, "R3")
 			},
-			task:      "wall-7",
+			task:      wall7,
 			rover:     "R5",
 			wantOK:    true,
 			wantState: domain.Leased,
@@ -97,7 +101,7 @@ func TestStatusOfUnknownTaskIsUnclaimed(t *testing.T) {
 
 func TestTTLSetOnGrant_LiveBeforeExpiry(t *testing.T) {
 	clk, m := newFixture(100)
-	if !m.Grant("wall-7", "R3") {
+	if !m.Grant(wall7, "R3") {
 		t.Fatal("Grant failed")
 	}
 	// Just before expiry (100 + 30 = 130): a sweep must not expire it.
@@ -105,7 +109,7 @@ func TestTTLSetOnGrant_LiveBeforeExpiry(t *testing.T) {
 	if released := m.Sweep(); released != nil {
 		t.Fatalf("Sweep before expiry released %v, want none", released)
 	}
-	if got := m.Status("wall-7"); got != domain.Leased {
+	if got := m.Status(wall7); got != domain.Leased {
 		t.Fatalf("Status before expiry = %v, want LEASED", got)
 	}
 }
@@ -114,11 +118,11 @@ func TestTTLSetOnGrant_LiveBeforeExpiry(t *testing.T) {
 
 func TestHeartbeatBeforeExpiryExtendsLease(t *testing.T) {
 	clk, m := newFixture(100) // expiry = 130
-	m.Grant("wall-7", "R3")
+	m.Grant(wall7, "R3")
 
 	// Heartbeat at t=120 resets expiry to 120 + 30 = 150.
 	clk.set(120)
-	if !m.Heartbeat("wall-7", "R3") {
+	if !m.Heartbeat(wall7, "R3") {
 		t.Fatal("Heartbeat by holder rejected")
 	}
 
@@ -127,22 +131,22 @@ func TestHeartbeatBeforeExpiryExtendsLease(t *testing.T) {
 	if released := m.Sweep(); released != nil {
 		t.Fatalf("Sweep after heartbeat-renewal released %v, want none", released)
 	}
-	if got := m.Status("wall-7"); got != domain.Leased {
+	if got := m.Status(wall7); got != domain.Leased {
 		t.Fatalf("Status = %v, want LEASED after heartbeat renewal", got)
 	}
 
 	// Past the renewed expiry it finally expires.
 	clk.set(150)
-	if released := m.Sweep(); len(released) != 1 || released[0] != "wall-7" {
+	if released := m.Sweep(); len(released) != 1 || released[0] != wall7 {
 		t.Fatalf("Sweep past renewed expiry = %v, want [wall-7]", released)
 	}
 }
 
 func TestHeartbeatFromNonHolderRejected(t *testing.T) {
 	clk, m := newFixture(100)
-	m.Grant("wall-7", "R3")
+	m.Grant(wall7, "R3")
 
-	if m.Heartbeat("wall-7", "R5") {
+	if m.Heartbeat(wall7, "R5") {
 		t.Fatal("Heartbeat from non-holder R5 accepted, want rejected")
 	}
 	// The legitimate lease must be untouched (expiry still 130).
@@ -157,9 +161,9 @@ func TestHeartbeatRejectedForUnclaimedAndDone(t *testing.T) {
 	if m.Heartbeat("nope", "R1") {
 		t.Fatal("Heartbeat on unknown task accepted")
 	}
-	m.Grant("wall-7", "R3")
-	m.Complete("wall-7", "R3")
-	if m.Heartbeat("wall-7", "R3") {
+	m.Grant(wall7, "R3")
+	m.Complete(wall7, "R3")
+	if m.Heartbeat(wall7, "R3") {
 		t.Fatal("Heartbeat on DONE task accepted")
 	}
 }
@@ -168,14 +172,14 @@ func TestHeartbeatRejectedForUnclaimedAndDone(t *testing.T) {
 
 func TestSilenceBeyondTTLExpires(t *testing.T) {
 	clk, m := newFixture(100) // expiry = 130
-	m.Grant("wall-7", "R3")
+	m.Grant(wall7, "R3")
 
 	clk.set(130) // now >= expiry
 	released := m.Sweep()
-	if len(released) != 1 || released[0] != "wall-7" {
+	if len(released) != 1 || released[0] != wall7 {
 		t.Fatalf("Sweep at expiry = %v, want [wall-7]", released)
 	}
-	if got := m.Status("wall-7"); got != domain.Unclaimed {
+	if got := m.Status(wall7); got != domain.Unclaimed {
 		t.Fatalf("Status after expiry = %v, want UNCLAIMED", got)
 	}
 }
@@ -184,11 +188,11 @@ func TestSilenceBeyondTTLExpires(t *testing.T) {
 // Sweep twice after a single expiry returns the task only on the first call.
 func TestExactlyOnce_SweepTwiceReleasesOnce(t *testing.T) {
 	clk, m := newFixture(100) // expiry = 130
-	m.Grant("wall-7", "R3")
+	m.Grant(wall7, "R3")
 	clk.set(200) // well past expiry
 
 	first := m.Sweep()
-	if len(first) != 1 || first[0] != "wall-7" {
+	if len(first) != 1 || first[0] != wall7 {
 		t.Fatalf("first Sweep = %v, want [wall-7]", first)
 	}
 
@@ -206,14 +210,14 @@ func TestExactlyOnce_SweepTwiceReleasesOnce(t *testing.T) {
 // task is a no-op (returns false) and never double-releases.
 func TestExactlyOnce_ReleaseIsIdempotent(t *testing.T) {
 	_, m := newFixture(100)
-	m.Grant("wall-7", "R3")
+	m.Grant(wall7, "R3")
 
-	if !m.Release("wall-7", "R3") {
+	if !m.Release(wall7, "R3") {
 		t.Fatal("first Release returned false, want true")
 	}
 	// Duplicate / redelivered "rover lost" events.
 	for i := range 3 {
-		if m.Release("wall-7", "R3") {
+		if m.Release(wall7, "R3") {
 			t.Fatalf("duplicate Release #%d returned true, want false (idempotent)", i+2)
 		}
 	}
@@ -274,13 +278,13 @@ func TestComplete(t *testing.T) {
 	}{
 		{
 			name:   "holder completes a live lease",
-			setup:  func(m *Manager) { m.Grant("wall-7", "R3") },
+			setup:  func(m *Manager) { m.Grant(wall7, "R3") },
 			rover:  "R3",
 			wantOK: true,
 		},
 		{
 			name:   "non-holder cannot complete",
-			setup:  func(m *Manager) { m.Grant("wall-7", "R3") },
+			setup:  func(m *Manager) { m.Grant(wall7, "R3") },
 			rover:  "R5",
 			wantOK: false,
 		},
@@ -292,8 +296,8 @@ func TestComplete(t *testing.T) {
 		{
 			name: "cannot complete an already-released task",
 			setup: func(m *Manager) {
-				m.Grant("wall-7", "R3")
-				m.Release("wall-7", "R3")
+				m.Grant(wall7, "R3")
+				m.Release(wall7, "R3")
 			},
 			rover:  "R3",
 			wantOK: false,
@@ -305,7 +309,7 @@ func TestComplete(t *testing.T) {
 			if tc.setup != nil {
 				tc.setup(m)
 			}
-			if got := m.Complete("wall-7", tc.rover); got != tc.wantOK {
+			if got := m.Complete(wall7, tc.rover); got != tc.wantOK {
 				t.Fatalf("Complete ok = %v, want %v", got, tc.wantOK)
 			}
 		})
@@ -316,11 +320,11 @@ func TestComplete(t *testing.T) {
 // re-released by a later Sweep, however far the clock advances.
 func TestDoneIsTerminal_SweepNeverReReleasesDone(t *testing.T) {
 	clk, m := newFixture(100)
-	m.Grant("wall-7", "R3")
-	if !m.Complete("wall-7", "R3") {
+	m.Grant(wall7, "R3")
+	if !m.Complete(wall7, "R3") {
 		t.Fatal("Complete failed")
 	}
-	if got := m.Status("wall-7"); got != domain.Done {
+	if got := m.Status(wall7); got != domain.Done {
 		t.Fatalf("Status = %v, want DONE", got)
 	}
 
@@ -333,7 +337,7 @@ func TestDoneIsTerminal_SweepNeverReReleasesDone(t *testing.T) {
 		}
 		clk.advance(1000)
 	}
-	if got := m.Status("wall-7"); got != domain.Done {
+	if got := m.Status(wall7); got != domain.Done {
 		t.Fatalf("Status after sweeps = %v, want DONE (terminal)", got)
 	}
 }

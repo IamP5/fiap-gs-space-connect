@@ -18,10 +18,8 @@ package coordinator
 import (
 	"context"
 	"fmt"
-	"log"
+	"log/slog"
 	"slices"
-	"time"
-
 	"swarmbuild/internal/agent"
 	"swarmbuild/internal/bus"
 	"swarmbuild/internal/core/domain"
@@ -29,6 +27,7 @@ import (
 	"swarmbuild/internal/core/planner"
 	"swarmbuild/internal/core/world"
 	"swarmbuild/internal/wire"
+	"time"
 )
 
 // BlueprintTask pairs a domain.Task with its worksite position. domain.Task has
@@ -168,26 +167,12 @@ func Run(ctx context.Context, cfg Config) error {
 		model.Apply(t) // seed each record at its initial (UNCLAIMED) version
 	}
 
-	// --- Connect the coordinator's own bus handle (hardened). ---
-	conn, err := bus.Connect(ctx, cfg.NATSURL, bus.ConnectOptions{
-		Name:    "coordinator",
-		MaxWait: 30 * time.Second,
-	})
+	// --- Connect the coordinator's own bus handle and seed the KV mirror. ---
+	conn, kv, err := connectBus(ctx, cfg.NATSURL, tasks)
 	if err != nil {
-		return fmt.Errorf("coordinator: connect: %w", err)
+		return err
 	}
 	defer conn.Close()
-
-	kv, err := conn.KV(ctx, wire.KVBucketWorld)
-	if err != nil {
-		return fmt.Errorf("coordinator: kv bucket: %w", err)
-	}
-	// Mirror the seed world to KV so a reader sees the initial board immediately.
-	for _, t := range tasks {
-		if perr := kv.PutJSON(ctx, string(t.ID), t); perr != nil {
-			return fmt.Errorf("coordinator: kv seed %s: %w", t.ID, perr)
-		}
-	}
 
 	clk := wallClock{}
 	ttl := domain.Tick(cfg.HeartbeatEvery.Milliseconds() * int64(cfg.TTLFactor))
@@ -213,55 +198,118 @@ func Run(ctx context.Context, cfg Config) error {
 	events := make(chan any, 256)
 
 	// Subscriptions: callbacks run on the NATS dispatcher and only enqueue.
+	unsub, err := subscribe(ctx, conn, events)
+	if err != nil {
+		return err
+	}
+	defer unsub()
+
+	// --- Spawn in-process rovers, each its own independent NATS client. ---
+	roverCtx, cancelRovers := context.WithCancel(ctx)
+	defer cancelRovers()
+	if err := spawnRovers(roverCtx, cfg); err != nil {
+		return err
+	}
+
+	// Flush so subscriptions are registered on the server before the first
+	// announce goes out (deterministic test start).
+	_ = conn.Flush()
+
+	return st.runWriter(ctx, events, cfg)
+}
+
+// connectBus opens the coordinator's own hardened bus handle, binds the World
+// Model KV bucket, and mirrors the seed world so a reader sees the initial board
+// immediately. The caller owns conn and must Close it.
+func connectBus(ctx context.Context, natsURL string, tasks []domain.Task) (*bus.Conn, *bus.KV, error) {
+	conn, err := bus.Connect(ctx, natsURL, bus.ConnectOptions{
+		Name:    "coordinator",
+		MaxWait: 30 * time.Second,
+	})
+	if err != nil {
+		return nil, nil, fmt.Errorf("coordinator: connect: %w", err)
+	}
+
+	kv, err := conn.KV(ctx, wire.KVBucketWorld)
+	if err != nil {
+		conn.Close()
+		return nil, nil, fmt.Errorf("coordinator: kv bucket: %w", err)
+	}
+	for _, t := range tasks {
+		if perr := kv.PutJSON(ctx, string(t.ID), t); perr != nil {
+			conn.Close()
+			return nil, nil, fmt.Errorf("coordinator: kv seed %s: %w", t.ID, perr)
+		}
+	}
+	return conn, kv, nil
+}
+
+// subscribe registers all coordinator subscriptions. Each callback runs on the
+// NATS dispatcher goroutine and only enqueues an event onto the single-writer
+// channel — it never touches state (TECHSPEC §8). It returns a single cleanup
+// func that unsubscribes every subscription.
+func subscribe(ctx context.Context, conn *bus.Conn, events chan<- any) (func(), error) {
+	// enqueue hands an event to the single writer, dropping it only if ctx ends.
 	enqueue := func(e any) {
 		select {
 		case events <- e:
 		case <-ctx.Done():
 		}
 	}
+
+	var unsubs []func()
+	cleanup := func() {
+		for _, u := range unsubs {
+			u()
+		}
+	}
+	add := func(unsub func(), err error, what string) error {
+		if err != nil {
+			cleanup()
+			return fmt.Errorf("coordinator: subscribe %s: %w", what, err)
+		}
+		unsubs = append(unsubs, unsub)
+		return nil
+	}
+
 	unsubBid, err := bus.SubscribeJSON(conn, wire.SubjBidWildcard, func(b wire.Bid) {
 		enqueue(evBid{bid: b})
 	})
-	if err != nil {
-		return fmt.Errorf("coordinator: subscribe bids: %w", err)
+	if err = add(unsubBid, err, "bids"); err != nil {
+		return nil, err
 	}
-	defer unsubBid()
-
 	unsubComplete, err := bus.SubscribeJSON(conn, wire.SubjTaskComplete, func(c wire.Complete) {
 		enqueue(evComplete{done: c})
 	})
-	if err != nil {
-		return fmt.Errorf("coordinator: subscribe complete: %w", err)
+	if err = add(unsubComplete, err, "complete"); err != nil {
+		return nil, err
 	}
-	defer unsubComplete()
-
 	unsubFailed, err := bus.SubscribeJSON(conn, wire.SubjTaskFailed, func(f wire.Failed) {
 		enqueue(evFailed{failed: f})
 	})
-	if err != nil {
-		return fmt.Errorf("coordinator: subscribe failed: %w", err)
+	if err = add(unsubFailed, err, "failed"); err != nil {
+		return nil, err
 	}
-	defer unsubFailed()
-
 	unsubHeartbeat, err := bus.SubscribeJSON(conn, wire.SubjHeartbeatWildcard, func(h wire.Heartbeat) {
 		enqueue(evHeartbeat{hb: h})
 	})
-	if err != nil {
-		return fmt.Errorf("coordinator: subscribe heartbeat: %w", err)
+	if err = add(unsubHeartbeat, err, "heartbeat"); err != nil {
+		return nil, err
 	}
-	defer unsubHeartbeat()
-
 	unsubTelemetry, err := bus.SubscribeJSON(conn, wire.SubjTelemetryWildcard, func(tm wire.Telemetry) {
 		enqueue(evTelemetry{tel: tm})
 	})
-	if err != nil {
-		return fmt.Errorf("coordinator: subscribe telemetry: %w", err)
+	if err = add(unsubTelemetry, err, "telemetry"); err != nil {
+		return nil, err
 	}
-	defer unsubTelemetry()
+	return cleanup, nil
+}
 
-	// --- Spawn in-process rovers, each its own independent NATS client. ---
-	roverCtx, cancelRovers := context.WithCancel(ctx)
-	defer cancelRovers()
+// spawnRovers starts each in-process rover as its own independent NATS client
+// (ADR-0001), inheriting the coordinator's heartbeat cadence when unset. Each
+// rover runs in its own goroutine and closes its connection on exit; roverCtx
+// cancellation stops them all.
+func spawnRovers(roverCtx context.Context, cfg Config) error {
 	for _, rc := range cfg.Rovers {
 		if rc.HeartbeatEvery <= 0 {
 			rc.HeartbeatEvery = cfg.HeartbeatEvery
@@ -276,16 +324,11 @@ func Run(ctx context.Context, cfg Config) error {
 		go func(c agent.Config, rc *bus.Conn) {
 			defer rc.Close()
 			if rerr := agent.Run(roverCtx, c, rc); rerr != nil && roverCtx.Err() == nil {
-				log.Printf("coordinator: rover %s exited: %v", c.ID, rerr)
+				slog.Error("rover exited", "rover", c.ID, "error", rerr)
 			}
 		}(rc, rconn)
 	}
-
-	// Flush so subscriptions are registered on the server before the first
-	// announce goes out (deterministic test start).
-	_ = conn.Flush()
-
-	return st.runWriter(ctx, events, cfg)
+	return nil
 }
 
 // runWriter is the single-writer goroutine. It is the only code that mutates
@@ -374,7 +417,7 @@ func (st *state) onComplete(ctx context.Context, c wire.Complete) {
 		st.plan.MarkDone(c.TaskID)
 		st.mirror(ctx, next)
 		st.emit(wire.Event{Kind: wire.EventSolidify, TaskID: c.TaskID, Robot: c.Robot})
-		log.Printf("coordinator: complete task=%s by=%s v=%d", c.TaskID, c.Robot, next.Version)
+		slog.Info("complete", "task", c.TaskID, "by", c.Robot, "version", next.Version)
 	}
 }
 
@@ -400,7 +443,7 @@ func (st *state) onFailed(ctx context.Context, c wire.Failed) {
 	next.Version = cur.Version + 1
 	if st.model.Apply(next) {
 		st.mirror(ctx, next)
-		log.Printf("coordinator: failed task=%s by=%s v=%d (released for re-auction)", c.TaskID, c.Robot, next.Version)
+		slog.Info("failed", "task", c.TaskID, "by", c.Robot, "version", next.Version, "note", "released for re-auction")
 	}
 }
 
@@ -420,7 +463,7 @@ func (st *state) tick(ctx context.Context) {
 			}
 			_ = st.conn.PublishJSON(wire.SubjControl, wire.Control{Cmd: "kill", Robot: k.robot})
 			st.emit(wire.Event{Kind: wire.EventKilled, Robot: k.robot})
-			log.Printf("coordinator: scripted kill rover=%s", k.robot)
+			slog.Info("scripted kill", "rover", k.robot)
 		}
 		st.armedKills = kept
 	}
@@ -490,7 +533,7 @@ func (st *state) openAuction(t domain.Task) {
 	}
 	ann := wire.Announce{TaskID: t.ID, Type: t.Type, Pos: pos, Version: t.Version}
 	_ = st.conn.PublishJSON(wire.SubjTaskAnnounce, ann)
-	log.Printf("coordinator: %s", ann.String())
+	slog.Info("announce", "task", ann.TaskID, "type", ann.Type, "version", ann.Version)
 }
 
 // closeAuction picks the winner from the bids actually received and awards,
@@ -568,7 +611,7 @@ func (st *state) award(ctx context.Context, t domain.Task, winner domain.RobotID
 	})
 	st.emit(wire.Event{Kind: wire.EventWon, TaskID: t.ID, Robot: winner})
 	st.armScriptedKills(t.ID, winner)
-	log.Printf("coordinator: award task=%s to=%s cost=%.3f v=%d", t.ID, winner, cost, next.Version)
+	slog.Info("award", "task", t.ID, "to", winner, "cost", cost, "version", next.Version)
 }
 
 // armScriptedKills arms any scripted kill whose trigger task was just leased,
@@ -582,7 +625,7 @@ func (st *state) armScriptedKills(task domain.TaskID, holder domain.RobotID) {
 		}
 		sk.fired = true
 		st.armedKills = append(st.armedKills, armedKill{robot: holder, fireAt: time.Now().Add(sk.After)})
-		log.Printf("coordinator: scripted kill armed: rover=%s holds %s, firing in %s", holder, task, sk.After)
+		slog.Info("scripted kill armed", "rover", holder, "task", task, "after", sk.After)
 	}
 }
 
@@ -603,7 +646,7 @@ func (st *state) onExpired(ctx context.Context, id domain.TaskID) {
 	if st.model.Apply(next) {
 		st.mirror(ctx, next)
 		st.emit(wire.Event{Kind: wire.EventExpired, TaskID: id})
-		log.Printf("coordinator: expiry task=%s v=%d (returned to UNCLAIMED)", id, next.Version)
+		slog.Info("expiry", "task", id, "version", next.Version, "note", "returned to UNCLAIMED")
 	}
 }
 
@@ -611,7 +654,7 @@ func (st *state) onExpired(ctx context.Context, id domain.TaskID) {
 // mirror, TECHSPEC §3 / ADR-0002).
 func (st *state) mirror(ctx context.Context, t domain.Task) {
 	if err := st.kv.PutJSON(ctx, string(t.ID), t); err != nil {
-		log.Printf("coordinator: kv mirror %s: %v", t.ID, err)
+		slog.Warn("kv mirror failed", "task", t.ID, "error", err)
 	}
 }
 

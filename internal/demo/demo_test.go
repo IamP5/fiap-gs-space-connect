@@ -30,29 +30,40 @@ func TestDomeBlueprint_LoadsAsValidDAG(t *testing.T) {
 		t.Fatalf("DomeBlueprint has %d tasks, want 13 (4 foundations + 8 walls + dome-cap)", len(tasks))
 	}
 
-	// Count by type.
-	var foundations, walls, caps int
-	var capTask domain.Task
+	foundations, walls, caps, capTask := countByType(t, tasks)
+	if foundations != 4 || walls != 8 || caps != 1 {
+		t.Fatalf("blueprint shape = %d foundations, %d walls, %d dome-cap; want 4, 8, 1", foundations, walls, caps)
+	}
+
+	assertCapDependsOnAllWalls(t, capTask)
+}
+
+// countByType tallies the blueprint tasks by type, failing on any unexpected
+// type, and returns the dome-cap keystone task for further inspection.
+func countByType(t *testing.T, tasks []domain.Task) (foundations, walls, caps int, capTask domain.Task) {
+	t.Helper()
 	for _, tk := range tasks {
 		switch tk.Type {
-		case "foundation":
+		case taskFoundation:
 			foundations++
-		case "wall":
+		case taskWall:
 			walls++
-		case "dome-cap":
+		case taskDomeCap:
 			caps++
 			capTask = tk
 		default:
 			t.Fatalf("unexpected task type %q on task %s", tk.Type, tk.ID)
 		}
 	}
-	if foundations != 4 || walls != 8 || caps != 1 {
-		t.Fatalf("blueprint shape = %d foundations, %d walls, %d dome-cap; want 4, 8, 1", foundations, walls, caps)
-	}
+	return foundations, walls, caps, capTask
+}
 
-	// dome-cap must depend on all eight walls.
-	if capTask.ID != "dome-cap" {
-		t.Fatalf("dome-cap task id = %q, want \"dome-cap\"", capTask.ID)
+// assertCapDependsOnAllWalls checks the dome-cap keystone depends on exactly the
+// eight walls.
+func assertCapDependsOnAllWalls(t *testing.T, capTask domain.Task) {
+	t.Helper()
+	if capTask.ID != domain.TaskID(taskDomeCap) {
+		t.Fatalf("dome-cap task id = %q, want %q", capTask.ID, taskDomeCap)
 	}
 	depSet := make(map[domain.TaskID]bool, len(capTask.Deps))
 	for _, d := range capTask.Deps {
@@ -125,7 +136,7 @@ func TestRehearsal_KillTargetIsAHealableWall(t *testing.T) {
 	if !found {
 		t.Fatalf("KillTarget %q is not present in the blueprint", cfg.KillTarget)
 	}
-	if targetType != "wall" {
+	if targetType != taskWall {
 		t.Fatalf("KillTarget %q has type %q, want \"wall\" (only a wall has standby rovers free to heal it; not a foundation, not the dome-cap)", cfg.KillTarget, targetType)
 	}
 
@@ -151,7 +162,11 @@ func TestDomeRovers_AllCapableAndDistinct(t *testing.T) {
 		t.Fatalf("DomeRovers has %d rovers, want 6", len(rovers))
 	}
 
-	required := []domain.Capability{"foundation", "wall", "dome-cap"}
+	required := []domain.Capability{
+		domain.Capability(taskFoundation),
+		domain.Capability(taskWall),
+		domain.Capability(taskDomeCap),
+	}
 	seenID := make(map[domain.RobotID]bool, len(rovers))
 	seenPos := make(map[domain.Vec2]bool, len(rovers))
 	for _, r := range rovers {
