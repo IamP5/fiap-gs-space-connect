@@ -3,7 +3,12 @@
 
 GO       ?= go
 PKGS     ?= ./...
-LINT     ?= golangci-lint
+# GNU make ships a built-in default `LINT = lint`, so a plain `?=` is a no-op
+# here. Only override when the value is still that built-in default, which keeps
+# real env/command-line overrides working.
+ifeq ($(origin LINT),default)
+LINT     := golangci-lint
+endif
 
 .DEFAULT_GOAL := help
 
