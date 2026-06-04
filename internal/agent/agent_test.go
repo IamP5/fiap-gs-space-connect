@@ -1,9 +1,15 @@
 package agent
 
 import (
+	"context"
 	"math"
+	"swarmbuild/internal/bus"
+	"swarmbuild/internal/bus/bustest"
 	"swarmbuild/internal/core/domain"
+	"swarmbuild/internal/wire"
+	"sync"
 	"testing"
+	"time"
 )
 
 // newRover builds a rover at pos with a full charge for the pure state-method
@@ -254,4 +260,209 @@ func TestRefuseRecordsTaskAndPredicate(t *testing.T) {
 	if st.refuses(other) {
 		t.Fatalf("rover should not refuse an unrelated task")
 	}
+}
+
+func TestSetFailureProbDefaultsToZeroAndClamps(t *testing.T) {
+	st := newRover(domain.Vec2{X: 0, Y: 0})
+
+	// Default (issue 08): injection off, so the roll can never fire.
+	if got := st.failureProb(); got != 0 {
+		t.Fatalf("default failureProb = %v, want 0", got)
+	}
+
+	cases := []struct {
+		name string
+		set  float64
+		want float64
+	}{
+		{"in range", 0.5, 0.5},
+		{"zero", 0, 0},
+		{"one", 1, 1},
+		{"clamp below zero", -0.3, 0},
+		{"clamp above one", 1.7, 1},
+	}
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			st.setFailureProb(c.set)
+			if got := st.failureProb(); got != c.want {
+				t.Fatalf("setFailureProb(%v) -> failureProb = %v, want %v", c.set, got, c.want)
+			}
+		})
+	}
+}
+
+// --- Integration tests (issue 08): the random-failure injector on the bus. ---
+
+const typeFoundation domain.TaskType = "foundation"
+
+// faultHarness boots an embedded NATS server, runs ONE rover via agent.Run, and
+// gives the test an observer connection plus collectors for the rover's Complete
+// and Telemetry streams. The test drives the rover by publishing Award directly
+// (the auction itself is the coordinator's job and is covered elsewhere).
+type faultHarness struct {
+	conn      *bus.Conn
+	roverID   domain.RobotID
+	completes func() int
+	aliveSeen func() bool
+}
+
+func newFaultHarness(t *testing.T, id domain.RobotID) *faultHarness {
+	t.Helper()
+
+	url, shutdown := bustest.RunServer(t)
+	t.Cleanup(shutdown)
+
+	ctx, cancel := context.WithCancel(context.Background())
+	t.Cleanup(cancel)
+
+	cfg := Config{
+		ID:             id,
+		Pos:            domain.Vec2{X: 0, Y: 0},
+		Battery:        1.0,
+		Capabilities:   []domain.Capability{domain.Capability(typeFoundation)},
+		HeartbeatEvery: 100 * time.Millisecond,
+	}
+
+	roverConn, err := bus.Connect(ctx, url, bus.ConnectOptions{Name: "rover", MaxWait: 5 * time.Second})
+	if err != nil {
+		t.Fatalf("rover connect: %v", err)
+	}
+	t.Cleanup(roverConn.Close)
+	go func() { _ = Run(ctx, cfg, roverConn) }()
+
+	obs, err := bus.Connect(ctx, url, bus.ConnectOptions{Name: "observer", MaxWait: 5 * time.Second})
+	if err != nil {
+		t.Fatalf("observer connect: %v", err)
+	}
+	t.Cleanup(obs.Close)
+
+	var mu sync.Mutex
+	completeCount := 0
+	aliveTelemetry := false
+
+	unsubComplete, err := bus.SubscribeJSON(obs, wire.SubjTaskComplete, func(c wire.Complete) {
+		if c.Robot != id {
+			return
+		}
+		mu.Lock()
+		completeCount++
+		mu.Unlock()
+	})
+	if err != nil {
+		t.Fatalf("subscribe complete: %v", err)
+	}
+	t.Cleanup(unsubComplete)
+
+	// Watch this rover's telemetry: note whether we ever see it alive AFTER the
+	// fault would have struck (so we can assert it survived the abandonment).
+	unsubTelemetry, err := bus.SubscribeJSON(obs, wire.SubjTelemetry(id), func(tm wire.Telemetry) {
+		mu.Lock()
+		if tm.Alive {
+			aliveTelemetry = true
+		}
+		mu.Unlock()
+	})
+	if err != nil {
+		t.Fatalf("subscribe telemetry: %v", err)
+	}
+	t.Cleanup(unsubTelemetry)
+
+	return &faultHarness{
+		conn:    obs,
+		roverID: id,
+		completes: func() int {
+			mu.Lock()
+			defer mu.Unlock()
+			return completeCount
+		},
+		aliveSeen: func() bool {
+			mu.Lock()
+			defer mu.Unlock()
+			return aliveTelemetry
+		},
+	}
+}
+
+func (h *faultHarness) setFailureProb(t *testing.T, p float64) {
+	t.Helper()
+	if err := h.conn.PublishJSON(wire.SubjControl, wire.Control{Cmd: "setFailureProb", Value: p}); err != nil {
+		t.Fatalf("publish setFailureProb: %v", err)
+	}
+	_ = h.conn.Flush()
+}
+
+func (h *faultHarness) award(t *testing.T, task domain.TaskID, pos domain.Vec2) {
+	t.Helper()
+	if err := h.conn.PublishJSON(wire.SubjTaskAward, wire.Award{
+		TaskID: task,
+		Robot:  h.roverID,
+		Pos:    pos,
+	}); err != nil {
+		t.Fatalf("publish award: %v", err)
+	}
+	_ = h.conn.Flush()
+}
+
+// TestRandomFaultAbandonsTaskButKeepsRoverAlive: with failProb=1.0 an awarded
+// rover ABANDONS its task — it never publishes Complete — yet stays alive (keeps
+// emitting alive=true telemetry) and frees its load so it can bid again. This is
+// the silent-fault heal path of issue 08.
+func TestRandomFaultAbandonsTaskButKeepsRoverAlive(t *testing.T) {
+	h := newFaultHarness(t, "R-fault")
+
+	h.setFailureProb(t, 1.0)
+	// Give the broadcast control a beat to land before the award.
+	time.Sleep(50 * time.Millisecond)
+
+	// Award a task far enough that the fault ticker (250ms) fires during the
+	// drive, well before the rover could ever complete.
+	h.award(t, "task-fault", domain.Vec2{X: 40, Y: 0})
+
+	// Within a bounded window the rover must NOT complete the task (it abandons),
+	// and it must still report itself alive.
+	deadline := time.Now().Add(3 * time.Second)
+	for time.Now().Before(deadline) {
+		if h.completes() > 0 {
+			t.Fatalf("rover completed task-fault despite failProb=1.0 (should abandon)")
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
+	if !h.aliveSeen() {
+		t.Fatalf("rover never reported alive telemetry: a fault must NOT kill the rover")
+	}
+
+	// It can bid again: drop the probability and re-award; it now completes.
+	h.setFailureProb(t, 0)
+	time.Sleep(50 * time.Millisecond)
+	h.award(t, "task-heal", domain.Vec2{X: 1, Y: 0})
+
+	completeDeadline := time.Now().Add(3 * time.Second)
+	for time.Now().Before(completeDeadline) {
+		if h.completes() > 0 {
+			return // healed: the same rover completed a task once injection was off
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
+	t.Fatalf("rover did not complete task-heal after failProb dropped to 0")
+}
+
+// TestNoFaultCompletesNormally: with failProb=0 (the default / slider at zero)
+// injection is off, so an awarded rover completes its task normally.
+func TestNoFaultCompletesNormally(t *testing.T) {
+	h := newFaultHarness(t, "R-clean")
+
+	// Explicitly set 0 to prove the slider-at-zero path; default is already 0.
+	h.setFailureProb(t, 0)
+	time.Sleep(50 * time.Millisecond)
+
+	h.award(t, "task-clean", domain.Vec2{X: 2, Y: 0})
+
+	deadline := time.Now().Add(3 * time.Second)
+	for time.Now().Before(deadline) {
+		if h.completes() > 0 {
+			return
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
+	t.Fatalf("rover did not complete task-clean with failProb=0")
 }

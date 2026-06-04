@@ -13,6 +13,7 @@ package agent
 import (
 	"context"
 	"log/slog"
+	"math/rand/v2"
 	"swarmbuild/internal/bus"
 	"swarmbuild/internal/core/allocation"
 	"swarmbuild/internal/core/domain"
@@ -78,6 +79,14 @@ const (
 // telemetryEvery is how often a rover self-reports position/battery/health/load.
 const telemetryEvery = 200 * time.Millisecond
 
+// faultCheckEvery is the cadence of the random-fault roll while a rover is
+// executing a task (throughout the drive and work phases). On each tick the
+// rover rolls rand.Float64() < failProb; a HIT abandons the in-flight task
+// silently (see execute). This is the swarm-under-stress knob (issue 08): the
+// per-interval probability of inducing a failure on the currently-executing
+// task. failProb=0 ⇒ the roll never fires, so no induced failures ever.
+const faultCheckEvery = 250 * time.Millisecond
+
 // rover is the mutable self-state a Robot Agent owns. It is guarded by its own
 // small mutex because the NATS dispatcher goroutine (announce/award callbacks)
 // and the telemetry ticker goroutine both read and write it.
@@ -87,6 +96,12 @@ type rover struct {
 	battery float64
 	load    int // tasks currently held
 	alive   bool
+
+	// failProb is this rover's probability, PER faultCheckEvery interval, of
+	// spontaneously abandoning the task it is currently executing (issue 08 —
+	// swarm under stress). It is set live by the broadcast "setFailureProb"
+	// control and clamped to [0,1]. 0 (the default) means no induced failures.
+	failProb float64
 
 	// inFlight is the set of tasks currently being executed by this rover. It
 	// guards against a redelivered/duplicate wire.Award spawning a second
@@ -118,6 +133,27 @@ func (r *rover) addLoad(delta int) {
 	if r.load < 0 {
 		r.load = 0
 	}
+	r.mu.Unlock()
+}
+
+// failureProb returns this rover's current per-interval failure probability.
+func (r *rover) failureProb() float64 {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	return r.failProb
+}
+
+// setFailureProb sets this rover's per-interval failure probability, clamping p
+// to [0,1]. Driven by the broadcast "setFailureProb" control (issue 08).
+func (r *rover) setFailureProb(p float64) {
+	if p < 0 {
+		p = 0
+	}
+	if p > 1 {
+		p = 1
+	}
+	r.mu.Lock()
+	r.failProb = p
 	r.mu.Unlock()
 }
 
@@ -320,15 +356,24 @@ func subscribeAward(ctx context.Context, conn *bus.Conn, cfg Config, st *rover, 
 	})
 }
 
-// subscribeControl wires control commands from the dashboard/coordinator. A
-// "kill" naming THIS rover triggers a silent death: it stops bidding,
-// heartbeating, executing and telemetering so the coordinator self-heals the
-// lease by TTL expiry. Kills for other robots are ignored; a repeated kill is a
-// no-op (kill is idempotent).
+// subscribeControl wires control commands from the dashboard/coordinator.
+//
+//   - A "kill" naming THIS rover triggers a silent death: it stops bidding,
+//     heartbeating, executing and telemetering so the coordinator self-heals the
+//     lease by TTL expiry. Kills for other robots are ignored; a repeated kill is
+//     a no-op (kill is idempotent).
+//   - A "setFailureProb" is BROADCAST (no Robot target): every rover sets its OWN
+//     per-interval random-failure probability (issue 08 — swarm under stress).
+//     The value is clamped to [0,1]; 0 disables induced failures.
 func subscribeControl(conn *bus.Conn, cfg Config, st *rover) (func(), error) {
 	return bus.SubscribeJSON(conn, wire.SubjControl, func(c wire.Control) {
-		if c.Cmd == "kill" && c.Robot == cfg.ID {
-			st.kill()
+		switch c.Cmd {
+		case "kill":
+			if c.Robot == cfg.ID {
+				st.kill()
+			}
+		case "setFailureProb":
+			st.setFailureProb(c.Value)
 		}
 	})
 }
@@ -379,12 +424,27 @@ func execute(ctx context.Context, cfg Config, conn *bus.Conn, st *rover, hb time
 	heart := time.NewTicker(hb)
 	defer heart.Stop()
 
+	// fault is the random-failure roll, ticking throughout the drive and work
+	// phases (issue 08). On a HIT the rover silently ABANDONS the task — it
+	// returns without completing, failing or refusing — so it stops heartbeating
+	// this lease and the coordinator self-heals it by TTL expiry (the exact same
+	// heal path as a kill, but the rover stays ALIVE and immediately frees its
+	// load/inFlight via the defers above, so it can bid again at once).
+	fault := time.NewTicker(faultCheckEvery)
+	defer fault.Stop()
+
 	// Heartbeat immediately so the lease is renewed before the first TTL window
 	// can lapse, then on every tick throughout the drive and work phases below.
 	sendHeartbeat(conn, cfg.ID, aw.TaskID)
 
-	if !drive(ctx, cfg, conn, st, heart, aw) {
+	switch drive(ctx, cfg, conn, st, heart, fault, aw) {
+	case phaseDone:
+		// arrived at the worksite: fall through to the work phase below
+	case phaseAbort:
 		return // ctx cancelled or rover killed mid-drive: no completion
+	case phaseFault:
+		slog.Warn("fault", "rover", cfg.ID, "task", aw.TaskID, "phase", "drive")
+		return // random fault mid-drive: silently abandon, lease TTL-expires
 	}
 
 	// Cooperative failure: this rover is configured to FAIL this task. It has
@@ -404,8 +464,14 @@ func execute(ctx context.Context, cfg Config, conn *bus.Conn, st *rover, hb time
 		return
 	}
 
-	if !workPhase(ctx, cfg, conn, st, heart, aw) {
+	switch workPhase(ctx, cfg, conn, st, heart, fault, aw) {
+	case phaseDone:
+		// worked the task to completion: fall through to report Complete below
+	case phaseAbort:
 		return // ctx cancelled or rover killed mid-work: no completion
+	case phaseFault:
+		slog.Warn("fault", "rover", cfg.ID, "task", aw.TaskID, "phase", "work")
+		return // random fault mid-work: silently abandon, lease TTL-expires
 	}
 
 	_ = conn.PublishJSON(wire.SubjTaskComplete, wire.Complete{
@@ -415,11 +481,34 @@ func execute(ctx context.Context, cfg Config, conn *bus.Conn, st *rover, hb time
 	slog.Info("complete", "rover", cfg.ID, "task", aw.TaskID)
 }
 
+// phaseResult is the outcome of a drive or work phase, telling execute whether
+// to proceed, silently abandon (no completion), or silently abandon on a random
+// fault (issue 08).
+type phaseResult int
+
+const (
+	phaseDone  phaseResult = iota // phase finished normally (arrived / worked)
+	phaseAbort                    // ctx cancelled or rover killed: go silent, no completion
+	phaseFault                    // random fault hit: silently abandon, lease TTL-expires
+)
+
+// rollFault reports whether the random-failure roll fires this interval: a hit
+// with probability st.failProb (issue 08). At failProb=0 it can never fire.
+// math/rand/v2 is the correct, goroutine-safe choice here: this is sim fault
+// injection (a swarm-stress knob), not a security-sensitive draw.
+//
+//nolint:gosec // G404: sim fault injection, not security-sensitive; math/rand/v2 is intended.
+func rollFault(st *rover) bool {
+	return rand.Float64() < st.failureProb()
+}
+
 // drive interpolates the rover toward aw.Pos, one moveStep of travel per move
-// tick, heartbeating on the heart ticker meanwhile. It returns true on arrival,
-// false if ctx is cancelled or the rover is killed first (in which case the
-// caller must NOT complete the task — a dead rover goes silent).
-func drive(ctx context.Context, cfg Config, conn *bus.Conn, st *rover, heart *time.Ticker, aw wire.Award) bool {
+// tick, heartbeating on the heart ticker meanwhile. It returns phaseDone on
+// arrival, phaseAbort if ctx is cancelled or the rover is killed first, and
+// phaseFault if the random-failure roll fires (issue 08). On anything but
+// phaseDone the caller must NOT complete the task — the rover goes silent and
+// the coordinator self-heals the lease.
+func drive(ctx context.Context, cfg Config, conn *bus.Conn, st *rover, heart, fault *time.Ticker, aw wire.Award) phaseResult {
 	// maxStep is how far the rover may advance per move tick at cruise speed.
 	maxStep := roverSpeed * moveStep.Seconds()
 
@@ -428,29 +517,35 @@ func drive(ctx context.Context, cfg Config, conn *bus.Conn, st *rover, heart *ti
 
 	// Snap onto the target immediately if we are already there.
 	if st.moveToward(aw.Pos, maxStep) {
-		return true
+		return phaseDone
 	}
 	for {
 		select {
 		case <-ctx.Done():
-			return false
+			return phaseAbort
 		case <-st.dead:
-			return false // killed mid-drive: abandon without heartbeating or completing
+			return phaseAbort // killed mid-drive: abandon without heartbeating or completing
+		case <-fault.C:
+			if rollFault(st) {
+				return phaseFault // random fault mid-drive: silently abandon
+			}
 		case <-heart.C:
 			sendHeartbeat(conn, cfg.ID, aw.TaskID)
 		case <-move.C:
 			if st.moveToward(aw.Pos, maxStep) {
-				return true
+				return phaseDone
 			}
 		}
 	}
 }
 
 // workPhase holds the rover at the worksite for workDuration, draining battery
-// over time and heartbeating the lease. It returns true on completion, false if
-// ctx is cancelled or the rover is killed first (in which case the caller must
-// NOT complete the task — a dead rover goes silent).
-func workPhase(ctx context.Context, cfg Config, conn *bus.Conn, st *rover, heart *time.Ticker, aw wire.Award) bool {
+// over time and heartbeating the lease. It returns phaseDone on completion,
+// phaseAbort if ctx is cancelled or the rover is killed first, and phaseFault
+// if the random-failure roll fires (issue 08). On anything but phaseDone the
+// caller must NOT complete the task — the rover goes silent and the coordinator
+// self-heals the lease.
+func workPhase(ctx context.Context, cfg Config, conn *bus.Conn, st *rover, heart, fault *time.Ticker, aw wire.Award) phaseResult {
 	done := time.NewTimer(workDuration)
 	defer done.Stop()
 	tick := time.NewTicker(moveStep)
@@ -459,15 +554,19 @@ func workPhase(ctx context.Context, cfg Config, conn *bus.Conn, st *rover, heart
 	for {
 		select {
 		case <-ctx.Done():
-			return false
+			return phaseAbort
 		case <-st.dead:
-			return false // killed mid-work: abandon without heartbeating or completing
+			return phaseAbort // killed mid-work: abandon without heartbeating or completing
+		case <-fault.C:
+			if rollFault(st) {
+				return phaseFault // random fault mid-work: silently abandon
+			}
 		case <-heart.C:
 			sendHeartbeat(conn, cfg.ID, aw.TaskID)
 		case <-tick.C:
 			st.drainOverTime(drainPerWorkSec * moveStep.Seconds())
 		case <-done.C:
-			return true
+			return phaseDone
 		}
 	}
 }
