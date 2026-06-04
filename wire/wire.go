@@ -141,13 +141,30 @@ type TaskView struct {
 	Deps        []domain.TaskID `json:"deps,omitempty"`
 }
 
+// Choreography beat kinds (slice 06). Each is emitted by the coordinator from a
+// REAL engine event — never synthesized — and rides along in the snapshot's
+// Events for the browser to animate. The browser may only DECORATE the
+// authoritative world state with these (a bid flash, a glow); it must never let
+// a beat contradict the World Model (e.g. a "won" beat names the rover that
+// actually got the lease).
+const (
+	EventBid      = "bid"      // a rover bid in an open auction (Robot, TaskID, Value=cost)
+	EventWon      = "won"      // a rover won the auction and was granted the lease (Robot, TaskID)
+	EventExpired  = "expired"  // a lease TTL-expired; the task is orphaned and re-auctioned (TaskID)
+	EventSolidify = "solidify" // a task was completed end-to-end (Robot, TaskID)
+	EventKilled   = "killed"   // a rover was killed (scripted or by the dashboard) (Robot)
+)
+
 // Event is a discrete choreography beat derived from a real engine event
-// (lease.expired, auction.won, …). The skeleton emits none yet; the field
-// exists so the gateway and browser can carry them without a contract change.
+// (lease.expired, auction.won, …). Beats are transient: each snapshot carries
+// only the beats that occurred since the previous one, so a reconnecting browser
+// simply misses past beats and re-renders durable state from Rovers/Tasks. Value
+// carries a numeric payload where a beat needs one (the bid cost for EventBid).
 type Event struct {
 	Kind   string         `json:"kind"`
 	TaskID domain.TaskID  `json:"task_id,omitempty"`
 	Robot  domain.RobotID `json:"robot_id,omitempty"`
+	Value  float64        `json:"value,omitempty"`
 	At     domain.Tick    `json:"at"`
 }
 

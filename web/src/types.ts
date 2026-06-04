@@ -29,10 +29,16 @@ export type TaskView = {
   deps?: string[];
 };
 
+// A choreography beat (slice 06), derived server-side from a REAL engine event
+// and carried in the snapshot's `events`. The browser only DECORATES the
+// authoritative world with these (a bid flash, a winner glow); a beat must never
+// contradict the rovers/tasks state. Beats are transient — each snapshot carries
+// only those since the previous one. `value` carries the bid cost for "bid".
 export type WorldEvent = {
-  kind: string;
+  kind: string; // "bid" | "won" | "expired" | "solidify" | "killed"
   task_id?: string;
   robot_id?: string;
+  value?: number;
   at: number;
 };
 

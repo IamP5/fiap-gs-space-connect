@@ -63,6 +63,28 @@ type Config struct {
 	TTLFactor int
 	// SnapshotHz is how many world snapshots per second to publish (~10).
 	SnapshotHz int
+	// ScriptedKills are deterministic, event-triggered kills for the demo
+	// rehearsal (slice 06): when WhenTaskLeased is granted to a rover, that rover
+	// is killed After the delay, over the SAME wire.Control path as a dashboard
+	// KILL — so the heal that follows is entirely genuine. This reproduces the
+	// kill→heal money shot at the same beat every run. Empty in production.
+	ScriptedKills []ScriptedKill
+}
+
+// ScriptedKill schedules one reproducible demo kill: once WhenTaskLeased is
+// leased, its holder is killed After the delay. It is the only "pacing" the
+// coordinator does, and it fakes nothing — it drives the real control path.
+type ScriptedKill struct {
+	WhenTaskLeased domain.TaskID
+	After          time.Duration
+	fired          bool // set once armed, so a kill triggers at most once
+}
+
+// armedKill is a scripted kill whose trigger task has been leased and which is
+// now counting down to its fire time.
+type armedKill struct {
+	robot  domain.RobotID
+	fireAt time.Time
 }
 
 // tickEvery is the single-writer loop's cadence: announce ready tasks, close
@@ -96,6 +118,12 @@ type state struct {
 	auctions map[domain.TaskID]*auction    // open auctions, keyed by task
 
 	rovers map[domain.RobotID]wire.Telemetry // latest telemetry per rover
+
+	// pendingEvents accumulates choreography beats (slice 06) emitted by real
+	// engine events since the last snapshot; publishSnapshot drains them.
+	pendingEvents []wire.Event
+	scriptedKills []ScriptedKill // demo rehearsal kills (config copy)
+	armedKills    []armedKill    // scripted kills counting down to fire
 
 	conn   *bus.Conn
 	kv     *bus.KV
@@ -174,6 +202,9 @@ func Run(ctx context.Context, cfg Config) error {
 		clk:      clk,
 		ttl:      ttl,
 		window:   cfg.AuctionWindow,
+		// Copy the scripted kills so arming them (setting fired) never mutates the
+		// caller's Config slice.
+		scriptedKills: append([]ScriptedKill(nil), cfg.ScriptedKills...),
 	}
 
 	// --- Inbound event channel: the ONLY way state is mutated. ---
@@ -297,6 +328,15 @@ func (st *state) handle(ctx context.Context, e any) {
 	}
 }
 
+// emit buffers a choreography beat (slice 06), stamped with the current clock,
+// to be drained into the next snapshot. Every beat reflects a real engine event
+// that just happened; the browser only decorates the authoritative world with
+// it (see wire Event kinds).
+func (st *state) emit(e wire.Event) {
+	e.At = st.clk.Now()
+	st.pendingEvents = append(st.pendingEvents, e)
+}
+
 // onBid records a bid against its open auction. Bids for an auction that has
 // already closed (or never opened) are dropped.
 func (st *state) onBid(b wire.Bid) {
@@ -305,6 +345,7 @@ func (st *state) onBid(b wire.Bid) {
 		return
 	}
 	a.bids[b.Robot] = b.Cost
+	st.emit(wire.Event{Kind: wire.EventBid, TaskID: b.TaskID, Robot: b.Robot, Value: b.Cost})
 }
 
 // onHeartbeat renews the lease TTL for the holder.
@@ -331,6 +372,7 @@ func (st *state) onComplete(ctx context.Context, c wire.Complete) {
 	if st.model.Apply(next) {
 		st.plan.MarkDone(c.TaskID)
 		st.mirror(ctx, next)
+		st.emit(wire.Event{Kind: wire.EventSolidify, TaskID: c.TaskID, Robot: c.Robot})
 		log.Printf("coordinator: complete task=%s by=%s v=%d", c.TaskID, c.Robot, next.Version)
 	}
 }
@@ -364,6 +406,24 @@ func (st *state) onFailed(ctx context.Context, c wire.Failed) {
 // tick runs the periodic auction/lease work: announce newly-ready unclaimed
 // tasks, close due auctions and award winners, and sweep expired leases.
 func (st *state) tick(ctx context.Context) {
+	now := time.Now()
+
+	// Fire any scripted demo kill whose delay has elapsed (slice 06). The kill
+	// goes out on the real control path, so the heal that follows is genuine.
+	if len(st.armedKills) > 0 {
+		kept := st.armedKills[:0]
+		for _, k := range st.armedKills {
+			if now.Before(k.fireAt) {
+				kept = append(kept, k)
+				continue
+			}
+			_ = st.conn.PublishJSON(wire.SubjControl, wire.Control{Cmd: "kill", Robot: k.robot})
+			st.emit(wire.Event{Kind: wire.EventKilled, Robot: k.robot})
+			log.Printf("coordinator: scripted kill rover=%s", k.robot)
+		}
+		st.armedKills = kept
+	}
+
 	// Sweep expired leases first (slice 03 re-auction wiring; harmless now since
 	// heartbeats keep healthy leases alive). A swept task returns to UNCLAIMED.
 	for _, id := range st.leases.Sweep() {
@@ -391,7 +451,6 @@ func (st *state) tick(ctx context.Context) {
 	// simultaneous auctions. Awarding it two tasks would make its two in-process
 	// execute goroutines fight over one shared position. It lives at the single
 	// writer because only the writer sees the whole award pass atomically.
-	now := time.Now()
 	due := make([]domain.TaskID, 0, len(st.auctions))
 	for id, a := range st.auctions {
 		if !now.Before(a.closesAt) {
@@ -506,7 +565,24 @@ func (st *state) award(ctx context.Context, t domain.Task, winner domain.RobotID
 		LeaseTTL: st.ttl,
 		Version:  next.Version,
 	})
+	st.emit(wire.Event{Kind: wire.EventWon, TaskID: t.ID, Robot: winner})
+	st.armScriptedKills(t.ID, winner)
 	log.Printf("coordinator: award task=%s to=%s cost=%.3f v=%d", t.ID, winner, cost, next.Version)
+}
+
+// armScriptedKills arms any scripted kill whose trigger task was just leased,
+// capturing the holder and starting its countdown (tick fires it). Each scripted
+// kill arms at most once (slice 06).
+func (st *state) armScriptedKills(task domain.TaskID, holder domain.RobotID) {
+	for i := range st.scriptedKills {
+		sk := &st.scriptedKills[i]
+		if sk.fired || sk.WhenTaskLeased != task {
+			continue
+		}
+		sk.fired = true
+		st.armedKills = append(st.armedKills, armedKill{robot: holder, fireAt: time.Now().Add(sk.After)})
+		log.Printf("coordinator: scripted kill armed: rover=%s holds %s, firing in %s", holder, task, sk.After)
+	}
 }
 
 // onExpired returns a swept (lease-expired) task to UNCLAIMED in the World Model
@@ -525,6 +601,7 @@ func (st *state) onExpired(ctx context.Context, id domain.TaskID) {
 	next.Version = cur.Version + 1
 	if st.model.Apply(next) {
 		st.mirror(ctx, next)
+		st.emit(wire.Event{Kind: wire.EventExpired, TaskID: id})
 		log.Printf("coordinator: expiry task=%s v=%d (returned to UNCLAIMED)", id, next.Version)
 	}
 }
@@ -581,11 +658,18 @@ func (st *state) publishSnapshot() {
 		})
 	}
 
+	// Drain the choreography beats accumulated since the last snapshot. They are
+	// transient: a reconnecting browser simply misses past beats and re-renders
+	// durable state from Rovers/Tasks (ADR-0004).
+	events := st.pendingEvents
+	st.pendingEvents = nil
+
 	_ = st.conn.PublishJSON(wire.SubjSnapshot, wire.Snapshot{
 		Type:      "snapshot",
 		Connected: st.conn.Connected(),
 		Rovers:    roverViews,
 		Tasks:     taskViews,
+		Events:    events,
 		At:        st.clk.Now(),
 	})
 }

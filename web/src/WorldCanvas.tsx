@@ -9,6 +9,13 @@
 import { useEffect, useRef } from "react";
 import type { Snapshot, TaskStatus } from "./types";
 import { ROVER_R as PROJ_ROVER_R, pickRover, project } from "./hitTest";
+import {
+  type ActiveBeat,
+  activeBeats,
+  beatProgress,
+  ringColor,
+  ringFraction,
+} from "./choreography";
 
 // Functional telemetry encoding (DESIGN.md treats these as live-data signals,
 // not brand chrome — the brand palette itself is black + white only).
@@ -27,7 +34,22 @@ const UI_FONT = '"D-DIN", "Inter", Arial, sans-serif';
 const ROVER_R = PROJ_ROVER_R;
 const TASK_R = 9;
 
-function draw(canvas: HTMLCanvasElement, snapshot: Snapshot | null, selected: string | null) {
+// Per-task inferred TTL for the drain ring. We never receive the lease TTL
+// directly; instead we remember the largest (lease_expiry - at) seen while the
+// task has been LEASED. A renewal (expiry increases) re-records the span so the
+// ring refills; leaving LEASED clears the entry so a future lease starts fresh.
+// This is the mechanism that makes an orphaned (killed-rover) task dramatic: its
+// expiry stops being renewed, so the ring simply drains to empty.
+type RingBase = { expiry: number; fullSpan: number };
+
+function draw(
+  canvas: HTMLCanvasElement,
+  snapshot: Snapshot | null,
+  selected: string | null,
+  beats: ActiveBeat[],
+  nowMs: number,
+  ringBase: Map<string, RingBase>,
+) {
   const ctx = canvas.getContext("2d");
   if (!ctx) return;
 
@@ -64,6 +86,31 @@ function draw(canvas: HTMLCanvasElement, snapshot: Snapshot | null, selected: st
 
   drawGrid(ctx, cssW, cssH);
 
+  // Maintain the per-task inferred-TTL map from DURABLE snapshot state only.
+  // For each LEASED task with a positive expiry: record/refresh fullSpan when
+  // the lease is new or renewed (expiry grew). Forget any task that is no longer
+  // LEASED so a fresh lease re-infers its span. (Decoration-only bookkeeping.)
+  {
+    const seen = new Set<string>();
+    for (const t of snapshot.tasks) {
+      if (t.status !== "LEASED" || !(t.lease_expiry && t.lease_expiry > 0)) continue;
+      seen.add(t.id);
+      const prev = ringBase.get(t.id);
+      if (!prev || t.lease_expiry > prev.expiry) {
+        const span = t.lease_expiry - snapshot.at;
+        ringBase.set(t.id, {
+          expiry: t.lease_expiry,
+          // Keep the largest span ever seen for this lease so a partial first
+          // reading (we joined mid-lease) doesn't permanently shrink the ring.
+          fullSpan: prev ? Math.max(prev.fullSpan, span) : span,
+        });
+      }
+    }
+    for (const id of [...ringBase.keys()]) {
+      if (!seen.has(id)) ringBase.delete(id);
+    }
+  }
+
   // Lease beams first, so markers sit on top.
   const taskById = new Map(snapshot.tasks.map((t) => [t.id, t]));
   for (const r of snapshot.rovers) {
@@ -81,14 +128,53 @@ function draw(canvas: HTMLCanvasElement, snapshot: Snapshot | null, selected: st
     ctx.restore();
   }
 
+  // Latest solidify-pop progress per task id (most recent beat wins), so a just-
+  // completed task gets a quick scale/flash. NaN/absent → no pop.
+  const solidifyProgress = new Map<string, number>();
+  for (const b of beats) {
+    if (b.kind !== "solidify" || !b.task_id) continue;
+    solidifyProgress.set(b.task_id, beatProgress(b, nowMs));
+  }
+
   // Tasks.
   for (const t of snapshot.tasks) {
     const x = tx(t.pos);
     const y = ty(t.pos);
     const color = STATUS_COLOR[t.status] ?? "#888";
 
+    // TTL drain ring: a thin arc around LEASED tasks that empties as the lease
+    // approaches expiry. Derived purely from the durable expiry + inferred span
+    // (ringBase), NOT from a beat — so an orphaned task visibly drains to red.
+    if (t.status === "LEASED" && t.lease_expiry && t.lease_expiry > 0) {
+      const base = ringBase.get(t.id);
+      const frac = ringFraction(t.lease_expiry, snapshot.at, base?.fullSpan ?? 0);
+      const ringR = TASK_R + 6;
+      // Faint full-circle track, then the draining arc on top.
+      ctx.save();
+      ctx.beginPath();
+      ctx.arc(x, y, ringR, 0, Math.PI * 2);
+      ctx.lineWidth = 2.5;
+      ctx.strokeStyle = "rgba(255,255,255,0.12)";
+      ctx.stroke();
+      if (frac > 0) {
+        ctx.beginPath();
+        // Drain clockwise from 12 o'clock; remaining fraction stays lit.
+        ctx.arc(x, y, ringR, -Math.PI / 2, -Math.PI / 2 + frac * Math.PI * 2);
+        ctx.lineWidth = 2.5;
+        ctx.strokeStyle = ringColor(frac);
+        ctx.stroke();
+      }
+      ctx.restore();
+    }
+
+    // Solidify pop: brief scale-up + flash on a just-completed task.
+    const pop = solidifyProgress.get(t.id);
+    const popActive = pop !== undefined && pop < 1;
+    const grow = popActive ? (1 - (pop as number)) * 6 : 0; // up to +6px, decaying
+    const r = TASK_R + grow;
+
     ctx.beginPath();
-    ctx.rect(x - TASK_R, y - TASK_R, TASK_R * 2, TASK_R * 2);
+    ctx.rect(x - r, y - r, r * 2, r * 2);
     ctx.fillStyle = color;
     ctx.globalAlpha = t.status === "UNCLAIMED" ? 0.55 : 1;
     ctx.fill();
@@ -96,6 +182,18 @@ function draw(canvas: HTMLCanvasElement, snapshot: Snapshot | null, selected: st
     ctx.lineWidth = 1.5;
     ctx.strokeStyle = "rgba(0,0,0,0.4)";
     ctx.stroke();
+
+    // The flash: an expanding white outline that fades as the pop completes.
+    if (popActive) {
+      ctx.save();
+      const flashR = r + 4 + (pop as number) * 10;
+      ctx.beginPath();
+      ctx.rect(x - flashR, y - flashR, flashR * 2, flashR * 2);
+      ctx.lineWidth = 2;
+      ctx.strokeStyle = `rgba(46,204,113,${(1 - (pop as number)).toFixed(3)})`;
+      ctx.stroke();
+      ctx.restore();
+    }
 
     ctx.fillStyle = "#ffffff";
     ctx.font = `700 12px ${DISPLAY_FONT}`;
@@ -161,6 +259,50 @@ function draw(canvas: HTMLCanvasElement, snapshot: Snapshot | null, selected: st
     const label = dim ? "DOWN" : `${Math.round(battery * 100)}%`;
     ctx.fillText(label, x, y + ROVER_R + 16);
   }
+
+  // Rover-targeted transient beats, drawn last so they sit above the world.
+  // A beat whose target rover is gone from the snapshot is silently skipped.
+  const roverById = new Map(snapshot.rovers.map((r) => [r.id, r]));
+
+  // Stagger simultaneous bid labels for the same rover so they don't overlap.
+  const bidStack = new Map<string, number>();
+
+  for (const b of beats) {
+    if (b.kind === "won" && b.robot_id) {
+      const rv = roverById.get(b.robot_id);
+      if (!rv) continue;
+      const p = beatProgress(b, nowMs);
+      const x = tx(rv.pos);
+      const y = ty(rv.pos);
+      // A bright ring that expands outward and fades once.
+      ctx.save();
+      ctx.beginPath();
+      ctx.arc(x, y, ROVER_R + 4 + p * 18, 0, Math.PI * 2);
+      ctx.lineWidth = 3 * (1 - p) + 0.5;
+      ctx.strokeStyle = `rgba(46,204,113,${(1 - p).toFixed(3)})`;
+      ctx.stroke();
+      ctx.restore();
+    } else if (b.kind === "bid" && b.robot_id) {
+      const rv = roverById.get(b.robot_id);
+      if (!rv) continue;
+      const p = beatProgress(b, nowMs);
+      const x = tx(rv.pos);
+      const y = ty(rv.pos);
+      const slot = bidStack.get(b.robot_id) ?? 0;
+      bidStack.set(b.robot_id, slot + 1);
+      // Float up and fade; stacked bids are offset vertically by their slot.
+      const baseY = y - ROVER_R - 14 - slot * 14;
+      const floatY = baseY - p * 14;
+      const cost = typeof b.value === "number" ? b.value.toFixed(1) : "";
+      ctx.save();
+      ctx.globalAlpha = 1 - p;
+      ctx.fillStyle = "#f5a623"; // amber — the bid signal
+      ctx.font = `700 12px ${DISPLAY_FONT}`;
+      ctx.textAlign = "center";
+      ctx.fillText(cost, x, floatY);
+      ctx.restore();
+    }
+  }
 }
 
 function drawGrid(ctx: CanvasRenderingContext2D, w: number, h: number) {
@@ -192,23 +334,54 @@ type WorldCanvasProps = {
 export function WorldCanvas({ snapshot, selected, onPick }: WorldCanvasProps) {
   const canvasRef = useRef<HTMLCanvasElement>(null);
 
+  // Presentation-only ephemeral state — NOT a violation of "pure re-render of the
+  // snapshot": these are strictly derived from the server's own beats/durable
+  // state and never invent world facts; they only DECORATE the snapshot.
+  //   - latest:    current props, so the rAF loop always draws the freshest world.
+  //   - beats:     active transient beats with their performance.now() spawn time.
+  //   - ringBase:  per-task inferred lease TTL for the drain ring (see RingBase).
+  //   - lastAt:    last snapshot.at appended, to dedupe re-renders of one frame.
+  const latest = useRef<{ snapshot: Snapshot | null; selected: string | null }>({
+    snapshot,
+    selected,
+  });
+  const beats = useRef<ActiveBeat[]>([]);
+  const ringBase = useRef<Map<string, RingBase>>(new Map());
+  const lastAt = useRef<number>(Number.NEGATIVE_INFINITY);
+
+  latest.current = { snapshot, selected };
+
+  // Ingest a snapshot's transient beats exactly once per distinct frame. Each
+  // beat is stamped with performance.now() so its animation progress is
+  // independent of the ~12 Hz snapshot cadence. A target rover/task that has
+  // vanished is handled at draw time (silently skipped), never here.
+  if (snapshot && snapshot.at !== lastAt.current) {
+    lastAt.current = snapshot.at;
+    const now = performance.now();
+    const incoming = snapshot.events ?? [];
+    if (incoming.length > 0) {
+      beats.current = [...beats.current, ...incoming.map((e) => ({ ...e, spawn: now }))];
+    }
+  }
+
+  // Single continuous render loop: drives the TTL ring drain and beat fades
+  // smoothly between snapshots, prunes expired beats each frame, and is the one
+  // place the world is drawn. Cancelled on unmount so it never leaks.
   useEffect(() => {
     const canvas = canvasRef.current;
     if (!canvas) return;
-    draw(canvas, snapshot, selected);
+    let raf = 0;
 
-    const onResize = () => draw(canvas, snapshot, selected);
-    window.addEventListener("resize", onResize);
-
-    // Also redraw if the canvas element itself is resized (layout changes).
-    const ro = new ResizeObserver(() => draw(canvas, snapshot, selected));
-    ro.observe(canvas);
-
-    return () => {
-      window.removeEventListener("resize", onResize);
-      ro.disconnect();
+    const tick = () => {
+      const now = performance.now();
+      beats.current = activeBeats(beats.current, now);
+      draw(canvas, latest.current.snapshot, latest.current.selected, beats.current, now, ringBase.current);
+      raf = requestAnimationFrame(tick);
     };
-  }, [snapshot, selected]);
+    raf = requestAnimationFrame(tick);
+
+    return () => cancelAnimationFrame(raf);
+  }, []);
 
   const handleClick = (e: React.MouseEvent<HTMLCanvasElement>) => {
     if (!snapshot) return;
