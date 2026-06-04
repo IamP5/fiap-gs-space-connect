@@ -51,8 +51,21 @@ export type Snapshot = {
   at: number;
 };
 
-// Browser → server control message (TECHSPEC §4). Not needed visually this
-// slice, but the shape is fixed here so the send path can use it.
+// EarthUplink — the DELAYED Earth-bound telemetry view (issue 09). It rides the
+// `earth.uplink` subject ONLY (ADR-0002: the latency shim never touches
+// heartbeats or the tactical loop), so it is a lagging copy of the world. At
+// high latency it trails the live Snapshot — that visible gap is the whole point
+// ("Earth never knew"). `type` is always "earth" so the browser routes it apart
+// from a Snapshot. Marshals as wire.go's EarthUplink: {type,rovers,tasks,at}.
+export type EarthUplink = {
+  type: "earth";
+  rovers: RoverView[];
+  tasks: TaskView[];
+  at: number; // the world time this view reflects (lag = snapshot.at - earth.at)
+};
+
+// Browser → server control message (TECHSPEC §4). `cmd`/`robot`/`value` already
+// cover kill (robot) and the slider commands setFailureProb/setLatency (value).
 export type Control = {
   cmd: string;
   robot?: string;
@@ -70,4 +83,12 @@ export function isSnapshot(v: unknown): v is Snapshot {
     Array.isArray(o.rovers) &&
     Array.isArray(o.tasks)
   );
+}
+
+// Narrow an arbitrary parsed JSON value to an EarthUplink. Same defensive ethos
+// as isSnapshot: a malformed earth frame must never crash the pure render.
+export function isEarthUplink(v: unknown): v is EarthUplink {
+  if (typeof v !== "object" || v === null) return false;
+  const o = v as Record<string, unknown>;
+  return o.type === "earth" && Array.isArray(o.rovers) && Array.isArray(o.tasks);
 }

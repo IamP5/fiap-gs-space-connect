@@ -11,6 +11,8 @@ import { connectionStatus } from "./lib/connection";
 import { StatusIndicator } from "./components/StatusIndicator";
 import { TaskLedger } from "./components/TaskLedger";
 import { KillPanel } from "./components/KillPanel";
+import { ControlsPanel } from "./components/ControlsPanel";
+import { EarthPanel } from "./components/EarthPanel";
 import { WorldCanvas } from "./components/WorldCanvas";
 import { Scene3D } from "./components/Scene3D";
 import "./styles/dashboard.css";
@@ -21,7 +23,7 @@ import "./styles/dashboard.css";
 type Renderer = "3d" | "2d";
 
 export default function App() {
-  const { snapshot, wsOpen, url, send } = useSnapshot();
+  const { snapshot, earth, wsOpen, url, send } = useSnapshot();
 
   // Selection is the ONLY new client state — the dashboard stays a pure
   // re-render of the snapshot otherwise (ADR-0004). Two-step kill: click a
@@ -96,6 +98,14 @@ export default function App() {
         {selectedRover ? (
           <KillPanel rover={selectedRover} onKill={kill} onDismiss={dismiss} />
         ) : null}
+
+        {/* Stress dials, bottom-left. The latency slider is wired here so it can
+            be promoted into the demo arc with a one-line change (issue 09). */}
+        <ControlsPanel send={send} />
+
+        {/* The DELAYED Earth view, bottom-right — it lags the live TaskLedger
+            (top-left) as latency climbs, proving "Earth never knew" (issue 09). */}
+        <EarthPanel earth={earth} snapshotAt={snapshot?.at ?? null} />
 
         {/* Both renderers honor the SAME {snapshot, selected, onPick} contract,
             so the toggle swaps them with no other change. The 2D WorldCanvas is
