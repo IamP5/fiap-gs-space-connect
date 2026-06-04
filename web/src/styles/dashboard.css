@@ -48,6 +48,49 @@
   color: var(--ink-mute);
 }
 
+/* ---- renderer toggle (2D / 3D) ----
+   A hairline-boxed two-button switch, mirroring the badge chrome: no fill, the
+   active segment carries white text on a near-black fill, the rest is muted.
+   Pushed hard-right next to the WS meta. */
+.renderer-toggle {
+  margin-left: auto;
+  display: inline-flex;
+  border: 1px solid var(--hairline-on-dark);
+  border-radius: var(--r-xs);
+  overflow: hidden;
+}
+
+/* The meta now follows the toggle, so it no longer needs the auto-margin. */
+.renderer-toggle + .meta {
+  margin-left: var(--s-md);
+}
+
+.renderer-btn {
+  padding: 6px var(--s-sm);
+  font-family: var(--display);
+  font-size: 12px;
+  font-weight: 700;
+  letter-spacing: 1.17px;
+  text-transform: uppercase;
+  color: var(--ink-mute);
+  background: transparent;
+  border: none;
+  cursor: pointer;
+}
+
+.renderer-btn + .renderer-btn {
+  border-left: 1px solid var(--hairline-on-dark);
+}
+
+.renderer-btn.is-active {
+  color: var(--on-primary);
+  background: var(--canvas-night-soft);
+}
+
+.renderer-btn:hover:not(.is-active) {
+  color: var(--on-primary-mute);
+}
+
 /* ---- connection indicator ----
    Eyebrow caps microtext + a single functional telemetry dot. No pill fill,
    no glow — the dot alone carries the signal. */

@@ -12,7 +12,13 @@ import { StatusIndicator } from "./components/StatusIndicator";
 import { TaskLedger } from "./components/TaskLedger";
 import { KillPanel } from "./components/KillPanel";
 import { WorldCanvas } from "./components/WorldCanvas";
+import { Scene3D } from "./components/Scene3D";
 import "./styles/dashboard.css";
+
+// Which renderer draws the worksite. Both are PURE functions of the same
+// snapshot (ADR-0004), so toggling between them can never change World Model
+// state — the 3D scene is the headline; the 2D canvas is the rehearsed fallback.
+type Renderer = "3d" | "2d";
 
 export default function App() {
   const { snapshot, wsOpen, url, send } = useSnapshot();
@@ -21,6 +27,10 @@ export default function App() {
   // re-render of the snapshot otherwise (ADR-0004). Two-step kill: click a
   // rover to select, then click KILL, so a stray click never kills.
   const [selected, setSelected] = useState<string | null>(null);
+
+  // The renderer toggle. Defaults to the 3D diorama (the pitch); the 2D canvas
+  // stays a one-click fallback if 3D ever misbehaves on the projector.
+  const [renderer, setRenderer] = useState<Renderer>("3d");
 
   // The currently-selected rover, resolved against the LATEST snapshot. If it
   // has vanished from the snapshot, this is undefined → treated as deselected.
@@ -55,6 +65,24 @@ export default function App() {
           SwarmBuild <span className="brand-sub">dashboard</span>
         </div>
         <StatusIndicator status={status} />
+        <div className="renderer-toggle" role="group" aria-label="Renderer">
+          <button
+            type="button"
+            className={`renderer-btn ${renderer === "3d" ? "is-active" : ""}`}
+            aria-pressed={renderer === "3d"}
+            onClick={() => setRenderer("3d")}
+          >
+            3D
+          </button>
+          <button
+            type="button"
+            className={`renderer-btn ${renderer === "2d" ? "is-active" : ""}`}
+            aria-pressed={renderer === "2d"}
+            onClick={() => setRenderer("2d")}
+          >
+            2D
+          </button>
+        </div>
         <div className="meta">{url}</div>
       </header>
 
@@ -69,11 +97,22 @@ export default function App() {
           <KillPanel rover={selectedRover} onKill={kill} onDismiss={dismiss} />
         ) : null}
 
-        <WorldCanvas
-          snapshot={snapshot}
-          selected={selectedRover ? selected : null}
-          onPick={setSelected}
-        />
+        {/* Both renderers honor the SAME {snapshot, selected, onPick} contract,
+            so the toggle swaps them with no other change. The 2D WorldCanvas is
+            kept fully functional as the rehearsed fallback (ADR-0004). */}
+        {renderer === "3d" ? (
+          <Scene3D
+            snapshot={snapshot}
+            selected={selectedRover ? selected : null}
+            onPick={setSelected}
+          />
+        ) : (
+          <WorldCanvas
+            snapshot={snapshot}
+            selected={selectedRover ? selected : null}
+            onPick={setSelected}
+          />
+        )}
       </main>
     </div>
   );
