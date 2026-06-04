@@ -38,6 +38,8 @@ thin under `cmd/` (parse flags, wire dependencies, call `Run()`).
 
 ```sh
 # Go
+make lint                      # golangci-lint (or: golangci-lint run ./...)
+go build ./...                 # must compile clean
 go test -race ./...            # all backend tests
 go vet ./...
 
@@ -61,7 +63,19 @@ docker compose -f deploy/docker-compose.yml up --build   # dashboard at :5173
   lives in `lib/` with co-located `*.test.ts`; **no barrel files**; the dashboard stays a
   pure re-render of the server snapshot (ADR-0004). See `vercel-react-best-practices`,
   `web-design-guidelines`, and `r3f-*` (for the future 3D renderer).
-- Validate (tests + build) before every commit.
+## After each implementation
+
+Run this gate after every change, then commit — never leave the tree red:
+
+```sh
+make lint                      # golangci-lint — must report 0 issues
+go build ./...                 # must compile clean
+go test -race ./...            # all backend tests must pass
+# web changes also: (cd web && npm run build && npm test)
+```
+
+Only once lint, build, and tests all pass, commit the change (Conventional Commits,
+below). One focused commit per logical change.
 
 ## Commits — Conventional Commits
 
