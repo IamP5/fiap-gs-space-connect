@@ -20,16 +20,20 @@ wrapped in a thin simulation + NATS bus + 3D dashboard that exist to make those 
 *visible*. See TECHSPEC §3.
 
 ```
-/core        Go — deep modules (allocation, lease, world, planner) + tests   ← built
-/wire        Go — NATS subjects + JSON message/snapshot contract             ← built
-/bus         Go — NATS wrapper (connect/retry, pub/sub, KV) + embedded server ← built
-/agent       Go — robot agent (bid/execute/heartbeat); --mode=container       ← built
-/coordinator Go — single-writer tick, auction, lease, world, KV mirror        ← built
-/gateway     Go — NATS→WebSocket fan-out + /healthz                           ← built
-/web         React + Vite — 2D canvas scaffold (→ 3D later)                   ← built
-/deploy      docker-compose.yml (nats, coordinator, gateway, web) + smoke.sh  ← built
-/cmd         Go — coordinator / agent / gateway binaries                      ← built
+/cmd                  Go — coordinator / agent / gateway binaries (thin mains) ← built
+/internal/core        Go — deep modules (allocation, lease, world, planner)    ← built
+/internal/wire        Go — NATS subjects + JSON message/snapshot contract      ← built
+/internal/bus         Go — NATS wrapper (connect/retry, pub/sub, KV) + server  ← built
+/internal/agent       Go — robot agent (bid/execute/heartbeat)                 ← built
+/internal/coordinator Go — single-writer tick, auction, lease, world, KV       ← built
+/internal/gateway     Go — NATS→WebSocket fan-out + /healthz                   ← built
+/internal/demo        Go — blueprint + rover roster for the demo scenario      ← built
+/web                  React + Vite — 2D canvas scaffold (→ 3D later)           ← built
+/deploy               docker-compose.yml (nats, coordinator, gateway, web)     ← built
 ```
+
+Application code lives under `internal/` (standard Go layout — private, not importable
+by other modules); the `main` packages stay thin under `cmd/`.
 
 ## Run the stack
 
@@ -43,17 +47,18 @@ docker compose -f deploy/docker-compose.yml up --build
 
 ## Deep core (built)
 
-Four pure modules under `core/`, importing only `swarmbuild/core/domain` + stdlib — no
+Four pure modules under `internal/core/`, importing only `swarmbuild/internal/core/domain`
++ stdlib — no
 NATS, no simulation, no wall clock. This is the PRD's real acceptance: it ships fully
 tested even if everything after is cut (TECHSPEC §6 step 1).
 
 | Module | Package | What it does |
 |---|---|---|
-| **Domain contract** | `core/domain` | Shared types: `Task`, `RobotID`, `TaskStatus`, `Vec2`, `Lamport`, `Clock`/`Tick`, `RoverState`. The single contract the four modules agree on. |
-| **Allocation Engine** | `core/allocation` | Contract Net auction. `cost = w_dist·dist + w_bat·(1/battery) + w_load·load`; ineligible rovers (capability ∞) don't bid; lowest cost wins; tie → lower `RobotID`. |
-| **Lease Manager** | `core/lease` | TTL + heartbeat over an injectable logical clock. Grant → renew → complete; expiry on heartbeat silence releases the task **exactly once** (idempotent). |
-| **World Model** | `core/world` | Authoritative single-writer task state + a pure, property-tested CRDT `Merge` (commutative, idempotent, associative; concurrent-claim tiebreak by lower rover id). Live path uses the single writer; the CRDT is proven in tests (ADR-0003). |
-| **Task Planner** | `core/planner` | Blueprint → DAG. Rejects cycles and dangling deps at load; computes the **ready set** (deps all DONE); marking a task DONE unblocks dependents; deterministic topological order. |
+| **Domain contract** | `internal/core/domain` | Shared types: `Task`, `RobotID`, `TaskStatus`, `Vec2`, `Lamport`, `Clock`/`Tick`, `RoverState`. The single contract the four modules agree on. |
+| **Allocation Engine** | `internal/core/allocation` | Contract Net auction. `cost = w_dist·dist + w_bat·(1/battery) + w_load·load`; ineligible rovers (capability ∞) don't bid; lowest cost wins; tie → lower `RobotID`. |
+| **Lease Manager** | `internal/core/lease` | TTL + heartbeat over an injectable logical clock. Grant → renew → complete; expiry on heartbeat silence releases the task **exactly once** (idempotent). |
+| **World Model** | `internal/core/world` | Authoritative single-writer task state + a pure, property-tested CRDT `Merge` (commutative, idempotent, associative; concurrent-claim tiebreak by lower rover id). Live path uses the single writer; the CRDT is proven in tests (ADR-0003). |
+| **Task Planner** | `internal/core/planner` | Blueprint → DAG. Rejects cycles and dangling deps at load; computes the **ready set** (deps all DONE); marking a task DONE unblocks dependents; deterministic topological order. |
 
 ### Run the tests
 

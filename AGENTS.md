@@ -24,10 +24,15 @@ Engineering substance = four pure, unit-tested Go **deep modules** (`allocation`
 ## Layout
 
 ```
-core/  wire/  bus/  agent/  coordinator/  gateway/   Go — orchestration + bus + binaries
+cmd/                                                 Go — thin main packages (binaries)
+internal/core/  internal/wire/  internal/bus/        Go — deep modules + bus contract
+internal/agent/  internal/coordinator/  internal/gateway/  internal/demo/   orchestration
 web/                                                 React + Vite dashboard
 deploy/                                              docker-compose + smoke.sh
 ```
+
+Application code is private under `internal/` (standard Go layout); `main` packages stay
+thin under `cmd/` (parse flags, wire dependencies, call `Run()`).
 
 ## Commands
 

@@ -13,8 +13,8 @@ import (
 	"os/signal"
 	"syscall"
 
-	"swarmbuild/coordinator"
-	"swarmbuild/demo"
+	"swarmbuild/internal/coordinator"
+	"swarmbuild/internal/demo"
 )
 
 func main() {

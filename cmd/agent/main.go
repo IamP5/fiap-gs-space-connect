@@ -15,9 +15,9 @@ import (
 	"syscall"
 	"time"
 
-	"swarmbuild/agent"
-	"swarmbuild/bus"
-	"swarmbuild/core/domain"
+	"swarmbuild/internal/agent"
+	"swarmbuild/internal/bus"
+	"swarmbuild/internal/core/domain"
 )
 
 func main() {

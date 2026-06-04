@@ -12,8 +12,8 @@ import (
 	"syscall"
 	"time"
 
-	"swarmbuild/bus"
-	"swarmbuild/gateway"
+	"swarmbuild/internal/bus"
+	"swarmbuild/internal/gateway"
 )
 
 func main() {
