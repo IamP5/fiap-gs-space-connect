@@ -11,7 +11,18 @@ import (
 // tests. These are white-box: they drive moveToward/drainOverTime directly with
 // no NATS bus and no real sleeping (ADR-0001: movement is visual interpolation).
 func newRover(pos domain.Vec2) *rover {
-	return &rover{pos: pos, battery: 1.0, alive: true}
+	return &rover{pos: pos, battery: 1.0, alive: true, dead: make(chan struct{})}
+}
+
+// isClosed reports whether ch has been closed, without blocking. Used to assert
+// that kill() closed the dead channel.
+func isClosed(ch chan struct{}) bool {
+	select {
+	case <-ch:
+		return true
+	default:
+		return false
+	}
 }
 
 // moveAllTheWay drives the rover toward target one maxStep at a time until it
@@ -201,5 +212,47 @@ func TestClaimDeduplicatesInFlightTasks(t *testing.T) {
 	st.release(task)
 	if !st.claim(task) {
 		t.Fatalf("claim after release should succeed")
+	}
+}
+
+func TestKillClosesDeadOnceAndClearsAlive(t *testing.T) {
+	st := newRover(domain.Vec2{X: 0, Y: 0})
+
+	if isClosed(st.dead) {
+		t.Fatalf("dead should be open before kill")
+	}
+	st.kill()
+	if !isClosed(st.dead) {
+		t.Fatalf("kill should close dead")
+	}
+	if _, _, _, alive := st.snapshot(); alive {
+		t.Fatalf("kill should clear alive")
+	}
+
+	// A second kill is a harmless no-op: it must not panic by double-closing the
+	// dead channel, and the rover stays dead.
+	st.kill()
+	if !isClosed(st.dead) {
+		t.Fatalf("dead should remain closed after a second kill")
+	}
+	if _, _, _, alive := st.snapshot(); alive {
+		t.Fatalf("rover should remain dead after a second kill")
+	}
+}
+
+func TestRefuseRecordsTaskAndPredicate(t *testing.T) {
+	st := newRover(domain.Vec2{X: 0, Y: 0})
+	const failed domain.TaskID = "t-fail"
+	const other domain.TaskID = "t-ok"
+
+	if st.refuses(failed) {
+		t.Fatalf("rover should not refuse a task it has not failed")
+	}
+	st.refuse(failed)
+	if !st.refuses(failed) {
+		t.Fatalf("rover should refuse a task it has failed")
+	}
+	if st.refuses(other) {
+		t.Fatalf("rover should not refuse an unrelated task")
 	}
 }

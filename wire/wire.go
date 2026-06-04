@@ -19,6 +19,7 @@ const (
 	SubjTaskAnnounce = "task.announce"  // coordinator announces a ready task for auction
 	SubjTaskAward    = "task.award"     // coordinator grants the winning rover a lease
 	SubjTaskComplete = "task.complete"  // a rover reports its leased task finished
+	SubjTaskFailed   = "task.failed"    // a rover reports it cannot finish its leased task (cooperative release)
 	SubjSnapshot     = "world.snapshot" // coordinator publishes the merged world snapshot (~10 Hz)
 	SubjEarthUplink  = "earth.uplink"   // latency shim lives here ONLY (never on heartbeats)
 )
@@ -82,6 +83,18 @@ type Award struct {
 type Complete struct {
 	TaskID domain.TaskID  `json:"task_id"`
 	Robot  domain.RobotID `json:"robot_id"`
+}
+
+// Failed reports that a rover is abandoning a leased task it cannot finish
+// (e.g. an execution failure or lost capability). The coordinator releases the
+// lease PROMPTLY on this signal — scoped to the named holder — rather than
+// waiting for the TTL to expire, so the task re-auctions immediately (slice 03,
+// the cooperative counterpart to silent death by heartbeat timeout). Reason is
+// a short human-readable cause for the audit log; it does not affect handling.
+type Failed struct {
+	TaskID domain.TaskID  `json:"task_id"`
+	Robot  domain.RobotID `json:"robot_id"`
+	Reason string         `json:"reason,omitempty"`
 }
 
 // Heartbeat renews a rover's lease on a task.

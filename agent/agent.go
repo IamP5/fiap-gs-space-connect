@@ -31,6 +31,13 @@ type Config struct {
 	Battery        float64
 	Capabilities   []domain.Capability
 	HeartbeatEvery time.Duration // e.g. 500ms
+
+	// FailTask, if non-empty, makes this rover abandon that task instead of
+	// completing it: on award it drives to the task, then reports execution
+	// failure via wire.Failed rather than wire.Complete, and never bids on that
+	// task again (it has "lost the capability" for it). Deterministic fault
+	// injection for the slice-03 self-heal demo/test.
+	FailTask domain.TaskID
 }
 
 // Movement and work tuning. Movement is visual interpolation only — the rover
@@ -86,6 +93,17 @@ type rover struct {
 	// guards against a redelivered/duplicate wire.Award spawning a second
 	// execute goroutine for the same task. Guarded by mu.
 	inFlight map[domain.TaskID]struct{}
+
+	// refused is the set of tasks this rover has cooperatively failed and will
+	// never bid on again (it has "lost the capability" for them). Guarded by mu.
+	refused map[domain.TaskID]struct{}
+
+	// dead is closed exactly once by kill() when the rover suffers a silent
+	// death (the "kill" control command). The drive, work and telemetry loops
+	// select on it to abandon their work without completing or heartbeating, so
+	// the coordinator self-heals the lease by TTL expiry.
+	dead     chan struct{}
+	killOnce sync.Once
 }
 
 // snapshot returns a consistent copy of the rover's scoring-relevant state.
@@ -124,6 +142,40 @@ func (r *rover) release(task domain.TaskID) {
 	r.mu.Lock()
 	delete(r.inFlight, task)
 	r.mu.Unlock()
+}
+
+// kill marks the rover silently dead: it clears alive (so the bid-on-announce
+// path stops bidding) and closes the dead channel exactly once, which the drive,
+// work and telemetry loops select on to stop heartbeating, abandon any in-flight
+// execution WITHOUT completing it, and go silent on the bus. A dead rover is
+// dead for its lifetime; a second kill is a harmless no-op (idempotent via
+// sync.Once, so dead is never double-closed).
+func (r *rover) kill() {
+	r.killOnce.Do(func() {
+		r.mu.Lock()
+		r.alive = false
+		r.mu.Unlock()
+		close(r.dead)
+	})
+}
+
+// refuse records task in the refused set so the rover never bids on it again.
+func (r *rover) refuse(task domain.TaskID) {
+	r.mu.Lock()
+	if r.refused == nil {
+		r.refused = make(map[domain.TaskID]struct{})
+	}
+	r.refused[task] = struct{}{}
+	r.mu.Unlock()
+}
+
+// refuses reports whether the rover has cooperatively failed task and will not
+// bid on it again. Read under the rover mutex.
+func (r *rover) refuses(task domain.TaskID) bool {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	_, ok := r.refused[task]
+	return ok
 }
 
 // moveToward advances the rover's position toward target by at most maxStep
@@ -197,6 +249,7 @@ func Run(ctx context.Context, cfg Config, conn *bus.Conn) error {
 		pos:     cfg.Pos,
 		battery: cfg.Battery,
 		alive:   true,
+		dead:    make(chan struct{}),
 	}
 	weights := allocation.DefaultWeights()
 
@@ -207,6 +260,9 @@ func Run(ctx context.Context, cfg Config, conn *bus.Conn) error {
 		pos, battery, load, alive := st.snapshot()
 		if !alive {
 			return
+		}
+		if st.refuses(a.TaskID) {
+			return // cooperatively failed this task: never bid on it again
 		}
 		rs := domain.RoverState{
 			ID:           cfg.ID,
@@ -237,12 +293,30 @@ func Run(ctx context.Context, cfg Config, conn *bus.Conn) error {
 		if aw.Robot != cfg.ID {
 			return // not ours
 		}
+		if _, _, _, alive := st.snapshot(); !alive {
+			return // dead: drop awards arriving after death (no execution)
+		}
 		go execute(ctx, cfg, conn, st, hb, aw)
 	})
 	if err != nil {
 		return err
 	}
 	defer unsubAward()
+
+	// Control commands from the dashboard/coordinator. A "kill" naming THIS rover
+	// triggers a silent death: it stops bidding, heartbeating, executing and
+	// telemetering so the coordinator self-heals the lease by TTL expiry. Kills
+	// for other robots are ignored; a repeated kill is a no-op (kill is
+	// idempotent).
+	unsubControl, err := bus.SubscribeJSON(conn, wire.SubjControl, func(c wire.Control) {
+		if c.Cmd == "kill" && c.Robot == cfg.ID {
+			st.kill()
+		}
+	})
+	if err != nil {
+		return err
+	}
+	defer unsubControl()
 
 	// Telemetry ticker: the rover's self-report stream.
 	ticker := time.NewTicker(telemetryEvery)
@@ -253,6 +327,12 @@ func Run(ctx context.Context, cfg Config, conn *bus.Conn) error {
 		select {
 		case <-ctx.Done():
 			return ctx.Err()
+		case <-st.dead:
+			// Silent death: emit one final alive=false telemetry so the
+			// dashboard shows the rover down, then go silent on the bus (a dead
+			// rover is silent). kill() has already cleared alive.
+			publishTelemetry(conn, cfg, st)
+			return nil
 		case <-ticker.C:
 			publishTelemetry(conn, cfg, st)
 		}
@@ -288,10 +368,28 @@ func execute(ctx context.Context, cfg Config, conn *bus.Conn, st *rover, hb time
 	sendHeartbeat(conn, cfg.ID, aw.TaskID)
 
 	if !drive(ctx, cfg, conn, st, heart, aw) {
-		return // ctx cancelled mid-drive
+		return // ctx cancelled or rover killed mid-drive: no completion
 	}
+
+	// Cooperative failure: this rover is configured to FAIL this task. It has
+	// driven to the worksite (visible) but instead of working it reports an
+	// execution failure on wire.SubjTaskFailed and stops heartbeating, so the
+	// coordinator releases the lease PROMPTLY (no need to wait out the work
+	// phase). It records the task as refused so it never bids on it again and a
+	// different rover wins the re-auction.
+	if cfg.FailTask != "" && aw.TaskID == cfg.FailTask {
+		st.refuse(aw.TaskID)
+		_ = conn.PublishJSON(wire.SubjTaskFailed, wire.Failed{
+			TaskID: aw.TaskID,
+			Robot:  cfg.ID,
+			Reason: "execution failure",
+		})
+		log.Printf("rover %s: failed %s (execution failure)", cfg.ID, aw.TaskID)
+		return
+	}
+
 	if !workPhase(ctx, cfg, conn, st, heart, aw) {
-		return // ctx cancelled mid-work
+		return // ctx cancelled or rover killed mid-work: no completion
 	}
 
 	_ = conn.PublishJSON(wire.SubjTaskComplete, wire.Complete{
@@ -303,7 +401,8 @@ func execute(ctx context.Context, cfg Config, conn *bus.Conn, st *rover, hb time
 
 // drive interpolates the rover toward aw.Pos, one moveStep of travel per move
 // tick, heartbeating on the heart ticker meanwhile. It returns true on arrival,
-// false if ctx is cancelled first.
+// false if ctx is cancelled or the rover is killed first (in which case the
+// caller must NOT complete the task — a dead rover goes silent).
 func drive(ctx context.Context, cfg Config, conn *bus.Conn, st *rover, heart *time.Ticker, aw wire.Award) bool {
 	// maxStep is how far the rover may advance per move tick at cruise speed.
 	maxStep := roverSpeed * moveStep.Seconds()
@@ -319,6 +418,8 @@ func drive(ctx context.Context, cfg Config, conn *bus.Conn, st *rover, heart *ti
 		select {
 		case <-ctx.Done():
 			return false
+		case <-st.dead:
+			return false // killed mid-drive: abandon without heartbeating or completing
 		case <-heart.C:
 			sendHeartbeat(conn, cfg.ID, aw.TaskID)
 		case <-move.C:
@@ -331,7 +432,8 @@ func drive(ctx context.Context, cfg Config, conn *bus.Conn, st *rover, heart *ti
 
 // workPhase holds the rover at the worksite for workDuration, draining battery
 // over time and heartbeating the lease. It returns true on completion, false if
-// ctx is cancelled first.
+// ctx is cancelled or the rover is killed first (in which case the caller must
+// NOT complete the task — a dead rover goes silent).
 func workPhase(ctx context.Context, cfg Config, conn *bus.Conn, st *rover, heart *time.Ticker, aw wire.Award) bool {
 	done := time.NewTimer(workDuration)
 	defer done.Stop()
@@ -342,6 +444,8 @@ func workPhase(ctx context.Context, cfg Config, conn *bus.Conn, st *rover, heart
 		select {
 		case <-ctx.Done():
 			return false
+		case <-st.dead:
+			return false // killed mid-work: abandon without heartbeating or completing
 		case <-heart.C:
 			sendHeartbeat(conn, cfg.ID, aw.TaskID)
 		case <-tick.C:

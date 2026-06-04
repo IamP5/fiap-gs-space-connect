@@ -74,6 +74,7 @@ const tickEvery = 50 * time.Millisecond
 // value type so the channel carries plain data; the writer interprets them.
 type evBid struct{ bid wire.Bid }
 type evComplete struct{ done wire.Complete }
+type evFailed struct{ failed wire.Failed }
 type evHeartbeat struct{ hb wire.Heartbeat }
 type evTelemetry struct{ tel wire.Telemetry }
 
@@ -201,6 +202,14 @@ func Run(ctx context.Context, cfg Config) error {
 	}
 	defer unsubComplete()
 
+	unsubFailed, err := bus.SubscribeJSON(conn, wire.SubjTaskFailed, func(f wire.Failed) {
+		enqueue(evFailed{failed: f})
+	})
+	if err != nil {
+		return fmt.Errorf("coordinator: subscribe failed: %w", err)
+	}
+	defer unsubFailed()
+
 	unsubHeartbeat, err := bus.SubscribeJSON(conn, wire.SubjHeartbeatWildcard, func(h wire.Heartbeat) {
 		enqueue(evHeartbeat{hb: h})
 	})
@@ -279,6 +288,8 @@ func (st *state) handle(ctx context.Context, e any) {
 		st.onBid(ev.bid)
 	case evComplete:
 		st.onComplete(ctx, ev.done)
+	case evFailed:
+		st.onFailed(ctx, ev.failed)
 	case evHeartbeat:
 		st.onHeartbeat(ev.hb)
 	case evTelemetry:
@@ -321,6 +332,32 @@ func (st *state) onComplete(ctx context.Context, c wire.Complete) {
 		st.plan.MarkDone(c.TaskID)
 		st.mirror(ctx, next)
 		log.Printf("coordinator: complete task=%s by=%s v=%d", c.TaskID, c.Robot, next.Version)
+	}
+}
+
+// onFailed handles a rover cooperatively abandoning a leased task it cannot
+// finish (wire.Failed): release the lease PROMPTLY — scoped to the named holder
+// — and return the task to UNCLAIMED so the next tick re-auctions it, rather
+// than waiting for the TTL to expire (slice 03, the cooperative counterpart to
+// silent death by heartbeat timeout). The Release scoping is load-bearing: a
+// stale/redelivered failure from a PRIOR holder is rejected and must not release
+// a successor's fresh lease.
+func (st *state) onFailed(ctx context.Context, c wire.Failed) {
+	if !st.leases.Release(c.TaskID, c.Robot) {
+		return // not the holder, already terminal, or stale failure: idempotent no-op
+	}
+	cur, ok := st.model.Get(c.TaskID)
+	if !ok || cur.Status != domain.Leased {
+		return
+	}
+	next := cur
+	next.Status = domain.Unclaimed
+	next.Assignee = ""
+	next.LeaseExpiry = 0
+	next.Version = cur.Version + 1
+	if st.model.Apply(next) {
+		st.mirror(ctx, next)
+		log.Printf("coordinator: failed task=%s by=%s v=%d (released for re-auction)", c.TaskID, c.Robot, next.Version)
 	}
 }
 
