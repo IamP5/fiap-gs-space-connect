@@ -3,11 +3,10 @@ package demo
 import (
 	"reflect"
 	"strconv"
-	"testing"
-	"time"
-
 	"swarmbuild/internal/core/domain"
 	"swarmbuild/internal/core/planner"
+	"testing"
+	"time"
 )
 
 // TestDomeBlueprint_LoadsAsValidDAG proves the scripted demo board is a valid,

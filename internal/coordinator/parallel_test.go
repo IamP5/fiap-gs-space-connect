@@ -2,13 +2,12 @@ package coordinator_test
 
 import (
 	"fmt"
-	"testing"
-	"time"
-
 	"swarmbuild/internal/agent"
 	"swarmbuild/internal/coordinator"
 	"swarmbuild/internal/core/domain"
 	"swarmbuild/internal/wire"
+	"testing"
+	"time"
 )
 
 // domeBlueprint builds the lunar habitat dome DAG (TECHSPEC §5) as a positioned
@@ -39,10 +38,14 @@ func domeBlueprint() []coordinator.BlueprintTask {
 	// Eight walls on an outer ring (radius ~40), each depending on its foundation.
 	wallIDs := []domain.TaskID{}
 	wallPos := []domain.Vec2{
-		{X: 40, Y: 10}, {X: 40, Y: -10},
-		{X: 10, Y: 40}, {X: -10, Y: 40},
-		{X: -40, Y: 10}, {X: -40, Y: -10},
-		{X: 10, Y: -40}, {X: -10, Y: -40},
+		{X: 40, Y: 10},
+		{X: 40, Y: -10},
+		{X: 10, Y: 40},
+		{X: -10, Y: 40},
+		{X: -40, Y: 10},
+		{X: -40, Y: -10},
+		{X: 10, Y: -40},
+		{X: -10, Y: -40},
 	}
 	for i := 1; i <= 8; i++ {
 		foundation := domain.TaskID(fmt.Sprintf("foundation-%d", (i-1)/2+1))
@@ -95,7 +98,7 @@ func domeRovers() []agent.Config {
 	xs := []float64{-50, -30, -10, 10, 30, 50}
 	batteries := []float64{1.0, 0.95, 0.9, 0.85, 0.8, 0.75}
 	rovers := make([]agent.Config, 6)
-	for i := 0; i < 6; i++ {
+	for i := range 6 {
 		rovers[i] = agent.Config{
 			ID:           domain.RobotID(fmt.Sprintf("R%d", i+1)),
 			Pos:          domain.Vec2{X: xs[i], Y: -70},

@@ -2,9 +2,8 @@ package allocation
 
 import (
 	"math"
-	"testing"
-
 	"swarmbuild/internal/core/domain"
+	"testing"
 )
 
 // wall is the task type used across these tests; a rover bids only if it lists

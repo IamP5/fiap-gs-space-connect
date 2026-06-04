@@ -4,9 +4,8 @@ import (
 	"fmt"
 	"reflect"
 	"sort"
-	"testing"
-
 	"swarmbuild/internal/core/domain"
+	"testing"
 )
 
 // domeBlueprint is the lunar habitat dome fixture from TECHSPEC §5:
@@ -276,7 +275,7 @@ func TestDeterminism_StableAcrossRunsAndInputOrder(t *testing.T) {
 	}
 
 	// Repeated calls on the same Plan are identical.
-	for i := 0; i < 5; i++ {
+	for i := range 5 {
 		if !reflect.DeepEqual(p1.TopoOrder(), p2.TopoOrder()) {
 			t.Fatalf("TopoOrder() not stable on call %d", i)
 		}

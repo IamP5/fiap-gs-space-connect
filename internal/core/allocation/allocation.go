@@ -10,7 +10,6 @@ package allocation
 
 import (
 	"math"
-
 	"swarmbuild/internal/core/domain"
 )
 

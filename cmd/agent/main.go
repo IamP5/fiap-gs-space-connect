@@ -12,12 +12,11 @@ import (
 	"os"
 	"os/signal"
 	"strings"
-	"syscall"
-	"time"
-
 	"swarmbuild/internal/agent"
 	"swarmbuild/internal/bus"
 	"swarmbuild/internal/core/domain"
+	"syscall"
+	"time"
 )
 
 func main() {

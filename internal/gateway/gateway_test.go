@@ -6,16 +6,15 @@ import (
 	"fmt"
 	"io"
 	"net/http"
-	"testing"
-	"time"
-
-	"github.com/coder/websocket"
-
 	"swarmbuild/internal/bus"
 	"swarmbuild/internal/bus/bustest"
 	"swarmbuild/internal/core/domain"
 	"swarmbuild/internal/gateway"
 	"swarmbuild/internal/wire"
+	"testing"
+	"time"
+
+	"github.com/coder/websocket"
 )
 
 // startGateway brings up an embedded NATS server, a bus connection, and a

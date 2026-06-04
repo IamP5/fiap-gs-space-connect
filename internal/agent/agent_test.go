@@ -2,9 +2,8 @@ package agent
 
 import (
 	"math"
-	"testing"
-
 	"swarmbuild/internal/core/domain"
+	"testing"
 )
 
 // newRover builds a rover at pos with a full charge for the pure state-method
@@ -46,7 +45,7 @@ func TestMoveTowardNeverOvershoots(t *testing.T) {
 	maxStep := roverSpeed * moveStep.Seconds()
 
 	prev := st.pos.Dist(target)
-	for i := 0; i < 1000; i++ {
+	for range 1000 {
 		arrived := st.moveToward(target, maxStep)
 		d := st.pos.Dist(target)
 		// Distance to target must be monotonically non-increasing and never
@@ -162,7 +161,7 @@ func TestWorkPhaseDrainsByTime(t *testing.T) {
 	// Simulate the work loop's per-tick drain over the whole work duration.
 	ticks := int(workDuration / moveStep)
 	perTick := drainPerWorkSec * moveStep.Seconds()
-	for i := 0; i < ticks; i++ {
+	for range ticks {
 		st.drainOverTime(perTick)
 	}
 	drained := before - st.battery
@@ -178,7 +177,7 @@ func TestBatteryFlooredAtMinOverLongDrive(t *testing.T) {
 	st := newRover(domain.Vec2{X: 0, Y: 0})
 	maxStep := roverSpeed * moveStep.Seconds()
 
-	for i := 0; i < 1000000; i++ {
+	for range 1000000 {
 		if st.moveToward(target, maxStep) {
 			break
 		}

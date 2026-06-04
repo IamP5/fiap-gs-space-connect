@@ -13,13 +13,12 @@ package agent
 import (
 	"context"
 	"log"
-	"sync"
-	"time"
-
 	"swarmbuild/internal/bus"
 	"swarmbuild/internal/core/allocation"
 	"swarmbuild/internal/core/domain"
 	"swarmbuild/internal/wire"
+	"sync"
+	"time"
 )
 
 // Config is the static identity and starting state of one rover. HeartbeatEvery

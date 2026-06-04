@@ -11,10 +11,9 @@ import (
 	"log"
 	"os"
 	"os/signal"
-	"syscall"
-
 	"swarmbuild/internal/coordinator"
 	"swarmbuild/internal/demo"
+	"syscall"
 )
 
 func main() {

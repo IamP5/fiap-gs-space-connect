@@ -6,7 +6,7 @@
 // The lease state machine:
 //
 //	UNCLAIMED --Grant------------------------> LEASED
-//	LEASED    --Heartbeat--------------------> LEASED    (TTL reset)
+//	--Heartbeat--------------------> LEASED    (TTL reset)
 //	LEASED    --Complete---------------------> DONE      (terminal)
 //	LEASED    --Sweep (TTL passed) | Release-> UNCLAIMED (re-auction)
 //

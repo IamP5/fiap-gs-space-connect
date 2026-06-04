@@ -19,7 +19,7 @@ import (
 	"context"
 	"fmt"
 	"log"
-	"sort"
+	"slices"
 	"time"
 
 	"swarmbuild/internal/agent"
@@ -94,11 +94,13 @@ const tickEvery = 50 * time.Millisecond
 
 // inbound events fed to the single-writer goroutine. Each is a closure-free
 // value type so the channel carries plain data; the writer interprets them.
-type evBid struct{ bid wire.Bid }
-type evComplete struct{ done wire.Complete }
-type evFailed struct{ failed wire.Failed }
-type evHeartbeat struct{ hb wire.Heartbeat }
-type evTelemetry struct{ tel wire.Telemetry }
+type (
+	evBid       struct{ bid wire.Bid }
+	evComplete  struct{ done wire.Complete }
+	evFailed    struct{ failed wire.Failed }
+	evHeartbeat struct{ hb wire.Heartbeat }
+	evTelemetry struct{ tel wire.Telemetry }
+)
 
 // auction is one open auction: the bids received so far for a task during its
 // window (keyed by task in state.auctions), and the wall-clock time the window
@@ -261,7 +263,6 @@ func Run(ctx context.Context, cfg Config) error {
 	roverCtx, cancelRovers := context.WithCancel(ctx)
 	defer cancelRovers()
 	for _, rc := range cfg.Rovers {
-		rc := rc
 		if rc.HeartbeatEvery <= 0 {
 			rc.HeartbeatEvery = cfg.HeartbeatEvery
 		}
@@ -457,7 +458,7 @@ func (st *state) tick(ctx context.Context) {
 			due = append(due, id)
 		}
 	}
-	sort.Slice(due, func(i, j int) bool { return due[i] < due[j] })
+	slices.Sort(due)
 
 	busy := st.busyRovers()
 	for _, id := range due {
@@ -531,7 +532,7 @@ func pickWinner(bids map[domain.RobotID]float64, busy map[domain.RobotID]struct{
 	if len(ids) == 0 {
 		return "", 0, false
 	}
-	sort.Slice(ids, func(i, j int) bool { return ids[i] < ids[j] }) // deterministic tie-break
+	slices.Sort(ids) // deterministic tie-break
 	winner := ids[0]
 	best := bids[winner]
 	for _, id := range ids[1:] {
@@ -645,7 +646,7 @@ func (st *state) publishSnapshot() {
 	for id := range st.rovers {
 		ids = append(ids, id)
 	}
-	sort.Slice(ids, func(i, j int) bool { return ids[i] < ids[j] })
+	slices.Sort(ids)
 	for _, id := range ids {
 		tm := st.rovers[id]
 		roverViews = append(roverViews, wire.RoverView{

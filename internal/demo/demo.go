@@ -19,11 +19,10 @@ package demo
 import (
 	"fmt"
 	"math"
-	"time"
-
 	"swarmbuild/internal/agent"
 	"swarmbuild/internal/coordinator"
 	"swarmbuild/internal/core/domain"
+	"time"
 )
 
 // Config is the ONE place every demo-pacing timing is tuned. The defaults
@@ -133,7 +132,7 @@ func DomeBlueprint() []coordinator.BlueprintTask {
 func DomeRovers() []agent.Config {
 	caps := []domain.Capability{"foundation", "wall", "dome-cap"}
 	rovers := make([]agent.Config, 0, 6)
-	for i := 0; i < 6; i++ {
+	for i := range 6 {
 		rovers = append(rovers, agent.Config{
 			ID:           domain.RobotID(fmt.Sprintf("R%d", i+1)),
 			Pos:          domain.Vec2{X: float64(-50 + i*20), Y: -70},
@@ -150,7 +149,7 @@ func DomeRovers() []agent.Config {
 // rounded to 0.01 so the scripted board is byte-stable across runs.
 func ring(n int, radius, startDeg float64) []domain.Vec2 {
 	pts := make([]domain.Vec2, n)
-	for i := 0; i < n; i++ {
+	for i := range n {
 		theta := (startDeg - float64(i)*360.0/float64(n)) * math.Pi / 180.0
 		pts[i] = domain.Vec2{
 			X: math.Round(radius*math.Cos(theta)*100) / 100,

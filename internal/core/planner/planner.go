@@ -10,7 +10,9 @@
 package planner
 
 import (
+	"errors"
 	"fmt"
+	"slices"
 	"sort"
 
 	"swarmbuild/internal/core/domain"
@@ -73,9 +75,7 @@ func Load(tasks []domain.Task) (*Plan, error) {
 		}
 	}
 	for dep := range p.dependents {
-		sort.Slice(p.dependents[dep], func(i, j int) bool {
-			return p.dependents[dep][i] < p.dependents[dep][j]
-		})
+		slices.Sort(p.dependents[dep])
 	}
 
 	order, err := p.topoSort()
@@ -109,7 +109,7 @@ func (p *Plan) topoSort() ([]domain.TaskID, error) {
 			frontier = append(frontier, id)
 		}
 	}
-	sort.Slice(frontier, func(i, j int) bool { return frontier[i] < frontier[j] })
+	slices.Sort(frontier)
 
 	order := make([]domain.TaskID, 0, len(p.tasks))
 	for len(frontier) > 0 {
@@ -133,7 +133,7 @@ func (p *Plan) topoSort() ([]domain.TaskID, error) {
 
 	if len(order) != len(p.tasks) {
 		// Some nodes never reached indegree 0: they sit on a cycle.
-		return nil, fmt.Errorf("planner: blueprint contains a dependency cycle")
+		return nil, errors.New("planner: blueprint contains a dependency cycle")
 	}
 	return order, nil
 }

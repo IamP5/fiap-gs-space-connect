@@ -81,7 +81,7 @@ func Connect(ctx context.Context, url string, opts ConnectOptions) (*Conn, error
 		}
 		select {
 		case <-ctx.Done():
-			return nil, fmt.Errorf("connect %s: %w (last: %v)", url, ctx.Err(), lastErr)
+			return nil, fmt.Errorf("connect %s: %w (last: %w)", url, ctx.Err(), lastErr)
 		case <-time.After(backoff):
 		}
 		if backoff < 2*time.Second {

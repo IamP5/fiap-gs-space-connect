@@ -10,11 +10,10 @@ package wire
 
 import (
 	"fmt"
-
 	"swarmbuild/internal/core/domain"
 )
 
-// --- NATS subjects (TECHSPEC §4) ---
+// --- NATS subjects (TECHSPEC §4) ---.
 const (
 	SubjTaskAnnounce = "task.announce"  // coordinator announces a ready task for auction
 	SubjTaskAward    = "task.award"     // coordinator grants the winning rover a lease
@@ -43,7 +42,7 @@ func SubjTelemetry(robot domain.RobotID) string { return "robot.telemetry." + st
 // SubjTelemetryWildcard matches every rover telemetry stream.
 const SubjTelemetryWildcard = "robot.telemetry.*"
 
-// --- KV ---
+// --- KV ---.
 const (
 	// KVBucketWorld mirrors the World Model: key = task id, value = TaskRecord JSON.
 	KVBucketWorld = "world"

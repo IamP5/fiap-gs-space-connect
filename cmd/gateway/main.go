@@ -9,11 +9,10 @@ import (
 	"log"
 	"os"
 	"os/signal"
-	"syscall"
-	"time"
-
 	"swarmbuild/internal/bus"
 	"swarmbuild/internal/gateway"
+	"syscall"
+	"time"
 )
 
 func main() {

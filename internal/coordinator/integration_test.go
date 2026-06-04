@@ -2,15 +2,14 @@ package coordinator_test
 
 import (
 	"context"
-	"testing"
-	"time"
-
 	"swarmbuild/internal/agent"
 	"swarmbuild/internal/bus"
 	"swarmbuild/internal/bus/bustest"
 	"swarmbuild/internal/coordinator"
 	"swarmbuild/internal/core/domain"
 	"swarmbuild/internal/wire"
+	"testing"
+	"time"
 )
 
 // TestWalkingSkeleton is the issue-01 end-to-end test (TECHSPEC §7). Over an

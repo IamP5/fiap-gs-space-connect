@@ -3,10 +3,9 @@ package world
 import (
 	"math/rand"
 	"reflect"
+	"swarmbuild/internal/core/domain"
 	"testing"
 	"testing/quick"
-
-	"swarmbuild/internal/core/domain"
 )
 
 // ---------------------------------------------------------------------------
@@ -229,12 +228,12 @@ func TestApplyOrderIndependent(t *testing.T) {
 		// Independently compute the expected winner per id by Merge-folding.
 		expected := make(map[domain.TaskID]domain.Task)
 		for _, g := range records {
-			cur, ok := expected[g.Task.ID]
+			cur, ok := expected[g.ID]
 			if !ok {
-				expected[g.Task.ID] = g.Task
+				expected[g.ID] = g.Task
 				continue
 			}
-			expected[g.Task.ID] = Merge(cur, g.Task)
+			expected[g.ID] = Merge(cur, g.Task)
 		}
 		for id, want := range expected {
 			got, ok := m.Get(id)
@@ -350,9 +349,9 @@ func TestApplyDuplicateIsNoOpProperty(t *testing.T) {
 		if !m.Apply(g.Task) {
 			return false // first apply of a fresh id must win
 		}
-		before, _ := m.Get(g.Task.ID)
+		before, _ := m.Get(g.ID)
 		won := m.Apply(g.Task)
-		after, _ := m.Get(g.Task.ID)
+		after, _ := m.Get(g.ID)
 		return !won && taskEqual(before, after)
 	}
 	if err := quick.Check(f, nil); err != nil {

@@ -2,13 +2,12 @@ package coordinator_test
 
 import (
 	"fmt"
-	"testing"
-	"time"
-
 	"swarmbuild/internal/agent"
 	"swarmbuild/internal/coordinator"
 	"swarmbuild/internal/core/domain"
 	"swarmbuild/internal/wire"
+	"testing"
+	"time"
 )
 
 // TestKillControl_DeterministicHealing is the slice-04 acceptance that killing
@@ -26,7 +25,7 @@ func TestKillControl_DeterministicHealing(t *testing.T) {
 	const iterations = 4
 
 	healers := make([]domain.RobotID, 0, iterations)
-	for i := 0; i < iterations; i++ {
+	for i := range iterations {
 		t.Run(fmt.Sprintf("kill-%d", i+1), func(t *testing.T) {
 			blueprint := []coordinator.BlueprintTask{
 				{Task: domain.Task{ID: "task-x", Type: "foundation"}, Pos: domain.Vec2{X: 30, Y: 0}},

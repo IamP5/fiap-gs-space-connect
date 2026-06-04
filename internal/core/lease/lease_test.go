@@ -1,9 +1,8 @@
 package lease
 
 import (
-	"testing"
-
 	"swarmbuild/internal/core/domain"
+	"testing"
 )
 
 // fakeClock is a manually-advanced logical clock implementing domain.Clock.
@@ -195,7 +194,7 @@ func TestExactlyOnce_SweepTwiceReleasesOnce(t *testing.T) {
 
 	// Subsequent sweeps — even repeated, even with the clock further advanced —
 	// must never release the same task again.
-	for i := 0; i < 3; i++ {
+	for i := range 3 {
 		clk.advance(50)
 		if again := m.Sweep(); again != nil {
 			t.Fatalf("Sweep #%d after release returned %v, want none (exactly-once)", i+2, again)
@@ -213,7 +212,7 @@ func TestExactlyOnce_ReleaseIsIdempotent(t *testing.T) {
 		t.Fatal("first Release returned false, want true")
 	}
 	// Duplicate / redelivered "rover lost" events.
-	for i := 0; i < 3; i++ {
+	for i := range 3 {
 		if m.Release("wall-7", "R3") {
 			t.Fatalf("duplicate Release #%d returned true, want false (idempotent)", i+2)
 		}
@@ -328,7 +327,7 @@ func TestDoneIsTerminal_SweepNeverReReleasesDone(t *testing.T) {
 	// Push the clock far past any plausible expiry; DONE must stay DONE and
 	// never appear in a sweep.
 	clk.set(10_000)
-	for i := 0; i < 3; i++ {
+	for i := range 3 {
 		if released := m.Sweep(); released != nil {
 			t.Fatalf("Sweep #%d re-released DONE task: %v", i+1, released)
 		}

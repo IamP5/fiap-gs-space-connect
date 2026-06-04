@@ -15,12 +15,11 @@ import (
 	"log"
 	"net"
 	"net/http"
+	"swarmbuild/internal/bus"
+	"swarmbuild/internal/wire"
 	"sync"
 
 	"github.com/coder/websocket"
-
-	"swarmbuild/internal/bus"
-	"swarmbuild/internal/wire"
 )
 
 // busConn is the slice of *bus.Conn the gateway depends on. Narrowing to an
@@ -186,11 +185,9 @@ func (g *Gateway) serveWS(w http.ResponseWriter, r *http.Request) {
 	// connection.
 	ctx := r.Context()
 	var wg sync.WaitGroup
-	wg.Add(1)
-	go func() {
-		defer wg.Done()
+	wg.Go(func() {
 		g.writeLoop(ctx, c)
-	}()
+	})
 
 	// Reader loop (this goroutine): relays inbound control messages.
 	g.readLoop(ctx, c)

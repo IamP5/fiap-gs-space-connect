@@ -1,9 +1,8 @@
 package coordinator
 
 import (
-	"time"
-
 	"swarmbuild/internal/core/domain"
+	"time"
 )
 
 // wallClock is the live path's domain.Clock: it maps wall-clock time onto a

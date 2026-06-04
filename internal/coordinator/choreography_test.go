@@ -1,15 +1,14 @@
 package coordinator_test
 
 import (
-	"sync"
-	"testing"
-	"time"
-
 	"swarmbuild/internal/agent"
 	"swarmbuild/internal/bus"
 	"swarmbuild/internal/coordinator"
 	"swarmbuild/internal/core/domain"
 	"swarmbuild/internal/wire"
+	"sync"
+	"testing"
+	"time"
 )
 
 // beatCollector accumulates every choreography beat (wire.Event) seen across the

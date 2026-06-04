@@ -2,12 +2,11 @@ package bus_test
 
 import (
 	"context"
-	"testing"
-	"time"
-
 	"swarmbuild/internal/bus"
 	"swarmbuild/internal/bus/bustest"
 	"swarmbuild/internal/wire"
+	"testing"
+	"time"
 )
 
 func dial(t *testing.T) *bus.Conn {
