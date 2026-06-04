@@ -1,0 +1,231 @@
+/* SwarmBuild dashboard chrome, styled per DESIGN.md (Spasex).
+   Black canvas, hairline separators, uppercase caps chrome, no shadows/glows. */
+
+.app {
+  display: flex;
+  flex-direction: column;
+  height: 100%;
+  background: var(--canvas-night);
+}
+
+/* ---- top nav (nav-bar-overlay) ----
+   Black over the world, white caps type, hairline underline. Fixed-feel
+   overlay treatment: transparent background, white-on-canvas. */
+.topbar {
+  display: flex;
+  align-items: center;
+  gap: var(--s-xl);
+  padding: var(--s-xl) var(--s-xxl);
+  background: var(--canvas-night);
+  border-bottom: 1px solid var(--hairline-on-dark);
+}
+
+.brand {
+  font-family: var(--display);
+  font-size: 22px;
+  font-weight: 700;
+  text-transform: uppercase;
+  letter-spacing: 1.6px;
+  color: var(--on-primary);
+}
+
+.brand-sub {
+  font-family: var(--ui);
+  font-size: 12px;
+  font-weight: 400;
+  letter-spacing: 0.96px;
+  text-transform: uppercase;
+  color: var(--ink-mute);
+  margin-left: var(--s-sm);
+}
+
+.meta {
+  margin-left: auto;
+  font-family: var(--ui);
+  font-size: 12px;
+  letter-spacing: 0.96px;
+  text-transform: uppercase;
+  color: var(--ink-mute);
+}
+
+/* ---- connection indicator ----
+   Eyebrow caps microtext + a single functional telemetry dot. No pill fill,
+   no glow — the dot alone carries the signal. */
+.status {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--s-sm);
+  font-family: var(--ui);
+  font-size: 12px;
+  font-weight: 400;
+  letter-spacing: 0.96px;
+  text-transform: uppercase;
+}
+
+.status-dot {
+  width: 8px;
+  height: 8px;
+  border-radius: var(--r-full);
+  background: currentColor;
+}
+
+.status-ok {
+  color: var(--signal-ok);
+}
+.status-warn {
+  color: var(--signal-warn);
+}
+.status-down {
+  color: var(--signal-down);
+}
+
+.status-label {
+  color: var(--on-primary);
+}
+
+/* ---- stage ---- */
+.stage {
+  position: relative;
+  flex: 1;
+  min-height: 0;
+}
+
+.world-canvas {
+  display: block;
+  width: 100%;
+  height: 100%;
+}
+
+/* ---- ledger (dark chrome card) ----
+   Sits over the canvas on canvas-night-soft with a 1px hairline. Flat: no
+   blur, no shadow, minimal radius. */
+.ledger {
+  position: absolute;
+  top: var(--s-xl);
+  left: var(--s-xl);
+  width: 268px;
+  max-height: calc(100% - var(--s-xl) * 2);
+  overflow-y: auto;
+  padding: var(--s-xl);
+  background: var(--canvas-night-soft);
+  border: 1px solid var(--hairline-on-dark);
+  border-radius: var(--r-xs);
+  z-index: 2;
+}
+
+.ledger h2 {
+  margin: 0 0 var(--s-md);
+  font-family: var(--display);
+  font-size: 20px;
+  font-weight: 700;
+  text-transform: uppercase;
+  letter-spacing: 0.96px;
+  color: var(--on-primary);
+}
+
+.ledger h3 {
+  margin: var(--s-xl) 0 var(--s-sm);
+  font-family: var(--ui);
+  font-size: 12px;
+  font-weight: 400;
+  text-transform: uppercase;
+  letter-spacing: 0.96px;
+  color: var(--ink-mute);
+}
+
+.ledger ul {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+}
+
+.ledger li {
+  display: flex;
+  align-items: center;
+  gap: var(--s-xs);
+  padding: var(--s-xs) 0;
+  font-size: 13px;
+  letter-spacing: 0.32px;
+  border-bottom: 1px solid var(--hairline-on-dark);
+}
+
+.ledger li:last-child {
+  border-bottom: none;
+}
+
+.ledger-id {
+  font-weight: 700;
+  color: var(--on-primary);
+}
+
+.ledger-type {
+  color: var(--ink-mute);
+  text-transform: uppercase;
+  font-size: 11px;
+  letter-spacing: 0.96px;
+}
+
+.ledger-assignee {
+  margin-left: auto;
+  color: var(--on-primary-mute);
+  font-size: 11px;
+  letter-spacing: 0.5px;
+}
+
+.ledger-empty {
+  font-family: var(--ui);
+  font-size: 12px;
+  text-transform: uppercase;
+  letter-spacing: 0.96px;
+  color: var(--ink-mute);
+}
+
+.legend {
+  border: none;
+}
+
+.legend li {
+  color: var(--on-primary-mute);
+  border-bottom: none;
+  text-transform: none;
+  letter-spacing: 0.32px;
+  font-size: 12px;
+}
+
+.counts {
+  margin-top: var(--s-xl);
+  padding-top: var(--s-md);
+  border-top: 1px solid var(--hairline-on-dark);
+  font-family: var(--ui);
+  font-size: 11px;
+  letter-spacing: 0.96px;
+  text-transform: uppercase;
+  color: var(--ink-mute);
+}
+
+/* ---- status badges (caps microtext, hairline-boxed) ----
+   No filled brand-color chips; a 1px outline carries the state, the functional
+   signal color tints text + border only. */
+.badge {
+  display: inline-block;
+  padding: 3px var(--s-xs);
+  border-radius: var(--r-xs);
+  border: 1px solid currentColor;
+  font-family: var(--ui);
+  font-size: 10px;
+  font-weight: 700;
+  letter-spacing: 1.17px;
+  text-transform: uppercase;
+  line-height: 1;
+  background: transparent;
+}
+
+.st-unclaimed {
+  color: var(--signal-idle);
+}
+.st-leased {
+  color: var(--signal-warn);
+}
+.st-done {
+  color: var(--signal-ok);
+}

@@ -1,0 +1,7 @@
+# Keep the Go build context small: don't ship the web app or VCS into the
+# golang builder image.
+.git
+web/node_modules
+web/dist
+*.log
+tmp

@@ -1,0 +1,59 @@
+# SwarmBuild walking-skeleton stack (issue 01): NATS + coordinator + gateway + web.
+#   docker compose -f deploy/docker-compose.yml up --build
+# Then open http://localhost:5173 — the "all systems connected" indicator goes
+# green once the gateway's bus is up, and the two-task auction runs.
+name: swarmbuild
+
+services:
+  nats:
+    image: nats:2.10-alpine
+    command: ["-js", "-m", "8222"] # JetStream on; monitoring (/healthz) on 8222
+    ports:
+      - "4222:4222" # client
+      - "8222:8222" # monitoring
+    healthcheck:
+      test: ["CMD", "wget", "--spider", "-q", "http://127.0.0.1:8222/healthz"]
+      interval: 3s
+      timeout: 2s
+      retries: 10
+      start_period: 2s
+
+  coordinator:
+    build:
+      context: ..
+      dockerfile: deploy/Dockerfile
+      args:
+        TARGET: ./cmd/coordinator
+    environment:
+      NATS_URL: nats://nats:4222
+    depends_on:
+      nats:
+        condition: service_healthy
+    restart: on-failure
+
+  gateway:
+    build:
+      context: ..
+      dockerfile: deploy/Dockerfile
+      args:
+        TARGET: ./cmd/gateway
+    environment:
+      NATS_URL: nats://nats:4222
+      GATEWAY_ADDR: ":8080"
+    ports:
+      - "8080:8080" # WebSocket (/ws) + /healthz
+    depends_on:
+      nats:
+        condition: service_healthy
+    restart: on-failure
+
+  web:
+    build:
+      context: ../web
+      args:
+        # Browser runs on the host, so it reaches the gateway via the published port.
+        VITE_WS_URL: ws://localhost:8080/ws
+    ports:
+      - "5173:80"
+    depends_on:
+      - gateway

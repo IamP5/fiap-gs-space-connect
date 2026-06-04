@@ -1,0 +1,113 @@
+/* Spasex design language (DESIGN.md) applied to the SwarmBuild dashboard.
+   Pure black canvas, white display type in condensed industrial D-DIN, wide
+   horizontal tracking, hairline chrome, no shadows/glows/gradients. The design
+   tokens below are lifted verbatim from DESIGN.md. */
+
+:root {
+  color-scheme: dark;
+
+  /* ---- colors ---- */
+  --canvas-night: #000000;
+  --canvas-night-soft: #0a0a0a;
+  --canvas-light: #ffffff;
+  --canvas-cool: #f0f0fa;
+  --hairline-on-dark: #3a3a3f;
+  --hairline-on-light: #e0e0e8;
+  --on-primary: #ffffff;
+  --on-primary-mute: #f0f0fa;
+  --ink: #000000;
+  --ink-mute: #5a5a5f;
+
+  /* Functional telemetry signals — NOT brand accents. Reserved for live data
+     encoding (link state, task status, battery), never for chrome. */
+  --signal-ok: #2ecc71;
+  --signal-warn: #f5a623;
+  --signal-down: #e74c3c;
+  --signal-idle: #9aa4b2;
+
+  /* ---- type families ---- */
+  --display: "D-DIN-Bold", "Arial Narrow", Arial, Verdana, sans-serif;
+  --ui: "D-DIN", "Inter", Arial, Verdana, sans-serif;
+
+  /* ---- radius ---- */
+  --r-xs: 4px;
+  --r-sm: 8px;
+  --r-md: 16px;
+  --r-pill: 32px;
+  --r-full: 9999px;
+
+  /* ---- spacing ---- */
+  --s-xxs: 4px;
+  --s-xs: 8px;
+  --s-sm: 12px;
+  --s-md: 16px;
+  --s-lg: 18px;
+  --s-xl: 24px;
+  --s-xxl: 32px;
+  --s-huge: 48px;
+
+  font-family: var(--ui);
+  font-size: 16px;
+  letter-spacing: 0.32px;
+  line-height: 1.5;
+}
+
+* {
+  box-sizing: border-box;
+}
+
+html,
+body,
+#root {
+  height: 100%;
+  margin: 0;
+}
+
+body {
+  background: var(--canvas-night);
+  color: var(--on-primary);
+  -webkit-font-smoothing: antialiased;
+}
+
+/* Display tier — uppercase condensed D-DIN with positive tracking, tight
+   leading. The brand's typographic signature. */
+.display-xxl,
+.display-xl,
+.display-lg {
+  font-family: var(--display);
+  font-weight: 700;
+  text-transform: uppercase;
+  margin: 0;
+}
+.display-xxl {
+  font-size: 80px;
+  line-height: 0.95;
+  letter-spacing: 1.6px;
+}
+.display-xl {
+  font-size: 60px;
+  line-height: 1.2;
+  letter-spacing: 1.2px;
+}
+.display-lg {
+  font-size: 48px;
+  line-height: 1.25;
+  letter-spacing: 0.96px;
+}
+
+/* All-caps eyebrow / nav microtext. */
+.micro-cap {
+  font-family: var(--ui);
+  font-size: 12px;
+  font-weight: 400;
+  line-height: 2;
+  letter-spacing: 0.96px;
+  text-transform: uppercase;
+}
+
+.caption {
+  font-family: var(--ui);
+  font-size: 13.008px;
+  font-weight: 400;
+  line-height: 1.5;
+}
