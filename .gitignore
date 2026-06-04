@@ -3,3 +3,6 @@
 .DS_Store
 dist/
 tmp/
+
+# Throwaway demo screenshots captured during dev-tools runs
+/web/demo-*.png

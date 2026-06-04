@@ -9,7 +9,7 @@
 // task's lease_expiry vs. the snapshot clock; beats are a function of the
 // server's events. Both strictly DECORATE the authoritative snapshot.
 
-import type { WorldEvent } from "./types";
+import type { WorldEvent } from "../types/wire";
 
 // ---- TTL drain ring -------------------------------------------------------
 

@@ -3,7 +3,7 @@
 // snapshot exercising all three task statuses, an alive + a dead rover, and a
 // lease beam (rover R1 holds wall-1, which is LEASED to it).
 
-import type { Snapshot } from "./types";
+import type { Snapshot } from "../types/wire";
 
 export const MOCK_SNAPSHOT: Snapshot = {
   type: "snapshot",

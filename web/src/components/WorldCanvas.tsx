@@ -7,15 +7,16 @@
 // canvas with padding; it redraws on snapshot change and on resize.
 
 import { useEffect, useRef } from "react";
-import type { Snapshot, TaskStatus } from "./types";
-import { ROVER_R as PROJ_ROVER_R, pickRover, project } from "./hitTest";
+import type { Snapshot, TaskStatus } from "../types/wire";
+import { batteryPercent, clamp01 } from "../lib/format";
+import { ROVER_R as PROJ_ROVER_R, pickRover, project } from "../lib/hitTest";
 import {
   type ActiveBeat,
   activeBeats,
   beatProgress,
   ringColor,
   ringFraction,
-} from "./choreography";
+} from "../lib/choreography";
 
 // Functional telemetry encoding (DESIGN.md treats these as live-data signals,
 // not brand chrome — the brand palette itself is black + white only).
@@ -58,9 +59,19 @@ function draw(
   const cssH = canvas.clientHeight;
   if (cssW === 0 || cssH === 0) return;
 
-  // Match the backing store to the displayed size for crisp rendering.
-  canvas.width = Math.round(cssW * dpr);
-  canvas.height = Math.round(cssH * dpr);
+  // Match the backing store to the displayed size for crisp rendering, but only
+  // when it actually changed — assigning canvas.width/height reallocates and
+  // clears the backing store, so doing it every animation frame (~60 Hz) is
+  // wasteful. We redraw the whole frame below regardless, so resize-on-change is
+  // sufficient and far cheaper.
+  const backW = Math.round(cssW * dpr);
+  const backH = Math.round(cssH * dpr);
+  if (canvas.width !== backW || canvas.height !== backH) {
+    canvas.width = backW;
+    canvas.height = backH;
+  }
+  // Always (re)establish the CSS-px transform — cheap and correct whether or not
+  // we just resized (a resize resets the transform to identity).
   ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
 
   // Background — pure Canvas Night.
@@ -235,7 +246,7 @@ function draw(
     ctx.stroke();
 
     // Battery ring: arc proportional to charge.
-    const battery = Math.max(0, Math.min(1, r.battery));
+    const battery = clamp01(r.battery);
     ctx.beginPath();
     ctx.arc(x, y, ROVER_R + 4, -Math.PI / 2, -Math.PI / 2 + battery * Math.PI * 2);
     ctx.lineWidth = 3;
@@ -256,7 +267,7 @@ function draw(
 
     ctx.font = `10px ${UI_FONT}`;
     ctx.fillStyle = dim ? "#5a5a5f" : "#f0f0fa";
-    const label = dim ? "DOWN" : `${Math.round(battery * 100)}%`;
+    const label = dim ? "DOWN" : `${batteryPercent(r.battery)}%`;
     ctx.fillText(label, x, y + ROVER_R + 16);
   }
 
@@ -349,20 +360,24 @@ export function WorldCanvas({ snapshot, selected, onPick }: WorldCanvasProps) {
   const ringBase = useRef<Map<string, RingBase>>(new Map());
   const lastAt = useRef<number>(Number.NEGATIVE_INFINITY);
 
-  latest.current = { snapshot, selected };
-
-  // Ingest a snapshot's transient beats exactly once per distinct frame. Each
-  // beat is stamped with performance.now() so its animation progress is
-  // independent of the ~12 Hz snapshot cadence. A target rover/task that has
-  // vanished is handled at draw time (silently skipped), never here.
-  if (snapshot && snapshot.at !== lastAt.current) {
-    lastAt.current = snapshot.at;
-    const now = performance.now();
-    const incoming = snapshot.events ?? [];
-    if (incoming.length > 0) {
-      beats.current = [...beats.current, ...incoming.map((e) => ({ ...e, spawn: now }))];
+  // Keep the refs the rAF loop reads in sync with the latest props, and ingest a
+  // snapshot's transient beats — both are side effects, so they live in an effect
+  // rather than the render body. Each beat is stamped with performance.now() so
+  // its animation progress is independent of the ~12 Hz snapshot cadence; a
+  // target rover/task that has vanished is handled at draw time (silently
+  // skipped). The `lastAt` guard ingests each distinct frame exactly once (and
+  // makes StrictMode's double-invoked mount effect idempotent).
+  useEffect(() => {
+    latest.current = { snapshot, selected };
+    if (snapshot && snapshot.at !== lastAt.current) {
+      lastAt.current = snapshot.at;
+      const now = performance.now();
+      const incoming = snapshot.events ?? [];
+      if (incoming.length > 0) {
+        beats.current = [...beats.current, ...incoming.map((e) => ({ ...e, spawn: now }))];
+      }
     }
-  }
+  }, [snapshot, selected]);
 
   // Single continuous render loop: drives the TTL ring drain and beat fades
   // smoothly between snapshots, prunes expired beats each frame, and is the one

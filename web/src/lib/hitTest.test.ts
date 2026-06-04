@@ -6,7 +6,7 @@
 
 import { describe, expect, it } from "vitest";
 import { ROVER_R, pickRover, project } from "./hitTest";
-import type { Snapshot } from "./types";
+import type { Snapshot } from "../types/wire";
 
 const CSS_W = 800;
 const CSS_H = 600;

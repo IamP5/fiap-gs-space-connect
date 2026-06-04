@@ -56,4 +56,34 @@ Copy `.env.example` to `.env` (or `.env.local`) to override:
   coordinates are fit into the canvas with padding and re-fit on resize.
 
 The wire contract (snapshot shape, capital `X`/`Y` on positions) lives in
-`src/types.ts` and mirrors `wire/wire.go` exactly.
+`src/types/wire.ts` and mirrors `wire/wire.go` exactly.
+
+## Project structure
+
+Layered by technical concern (à la _bulletproof-react_); no barrel files, so
+imports stay statically analyzable for tree-shaking.
+
+```
+src/
+├── main.tsx              # entry point
+├── App.tsx               # dashboard shell — owns selection state, composes the rest
+├── components/           # presentational React components
+│   ├── StatusIndicator.tsx
+│   ├── TaskLedger.tsx
+│   ├── KillPanel.tsx
+│   └── WorldCanvas.tsx   # rAF canvas renderer of the latest snapshot
+├── hooks/
+│   └── useSnapshot.ts    # the single stateful hook: WS transport + latest frame
+├── lib/                  # pure, DOM-free, unit-tested logic (+ co-located *.test.ts)
+│   ├── connection.ts     #   header indicator derivation
+│   ├── format.ts         #   battery clamp/percent helpers
+│   ├── hitTest.ts        #   world→screen projection + click pick
+│   └── choreography.ts   #   TTL ring + transient beat math
+├── types/
+│   └── wire.ts           # the wire contract (mirrors wire/wire.go)
+├── mocks/
+│   └── snapshot.ts       # VITE_MOCK fixture
+└── styles/
+    ├── index.css         # design tokens + global reset
+    └── dashboard.css      # dashboard chrome
+```

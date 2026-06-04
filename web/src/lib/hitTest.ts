@@ -5,7 +5,7 @@
 // as pure math (no DOM, no canvas) means it is unit-testable and the "no missed
 // clicks" guarantee can be asserted in vitest.
 
-import type { Snapshot, Vec2 } from "./types";
+import type { Snapshot, Vec2 } from "../types/wire";
 
 // Layout constants shared with WorldCanvas. ROVER_R is the drawn rover radius;
 // the click pick radius is intentionally more forgiving (see pickRover).

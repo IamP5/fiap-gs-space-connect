@@ -8,8 +8,8 @@
 // indicator and a no-op-friendly `send` for the browser → server control path.
 
 import { useCallback, useEffect, useRef, useState } from "react";
-import { isSnapshot, type Control, type Snapshot } from "./types";
-import { MOCK_SNAPSHOT } from "./mock";
+import { isSnapshot, type Control, type Snapshot } from "../types/wire";
+import { MOCK_SNAPSHOT } from "../mocks/snapshot";
 
 const WS_URL = import.meta.env.VITE_WS_URL ?? "ws://localhost:8080/ws";
 const MOCK = import.meta.env.VITE_MOCK === "1";
