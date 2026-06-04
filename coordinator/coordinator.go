@@ -382,14 +382,43 @@ func (st *state) tick(ctx context.Context) {
 		st.openAuction(t)
 	}
 
-	// Close any auction whose window has elapsed.
+	// Close any auction whose window has elapsed. Process due auctions in a
+	// single deterministic (id-ordered) pass, tracking the rovers already awarded
+	// so no rover wins two concurrent tasks — one-task-per-rover. This guard is
+	// load-bearing for parallel building (slice 05): the dome releases several
+	// ready tasks at once (e.g. all four foundations), every rover bids on all of
+	// them BEFORE any award, so a single rover can be the top bidder on multiple
+	// simultaneous auctions. Awarding it two tasks would make its two in-process
+	// execute goroutines fight over one shared position. It lives at the single
+	// writer because only the writer sees the whole award pass atomically.
 	now := time.Now()
+	due := make([]domain.TaskID, 0, len(st.auctions))
 	for id, a := range st.auctions {
-		if now.Before(a.closesAt) {
-			continue
+		if !now.Before(a.closesAt) {
+			due = append(due, id)
 		}
-		st.closeAuction(ctx, id, a)
 	}
+	sort.Slice(due, func(i, j int) bool { return due[i] < due[j] })
+
+	busy := st.busyRovers()
+	for _, id := range due {
+		if winner, ok := st.closeAuction(ctx, id, st.auctions[id], busy); ok {
+			busy[winner] = struct{}{}
+		}
+	}
+}
+
+// busyRovers is the set of rovers currently holding a live lease, read from the
+// authoritative World Model. A busy rover is excluded from winning a further
+// concurrent auction (see tick): it is already driving/building one task.
+func (st *state) busyRovers() map[domain.RobotID]struct{} {
+	busy := make(map[domain.RobotID]struct{})
+	for _, t := range st.model.Snapshot() {
+		if t.Status == domain.Leased && t.Assignee != "" {
+			busy[t.Assignee] = struct{}{}
+		}
+	}
+	return busy
 }
 
 // openAuction announces a task for bidding and opens its collection window.
@@ -404,31 +433,44 @@ func (st *state) openAuction(t domain.Task) {
 	log.Printf("coordinator: %s", ann.String())
 }
 
-// closeAuction picks the winner from the bids actually received and awards.
-func (st *state) closeAuction(ctx context.Context, id domain.TaskID, a *auction) {
+// closeAuction picks the winner from the bids actually received and awards,
+// skipping any rover already busy this pass (one-task-per-rover). It returns the
+// winning rover and true if an award was made; ("", false) if the task is no
+// longer auctionable or every bidder is already busy (in which case the task is
+// re-announced next tick, once a rover frees up).
+func (st *state) closeAuction(ctx context.Context, id domain.TaskID, a *auction, busy map[domain.RobotID]struct{}) (domain.RobotID, bool) {
 	delete(st.auctions, id)
 
 	// A task may have changed status (completed/leased) while the window was
 	// open; only award if it is still UNCLAIMED.
 	t, ok := st.model.Get(id)
 	if !ok || t.Status != domain.Unclaimed {
-		return
-	}
-	if len(a.bids) == 0 {
-		return // no eligible bids; it will be re-announced next tick
+		return "", false
 	}
 
-	winner, best := pickWinner(a.bids)
+	winner, best, ok := pickWinner(a.bids, busy)
+	if !ok {
+		return "", false // no eligible (non-busy) bids; re-announced next tick
+	}
 	st.award(ctx, t, winner, best)
+	return winner, true
 }
 
-// pickWinner selects the lowest-cost bid; ties break by lower RobotID. The live
-// winner is chosen from the actual bids received (allocation.Award is the pure
-// cross-check, not the live source of truth — TECHSPEC §4).
-func pickWinner(bids map[domain.RobotID]float64) (domain.RobotID, float64) {
+// pickWinner selects the lowest-cost bid among rovers not already busy this
+// pass; ties break by lower RobotID. It reports ok=false when no eligible bid
+// remains. The live winner is chosen from the actual bids received
+// (allocation.Award is the pure cross-check, not the live source of truth —
+// TECHSPEC §4).
+func pickWinner(bids map[domain.RobotID]float64, busy map[domain.RobotID]struct{}) (domain.RobotID, float64, bool) {
 	ids := make([]domain.RobotID, 0, len(bids))
 	for id := range bids {
+		if _, isBusy := busy[id]; isBusy {
+			continue // already holds/just won a task: enforce one-task-per-rover
+		}
 		ids = append(ids, id)
+	}
+	if len(ids) == 0 {
+		return "", 0, false
 	}
 	sort.Slice(ids, func(i, j int) bool { return ids[i] < ids[j] }) // deterministic tie-break
 	winner := ids[0]
@@ -438,7 +480,7 @@ func pickWinner(bids map[domain.RobotID]float64) (domain.RobotID, float64) {
 			winner, best = id, bids[id]
 		}
 	}
-	return winner, best
+	return winner, best, true
 }
 
 // award grants the winning rover a lease, moves the task to LEASED (version
