@@ -116,7 +116,7 @@ export default function App() {
             (top-left) as latency climbs, proving "Earth never knew" (issue 09). */}
         <EarthPanel earth={earth} snapshotAt={snapshot?.at ?? null} />
 
-        {/* Top-center stretch/encore column — explicitly opt-in affordances that
+        {/* Right-edge "lab" dock — explicitly opt-in, collapsible affordances that
             never auto-play and must never pre-empt the headline heal (ADR-0003).
             The PartitionPanel replays the proven CRDT merge as a local-state
             narrative; the EncorePanel triggers the real container kill (issue 11).

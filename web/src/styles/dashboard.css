@@ -563,47 +563,89 @@
   color: var(--ink-mute);
 }
 
-/* ---- encore column (stretch / encore affordances) ----
-   Top-center stacked group, deliberately set apart from the four corner panels
-   so it reads as the opt-in "encore" layer (partition narrative + container
-   kill), never as part of the headline chrome (ADR-0003). Same dark-chrome card
-   treatment as the ledger/kill/controls cards. */
+/* ---- lab dock (stretch / encore affordances) ----
+   The opt-in "lab" layer — the CRDT partition narrative and the container
+   encore. Docked to the RIGHT EDGE and vertically centred so it never covers the
+   central worksite (the headline 3D money shot), and set apart from the four
+   corner panels so it reads as an opt-in layer, never headline chrome (ADR-0003).
+   Each card collapses to its header, so the operator only spends screen space on
+   what they are actively showing. */
 .encore-column {
   position: absolute;
-  top: var(--s-xl);
-  left: 50%;
-  transform: translateX(-50%);
-  width: 300px;
+  top: 50%;
+  right: var(--s-xl);
+  transform: translateY(-50%);
+  width: 296px;
+  max-height: calc(100% - var(--s-xxl) * 2);
+  overflow-y: auto;
   z-index: 3;
   display: flex;
   flex-direction: column;
   gap: var(--s-md);
 }
 
-/* ---- partition panel (CRDT partition narrative, issue 10) ----
-   A self-contained, deterministic replay of the proven World Model merge: two
-   divergent rover views of the same task reconcile to the single lower-rover-id
-   winner. The three explicit phase labels carry the narrative. */
-.partition-panel {
-  padding: var(--s-xl);
+/* Shared dark-chrome card for the two lab panels, matching the corner panels. */
+.lab-card {
   background: var(--canvas-night-soft);
   border: 1px solid var(--hairline-on-dark);
-  border-radius: var(--r-xs);
-  display: flex;
-  flex-direction: column;
-  gap: var(--s-md);
+  border-radius: var(--r-sm);
+  overflow: hidden;
 }
 
-.partition-eyebrow {
+/* The header doubles as the collapse toggle: the whole row is the button. */
+.lab-head {
+  width: 100%;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--s-sm);
+  padding: var(--s-md) var(--s-lg);
+  background: transparent;
+  border: none;
+  cursor: pointer;
   font-family: var(--ui);
   font-size: 12px;
   letter-spacing: 0.96px;
   text-transform: uppercase;
   color: var(--ink-mute);
+  transition: color 0.15s ease;
 }
 
+.lab-head:hover {
+  color: var(--on-primary-mute);
+}
+
+/* Chevron: a corner glyph that points up when open, down when closed. */
+.lab-chevron {
+  flex: none;
+  width: 7px;
+  height: 7px;
+  border-right: 1.5px solid currentColor;
+  border-bottom: 1.5px solid currentColor;
+  transform: rotate(-135deg);
+  transition: transform 0.18s ease;
+}
+
+.lab-card[data-open="false"] .lab-chevron {
+  transform: rotate(45deg);
+}
+
+/* Collapsible body. */
+.lab-body {
+  padding: 0 var(--s-lg) var(--s-lg);
+  display: flex;
+  flex-direction: column;
+  gap: var(--s-md);
+}
+
+/* ---- partition narrative (CRDT, issue 10) ----
+   A self-contained, deterministic replay of the proven World Model merge: two
+   divergent rover views of the same task, shown SIDE BY SIDE, reconcile to the
+   single lower-rover-id winner. The three phase labels carry the narrative. */
+
 /* The three-state machine: PARTITIONED → RECONCILING → CONVERGED. The active
-   beat reads in the warn signal (mid-flight) until it lands on CONVERGED. */
+   beat reads in the warn signal (mid-flight) until it lands on CONVERGED; past
+   beats brighten so the progression is legible. */
 .partition-phases {
   display: flex;
   align-items: center;
@@ -617,6 +659,11 @@
 
 .partition-phase {
   color: var(--ink-mute);
+  transition: color 0.2s ease;
+}
+
+.partition-phase.is-done {
+  color: var(--on-primary-mute);
 }
 
 .partition-phase.is-active {
@@ -634,52 +681,82 @@
   color: var(--hairline-on-dark);
 }
 
-.partition-views {
-  display: flex;
-  flex-direction: column;
-  gap: var(--s-xs);
+/* The two divergent copies, SIDE BY SIDE so the split reads spatially. */
+.partition-split {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: var(--s-sm);
 }
 
 .partition-view {
   display: flex;
   flex-direction: column;
   gap: var(--s-xxs);
-  padding: var(--s-xs) 0;
-  border-bottom: 1px solid var(--hairline-on-dark);
-}
-
-.partition-view:last-child {
-  border-bottom: none;
+  padding: var(--s-sm);
+  background: var(--canvas-night);
+  border: 1px solid var(--hairline-on-dark);
+  border-radius: var(--r-xs);
+  transition: border-color 0.2s ease;
 }
 
 .partition-view-label {
   font-family: var(--ui);
-  font-size: 11px;
+  font-size: 10px;
   letter-spacing: 0.96px;
   text-transform: uppercase;
   color: var(--ink-mute);
 }
 
-.partition-task {
+.partition-view-id {
+  font-family: var(--display);
+  font-size: 22px;
+  font-weight: 700;
+  line-height: 1;
+  letter-spacing: 0.5px;
+  color: var(--on-primary);
+  transition: color 0.2s ease;
+}
+
+.partition-view-task {
+  display: flex;
+  align-items: center;
+  gap: var(--s-xxs);
+  font-family: var(--ui);
+  font-size: 11px;
+  letter-spacing: 0.32px;
+  color: var(--ink-mute);
+}
+
+/* On CONVERGED both copies agree → they read in the ok signal. */
+.partition-split.is-converged .partition-view {
+  border-color: rgba(46, 204, 113, 0.4);
+}
+
+.partition-split.is-converged .partition-view-id {
+  color: var(--signal-ok);
+}
+
+/* The merged result — the single winner the two copies fold into (CONVERGED). */
+.partition-merged {
   display: flex;
   align-items: center;
   gap: var(--s-xs);
-  font-size: 13px;
-  letter-spacing: 0.32px;
-}
-
-.partition-task-id {
-  font-weight: 700;
-  color: var(--on-primary);
-}
-
-.partition-task-assignee {
-  margin-left: auto;
+  padding: var(--s-xs) var(--s-sm);
+  background: rgba(46, 204, 113, 0.08);
+  border: 1px solid rgba(46, 204, 113, 0.5);
+  border-radius: var(--r-xs);
   font-family: var(--ui);
-  font-size: 12px;
+  font-size: 11px;
+  letter-spacing: 0.5px;
+  text-transform: uppercase;
+  color: var(--signal-ok);
+}
+
+.partition-merged-id {
+  margin-left: auto;
+  font-family: var(--display);
   font-weight: 700;
   letter-spacing: 0.5px;
-  color: var(--on-primary-mute);
 }
 
 .partition-caption {
@@ -704,6 +781,7 @@
   border: 1px solid var(--hairline-on-dark);
   border-radius: var(--r-xs);
   cursor: pointer;
+  transition: border-color 0.15s ease;
 }
 
 .partition-btn:hover:not(:disabled) {
@@ -719,24 +797,6 @@
    The optional encore: a two-step guarded button that fails a REAL rover
    container over the real bus. The danger signal tints the armed FIRE button
    only — same restraint as the kill panel. */
-.encore-panel {
-  padding: var(--s-xl);
-  background: var(--canvas-night-soft);
-  border: 1px solid var(--hairline-on-dark);
-  border-radius: var(--r-xs);
-  display: flex;
-  flex-direction: column;
-  gap: var(--s-sm);
-}
-
-.encore-eyebrow {
-  font-family: var(--ui);
-  font-size: 12px;
-  letter-spacing: 0.96px;
-  text-transform: uppercase;
-  color: var(--ink-mute);
-}
-
 .encore-caption {
   margin: 0;
   font-family: var(--ui);

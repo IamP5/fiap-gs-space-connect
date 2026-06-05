@@ -9,8 +9,10 @@
 // exactly as it does for the in-proc kill: Expiry → Re-auction → Self-heal.
 //
 // Two-step / guarded like KillPanel, so a stray click never fells a container:
-// the operator must ARM the encore, then confirm. Memoized on its single stable
-// prop (`send`), so App's 10 Hz snapshot re-render never repaints it.
+// the operator must ARM the encore, then confirm. It collapses to its header
+// (closed by default — it is the dangerous, secondary tool) and docks to the
+// edge so it never covers the worksite. Memoized on its single stable prop
+// (`send`), so App's 10 Hz snapshot re-render never repaints it.
 
 import { memo, useCallback, useState } from "react";
 import type { Control } from "../types/wire";
@@ -24,9 +26,12 @@ export const EncorePanel = memo(function EncorePanel({
 }: {
   send: (c: Control) => void;
 }) {
-  // armed is local UI state only — the two-step guard, not world state.
+  // armed is the two-step guard; open is the collapse state. Both are local UI
+  // state only — never world state.
   const [armed, setArmed] = useState(false);
+  const [open, setOpen] = useState(false);
 
+  const toggle = useCallback(() => setOpen((o) => !o), []);
   const arm = useCallback(() => setArmed(true), []);
   const cancel = useCallback(() => setArmed(false), []);
 
@@ -39,36 +44,39 @@ export const EncorePanel = memo(function EncorePanel({
   }, [send]);
 
   return (
-    <aside className="encore-panel" aria-label="Container encore">
-      <div className="encore-eyebrow">Encore · real container</div>
-      <p className="encore-caption">
-        Fails rover {ENCORE_ROVER} as a separate running container over the real bus — the
-        swarm self-heals (Expiry → Re-auction → Self-heal). Run it AFTER the headline kill.
-      </p>
+    <aside className="lab-card encore-panel" data-open={open} aria-label="Container encore">
+      <button type="button" className="lab-head" onClick={toggle} aria-expanded={open}>
+        <span>Encore · real container</span>
+        <span className="lab-chevron" aria-hidden="true" />
+      </button>
 
-      {armed ? (
-        <div className="encore-confirm">
-          <button
-            type="button"
-            className="encore-btn encore-btn-fire"
-            onClick={fire}
-            autoFocus
-          >
-            docker kill {ENCORE_ROVER} (encore)
-          </button>
-          <button type="button" className="encore-cancel" onClick={cancel}>
-            cancel
-          </button>
+      {open && (
+        <div className="lab-body">
+          <p className="encore-caption">
+            Fails rover {ENCORE_ROVER} as a separate running container over the real bus — the
+            swarm self-heals (Expiry → Re-auction → Self-heal). Run it AFTER the headline kill.
+          </p>
+
+          {armed ? (
+            <div className="encore-confirm">
+              <button
+                type="button"
+                className="encore-btn encore-btn-fire"
+                onClick={fire}
+                autoFocus
+              >
+                docker kill {ENCORE_ROVER} (encore)
+              </button>
+              <button type="button" className="encore-cancel" onClick={cancel}>
+                cancel
+              </button>
+            </div>
+          ) : (
+            <button type="button" className="encore-btn" onClick={arm} aria-pressed={false}>
+              Arm encore
+            </button>
+          )}
         </div>
-      ) : (
-        <button
-          type="button"
-          className="encore-btn"
-          onClick={arm}
-          aria-pressed={false}
-        >
-          Arm encore
-        </button>
       )}
     </aside>
   );
