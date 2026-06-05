@@ -507,20 +507,42 @@ func TestNoFaultCompletesNormally(t *testing.T) {
 	t.Fatalf("rover did not complete task-clean with failProb=0")
 }
 
-// TestKillRecoversInPlaceOverBus is the end-to-end proof of the recoverable
-// outage: a rover awarded a FAR task is killed mid-drive. It must (1) go
-// alive=false, (2) stay STOPPED where it failed — not snap back to its start
-// position — and (3) revive at that SAME failure position after the outage
-// window, then complete a fresh task. This is the realistic-failure behaviour:
-// the rover does not vanish and does not teleport home.
-func TestKillRecoversInPlaceOverBus(t *testing.T) {
+// waitFor polls cond every 10ms until it returns true or the timeout elapses,
+// reporting whether the condition was met within the window.
+func waitFor(timeout time.Duration, cond func() bool) bool {
+	deadline := time.Now().Add(timeout)
+	for time.Now().Before(deadline) {
+		if cond() {
+			return true
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
+	return false
+}
+
+// recoverHarness boots an embedded NATS server, runs ONE rover, and watches its
+// telemetry/complete streams to track a kill→revive-in-place cycle: where it went
+// down, whether it came back at that exact spot, and how many tasks it completed.
+type recoverHarness struct {
+	conn    *bus.Conn
+	roverID domain.RobotID
+
+	mu               sync.Mutex
+	deadPos          domain.Vec2
+	sawDead          bool
+	sawReviveInPlace bool
+	completeCount    int
+}
+
+func newRecoverHarness(t *testing.T, id domain.RobotID) *recoverHarness {
+	t.Helper()
+
 	url, shutdown := bustest.RunServer(t)
 	t.Cleanup(shutdown)
 
 	ctx, cancel := context.WithCancel(context.Background())
 	t.Cleanup(cancel)
 
-	const id domain.RobotID = "R-recover"
 	cfg := Config{
 		ID:             id,
 		Pos:            domain.Vec2{X: 0, Y: 0},
@@ -543,112 +565,119 @@ func TestKillRecoversInPlaceOverBus(t *testing.T) {
 	}
 	t.Cleanup(obs.Close)
 
-	var mu sync.Mutex
-	var deadPos domain.Vec2
-	sawDead, sawReviveInPlace := false, false
-	completes := 0
+	h := &recoverHarness{conn: obs, roverID: id}
 
-	unsubTel, err := bus.SubscribeJSON(obs, wire.SubjTelemetry(id), func(tm wire.Telemetry) {
-		mu.Lock()
-		defer mu.Unlock()
-		if !tm.Alive && !sawDead {
-			sawDead = true
-			deadPos = tm.Pos // the position it went down at
-		}
-		// A revival counts only if it comes back at the spot it died (not at start).
-		if sawDead && tm.Alive && tm.Pos == deadPos {
-			sawReviveInPlace = true
-		}
-	})
+	unsubTel, err := bus.SubscribeJSON(obs, wire.SubjTelemetry(id), h.onTelemetry)
 	if err != nil {
 		t.Fatalf("subscribe telemetry: %v", err)
 	}
 	t.Cleanup(unsubTel)
 
-	unsubComplete, err := bus.SubscribeJSON(obs, wire.SubjTaskComplete, func(c wire.Complete) {
-		if c.Robot != id {
-			return
-		}
-		mu.Lock()
-		completes++
-		mu.Unlock()
-	})
+	unsubComplete, err := bus.SubscribeJSON(obs, wire.SubjTaskComplete, h.onComplete)
 	if err != nil {
 		t.Fatalf("subscribe complete: %v", err)
 	}
 	t.Cleanup(unsubComplete)
 
-	// Award a FAR task so the rover is mid-drive (not at origin) when we kill it.
-	if err := obs.PublishJSON(wire.SubjTaskAward, wire.Award{TaskID: "task-far", Robot: id, Pos: domain.Vec2{X: 60, Y: 0}}); err != nil {
+	return h
+}
+
+func (h *recoverHarness) onTelemetry(tm wire.Telemetry) {
+	h.mu.Lock()
+	defer h.mu.Unlock()
+	if !tm.Alive && !h.sawDead {
+		h.sawDead = true
+		h.deadPos = tm.Pos // the position it went down at
+	}
+	// A revival counts only if it comes back at the spot it died (not at start).
+	if h.sawDead && tm.Alive && tm.Pos == h.deadPos {
+		h.sawReviveInPlace = true
+	}
+}
+
+func (h *recoverHarness) onComplete(c wire.Complete) {
+	if c.Robot != h.roverID {
+		return
+	}
+	h.mu.Lock()
+	h.completeCount++
+	h.mu.Unlock()
+}
+
+func (h *recoverHarness) sawDown() bool {
+	h.mu.Lock()
+	defer h.mu.Unlock()
+	return h.sawDead
+}
+
+func (h *recoverHarness) revivedInPlace() bool {
+	h.mu.Lock()
+	defer h.mu.Unlock()
+	return h.sawReviveInPlace
+}
+
+func (h *recoverHarness) deadPosition() domain.Vec2 {
+	h.mu.Lock()
+	defer h.mu.Unlock()
+	return h.deadPos
+}
+
+func (h *recoverHarness) completes() int {
+	h.mu.Lock()
+	defer h.mu.Unlock()
+	return h.completeCount
+}
+
+func (h *recoverHarness) award(t *testing.T, task domain.TaskID, pos domain.Vec2) {
+	t.Helper()
+	if err := h.conn.PublishJSON(wire.SubjTaskAward, wire.Award{TaskID: task, Robot: h.roverID, Pos: pos}); err != nil {
 		t.Fatalf("publish award: %v", err)
 	}
-	_ = obs.Flush()
+	_ = h.conn.Flush()
+}
 
-	// Let it drive away from the origin, then kill it mid-flight.
-	time.Sleep(250 * time.Millisecond)
-	if err := obs.PublishJSON(wire.SubjControl, wire.Control{Cmd: "kill", Robot: id}); err != nil {
+func (h *recoverHarness) kill(t *testing.T) {
+	t.Helper()
+	if err := h.conn.PublishJSON(wire.SubjControl, wire.Control{Cmd: "kill", Robot: h.roverID}); err != nil {
 		t.Fatalf("publish kill: %v", err)
 	}
-	_ = obs.Flush()
+	_ = h.conn.Flush()
+}
+
+// TestKillRecoversInPlaceOverBus is the end-to-end proof of the recoverable
+// outage: a rover awarded a FAR task is killed mid-drive. It must (1) go
+// alive=false, (2) stay STOPPED where it failed — not snap back to its start
+// position — and (3) revive at that SAME failure position after the outage
+// window, then complete a fresh task. This is the realistic-failure behaviour:
+// the rover does not vanish and does not teleport home.
+func TestKillRecoversInPlaceOverBus(t *testing.T) {
+	h := newRecoverHarness(t, "R-recover")
+
+	// Award a FAR task so the rover is mid-drive (not at origin) when we kill it,
+	// let it drive away from the origin, then kill it mid-flight.
+	h.award(t, "task-far", domain.Vec2{X: 60, Y: 0})
+	time.Sleep(250 * time.Millisecond)
+	h.kill(t)
 
 	// It must report down, away from the origin, and never complete the abandoned task.
-	deadline := time.Now().Add(2 * time.Second)
-	for time.Now().Before(deadline) {
-		mu.Lock()
-		ok := sawDead
-		mu.Unlock()
-		if ok {
-			break
-		}
-		time.Sleep(10 * time.Millisecond)
-	}
-	mu.Lock()
-	if !sawDead {
-		mu.Unlock()
+	if !waitFor(2*time.Second, h.sawDown) {
 		t.Fatalf("rover never reported alive=false after kill")
 	}
-	if deadPos.X == 0 && deadPos.Y == 0 {
-		mu.Unlock()
-		t.Fatalf("rover went down at the origin (%v) — it should have driven away before the kill", deadPos)
+	if dp := h.deadPosition(); dp.X == 0 && dp.Y == 0 {
+		t.Fatalf("rover went down at the origin (%v) — it should have driven away before the kill", dp)
 	}
-	if completes != 0 {
-		mu.Unlock()
+	if h.completes() != 0 {
 		t.Fatalf("killed rover completed its abandoned task (should self-heal via TTL, not complete)")
 	}
-	mu.Unlock()
 
 	// After the outage window it must revive AT THE SAME failure position.
-	reviveDeadline := time.Now().Add(2 * time.Second)
-	for time.Now().Before(reviveDeadline) {
-		mu.Lock()
-		ok := sawReviveInPlace
-		mu.Unlock()
-		if ok {
-			break
-		}
-		time.Sleep(10 * time.Millisecond)
-	}
-	mu.Lock()
-	revived := sawReviveInPlace
-	mu.Unlock()
-	if !revived {
+	if !waitFor(2*time.Second, h.revivedInPlace) {
 		t.Fatalf("rover did not revive at its failure position within the outage window")
 	}
 
 	// The revived rover is fully back in service: award a nearby task; it completes.
-	if err := obs.PublishJSON(wire.SubjTaskAward, wire.Award{TaskID: "task-after", Robot: id, Pos: deadPos}); err != nil {
-		t.Fatalf("publish award after revive: %v", err)
+	h.award(t, "task-after", h.deadPosition())
+	if !waitFor(3*time.Second, func() bool { return h.completes() > 0 }) {
+		t.Fatalf("revived rover did not complete a fresh task")
 	}
-	_ = obs.Flush()
-	completeDeadline := time.Now().Add(3 * time.Second)
-	for time.Now().Before(completeDeadline) {
-		mu.Lock()
-		done := completes
-		mu.Unlock()
-		if done > 0 {
-			return // revived rover took and completed a fresh task
-		}
-		time.Sleep(10 * time.Millisecond)
-	}
-	t.Fatalf("revived rover did not complete a fresh task")
 }
