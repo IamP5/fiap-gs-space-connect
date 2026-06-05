@@ -193,8 +193,8 @@ type EarthUplink struct {
 // --- Browser → server control (TECHSPEC §4) ---
 
 // Control is a command from the dashboard. Skeleton wires the relay path; the
-// commands themselves (kill, killContainer, setLatency, setFailureProb) arrive
-// in later slices.
+// commands themselves (kill, killContainer, setLatency, setFailureProb,
+// reloadDemo) arrive in later slices.
 //
 // "kill" vs "killContainer" are two DISTINCT heal triggers that both land on the
 // same self-heal path (lease Expiry → Re-auction):
@@ -208,9 +208,17 @@ type EarthUplink struct {
 //     docker.sock. The killed container goes silent on the bus, its Lease expires,
 //     and the same Re-auction heals it over the REAL bus.
 //
+// "reloadDemo" is cmd-only (no Robot/Value): it resets the demo board IN-PROCESS
+// so the swarm rebuilds the dome from scratch — no pod/process restart. The
+// coordinator returns every Blueprint task to UNCLAIMED (stamped with a version
+// that beats the current record so the monotonic World Model accepts the reset),
+// reloads the Planner, drops all live Leases, and re-arms the scripted kills so
+// the kill→heal money shot replays. It works in both the in-proc compose mode and
+// the external (k8s pod-per-rover) mode. Consumed ONLY by the coordinator.
+//
 // Robot carries the target rover for both "kill" and "killContainer".
 type Control struct {
-	Cmd   string         `json:"cmd"`             // "kill" | "killContainer" | "setLatency" | "setFailureProb"
+	Cmd   string         `json:"cmd"`             // "kill" | "killContainer" | "setLatency" | "setFailureProb" | "reloadDemo"
 	Robot domain.RobotID `json:"robot,omitempty"` // target rover for "kill" / "killContainer"
 	Value float64        `json:"value,omitempty"` // slider value for latency/failure
 }

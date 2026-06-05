@@ -48,12 +48,41 @@
   color: var(--ink-mute);
 }
 
+/* ---- reload-demo button ----
+   A global demo control: resets the board so the swarm rebuilds the dome. Mirrors
+   the renderer-btn chrome (hairline-boxed caps), and carries the auto-margin that
+   pushes the whole right-hand cluster (reload · toggle · meta) hard-right. After a
+   click it shows a brief disabled "Reloading…" pulse so the operator sees it land. */
+.reload-btn {
+  margin-left: auto;
+  padding: 6px var(--s-md);
+  font-family: var(--display);
+  font-size: 12px;
+  font-weight: 700;
+  letter-spacing: 1.17px;
+  text-transform: uppercase;
+  color: var(--ink-mute);
+  background: transparent;
+  border: 1px solid var(--hairline-on-dark);
+  border-radius: var(--r-xs);
+  cursor: pointer;
+}
+
+.reload-btn:hover:not(:disabled) {
+  color: var(--on-primary);
+  border-color: var(--on-primary-mute);
+}
+
+.reload-btn:disabled {
+  color: var(--ink-mute);
+  cursor: not-allowed;
+}
+
 /* ---- renderer toggle (2D / 3D) ----
    A hairline-boxed two-button switch, mirroring the badge chrome: no fill, the
    active segment carries white text on a near-black fill, the rest is muted.
-   Pushed hard-right next to the WS meta. */
+   Sits in the right-hand cluster, after the reload-demo button. */
 .renderer-toggle {
-  margin-left: auto;
   display: inline-flex;
   border: 1px solid var(--hairline-on-dark);
   border-radius: var(--r-xs);

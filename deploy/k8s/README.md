@@ -25,7 +25,7 @@ cluster-aware killer with least-privilege RBAC.
 | `50-rover-r1.yaml` … `55-rover-r6.yaml` | One Deployment per Rover, R1..R6. |
 | `60-killer.yaml` | Killer ServiceAccount + Role + RoleBinding + Deployment. |
 | `kustomization.yaml` | Ties it together for `kubectl apply -k`. |
-| `up.sh` / `down.sh` | kind-based bring-up / teardown. |
+| `up.sh` / `down.sh` | kind-based bring-up (auto port-forwards web+gateway) / teardown (stops the forwards). |
 
 The Rover roster (ids, positions, batteries, capabilities) mirrors
 `internal/demo/demo.go` `DomeRovers()` exactly, so the board is identical to the
@@ -43,24 +43,35 @@ Prereqs: `docker`, `kind`, and `kubectl` on your PATH.
 
 `up.sh` creates a kind cluster named `swarmbuild` (if absent), builds the five
 images, `kind load`s them (no registry needed — `imagePullPolicy: IfNotPresent`
-uses the loaded local images), applies the manifests, and waits for every
-rollout. Then, in two terminals (or background them):
+uses the loaded local images), applies the manifests, waits for every rollout,
+and then **auto-starts the port-forwards** for you: web→`localhost:5173` and
+gateway→`localhost:8080`. It waits until both forwards actually accept
+connections before printing `✅ open http://localhost:5173`.
 
-```sh
-kubectl -n swarmbuild port-forward svc/web 5173:80
-kubectl -n swarmbuild port-forward svc/gateway 8080:8080
-```
-
-Open **http://localhost:5173**. The dashboard reaches the gateway at
+Just open **http://localhost:5173**. The dashboard reaches the gateway at
 `ws://localhost:8080/ws` (baked into the web image at build time), which the
-second port-forward serves.
+gateway forward serves. Re-running `up.sh` is idempotent — it kills any stale
+forwards from a previous run first.
 
-Tear down:
+The forwards run detached (via `nohup`); their PIDs are recorded in
+`${TMPDIR:-/tmp}/swarmbuild-portforward.pids` and their logs in
+`${TMPDIR:-/tmp}/swarmbuild-pf-{web,gateway}.log`. If a forward never comes up,
+`up.sh` warns with the log path but leaves the cluster running.
+
+Once you're in the dashboard, the in-app **"Reload demo"** button restarts the
+demo workflow — it rebuilds the dome from scratch with **no pod restart** (the
+Coordinator resets its board over the bus), so you can re-run the heal beat
+without re-running `up.sh`.
+
+Tear down (this also stops the auto port-forwards):
 
 ```sh
-./deploy/k8s/down.sh            # delete the swarmbuild namespace (keep the cluster)
+./deploy/k8s/down.sh            # stop forwards + delete the swarmbuild namespace (keep the cluster)
 ./deploy/k8s/down.sh --cluster  # also delete the kind cluster
 ```
+
+`down.sh` reaps the recorded port-forward PIDs (with a `pkill` fallback) and
+removes the pidfile before tearing down the namespace.
 
 ## How the kill flows
 

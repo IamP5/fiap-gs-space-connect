@@ -71,6 +71,9 @@ export type EarthUplink = {
 //                                killer sidecar runs `docker kill` on the real
 //                                rover container (R7), which then self-heals
 //                                (Expiry → Re-auction → Self-heal); issue 11
+//   · reloadDemo               — reset the board so the swarm rebuilds the dome
+//                                from scratch (the Coordinator re-seeds the
+//                                worksite); cmd-only, no robot/value
 //   · setFailureProb  (value) — 0..1 per-rover induced failure rate (issue 08)
 //   · setLatency      (value) — ms of delay on the earth.uplink feed (issue 09)
 export type Control = {
