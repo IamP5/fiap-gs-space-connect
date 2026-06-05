@@ -5,7 +5,7 @@
 // state; everything else is derived from the snapshot and pushed into small
 // memoized presentational components (StatusIndicator, TaskLedger, KillPanel).
 
-import { useCallback, useState } from "react";
+import { Suspense, lazy, useCallback, useState } from "react";
 import { useSnapshot } from "./hooks/useSnapshot";
 import { connectionStatus } from "./lib/connection";
 import { StatusIndicator } from "./components/StatusIndicator";
@@ -14,8 +14,15 @@ import { KillPanel } from "./components/KillPanel";
 import { ControlsPanel } from "./components/ControlsPanel";
 import { EarthPanel } from "./components/EarthPanel";
 import { WorldCanvas } from "./components/WorldCanvas";
-import { Scene3D } from "./components/Scene3D";
 import "./styles/dashboard.css";
+
+// The 3D scene drags in three.js + drei + postprocessing (~300 kB gzipped), so
+// it is code-split into its own chunk and loaded on demand. The lightweight 2D
+// WorldCanvas (the rehearsed fallback, ADR-0004) stays eager, so the shell and
+// the fallback path never pay to parse three.js up front.
+const Scene3D = lazy(() =>
+  import("./components/Scene3D").then((m) => ({ default: m.Scene3D })),
+);
 
 // Which renderer draws the worksite. Both are PURE functions of the same
 // snapshot (ADR-0004), so toggling between them can never change World Model
@@ -111,11 +118,23 @@ export default function App() {
             so the toggle swaps them with no other change. The 2D WorldCanvas is
             kept fully functional as the rehearsed fallback (ADR-0004). */}
         {renderer === "3d" ? (
-          <Scene3D
-            snapshot={snapshot}
-            selected={selectedRover ? selected : null}
-            onPick={setSelected}
-          />
+          // Suspense covers the lazy three.js chunk; the fallback is the same 2D
+          // canvas, so the worksite is visible instantly even before 3D loads.
+          <Suspense
+            fallback={
+              <WorldCanvas
+                snapshot={snapshot}
+                selected={selectedRover ? selected : null}
+                onPick={setSelected}
+              />
+            }
+          >
+            <Scene3D
+              snapshot={snapshot}
+              selected={selectedRover ? selected : null}
+              onPick={setSelected}
+            />
+          </Suspense>
         ) : (
           <WorldCanvas
             snapshot={snapshot}
