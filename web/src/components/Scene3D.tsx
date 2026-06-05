@@ -33,7 +33,7 @@
 //     halo meshes (never full-scene bloom). See HALO_BLOOM_LAYER below.
 //   - No custom physics, no hand-modelled art.
 
-import { useEffect, useMemo, useRef, useState } from "react";
+import { memo, useEffect, useMemo, useRef, useState } from "react";
 import { Canvas, useFrame, useThree, type ThreeEvent } from "@react-three/fiber";
 import { Line, OrbitControls } from "@react-three/drei";
 import { EffectComposer, SelectiveBloom } from "@react-three/postprocessing";
@@ -484,7 +484,20 @@ function LunarTerrain() {
 // halos), never the full scene — ADR-0004's hard guard. Kept cheap: a small
 // blur kernel and no composer MSAA, so it adds minimal GPU cost and plays nicely
 // with frameloop="demand" (it renders only on invalidated frames).
-function HaloBloom({ lightRef }: { lightRef: React.RefObject<THREE.DirectionalLight> }) {
+//
+// MEMOIZED on its single (stable) lightRef prop. Without this, the parent
+// SceneContents re-renders on every snapshot (~12 Hz), which re-renders
+// <SelectiveBloom>, whose internal effect-useMemo depends on a fresh `...props`
+// object each render — so a brand-new SelectiveBloomEffect (and its Selection)
+// was being constructed ~12×/sec. Each Selection pulls from postprocessing's
+// MODULE-GLOBAL layer-id counter; once it climbed past 31 the lib spammed
+// "Layer out of range, resetting to 2" forever. memo() keeps the whole
+// postprocessing subtree stable across snapshots, so the effect is built once.
+const HaloBloom = memo(function HaloBloom({
+  lightRef,
+}: {
+  lightRef: React.RefObject<THREE.DirectionalLight>;
+}) {
   // The directional light mounts in the same pass as this component, so its ref
   // is null on first render. Force exactly one re-render after mount so the ref
   // has resolved; SelectiveBloom requires a non-null light, so we render nothing
@@ -494,10 +507,12 @@ function HaloBloom({ lightRef }: { lightRef: React.RefObject<THREE.DirectionalLi
   const light = lightRef.current;
   if (!light) return null;
   return (
-    // multisampling={0}: SelectiveBloom does its own threshold/blur, so MSAA on
-    // the composer only adds a depth/stencil blit step some ANGLE/macOS drivers
-    // warn about. A SMALL kernel keeps the blur passes (and their render targets)
-    // light — the halos are tiny, so a wide kernel would be wasted GPU memory.
+    // multisampling={0}: SelectiveBloom does its own threshold/blur, so composer
+    // MSAA buys nothing here. A SMALL kernel keeps the blur passes (and their
+    // render targets) light — the halos are tiny, so a wide kernel would be
+    // wasted GPU memory. (The depth/stencil glBlitFramebuffer error ANGLE/macOS
+    // drivers throw comes from the CANVAS's antialias:true backbuffer, not this
+    // composer — see the Canvas gl props below, where antialias is off.)
     <EffectComposer multisampling={0}>
       <SelectiveBloom
         lights={[light]}
@@ -511,7 +526,7 @@ function HaloBloom({ lightRef }: { lightRef: React.RefObject<THREE.DirectionalLi
       />
     </EffectComposer>
   );
-}
+});
 
 type Scene3DProps = {
   snapshot: Snapshot | null;
@@ -650,7 +665,13 @@ export function Scene3D({ snapshot, selected, onPick }: Scene3DProps) {
       dpr={[1, 1.5]}
       camera={{ position: [0, 14, 18], fov: 42, near: 0.1, far: 200 }}
       onPointerMissed={() => onPick(null)} // click empty space → deselect
-      gl={{ antialias: true, powerPreference: "high-performance" }}
+      // antialias:false — the EffectComposer owns the framebuffers, so a
+      // multisampled default backbuffer is redundant AND, on ANGLE/macOS, forces
+      // a depth/stencil blitFramebuffer resolve that errors with "Read and write
+      // depth stencil attachments cannot be the same image". Turning it off
+      // removes the MSAA backbuffer (and that blit) entirely; the low-poly scene
+      // plus soft halo bloom reads fine without canvas-level AA.
+      gl={{ antialias: false, powerPreference: "high-performance" }}
     >
       <color attach="background" args={["#000000"]} />
       <SceneContents snapshot={snapshot} selected={selected} onPick={onPick} />
