@@ -99,6 +99,11 @@ type (
 	evFailed    struct{ failed wire.Failed }
 	evHeartbeat struct{ hb wire.Heartbeat }
 	evTelemetry struct{ tel wire.Telemetry }
+	// evReload resets the demo board IN-PROCESS so the swarm rebuilds the dome
+	// from scratch (reloadDemo control). It MUTATES owned state, so — like every
+	// other event — it flows through the single-writer channel and is never
+	// handled on the NATS dispatcher (TECHSPEC §8).
+	evReload struct{}
 )
 
 // auction is one open auction: the bids received so far for a task during its
@@ -126,11 +131,26 @@ type state struct {
 	scriptedKills []ScriptedKill // demo rehearsal kills (config copy)
 	armedKills    []armedKill    // scripted kills counting down to fire
 
+	// blueprint and cfgKills are pristine originals captured at Run, used ONLY by
+	// onReload to rebuild the board from scratch (reloadDemo). blueprint is the
+	// initial UNCLAIMED task set; cfgKills is an untouched copy of the configured
+	// scripted kills (scriptedKills above has its fired flags mutated, so onReload
+	// re-arms from this pristine copy instead).
+	blueprint []domain.Task
+	cfgKills  []ScriptedKill
+
 	conn   *bus.Conn
 	kv     *bus.KV
 	clk    domain.Clock
 	ttl    domain.Tick
 	window time.Duration
+
+	// earthCh hands a copy of each freshly-published tactical snapshot to the
+	// Earth-uplink shim (runEarthUplink) over a buffered channel. publishSnapshot
+	// sends NON-BLOCKING (drop on full), so the single writer never blocks on the
+	// shim and the tactical loop is provably untouched by latency (ADR-0002):
+	// snapshots are full-state and drop-safe, so a slow shim just loses frames.
+	earthCh chan wire.EarthUplink
 }
 
 // Run loads the blueprint, spawns the in-process rovers, and runs the
@@ -192,7 +212,20 @@ func Run(ctx context.Context, cfg Config) error {
 		// Copy the scripted kills so arming them (setting fired) never mutates the
 		// caller's Config slice.
 		scriptedKills: append([]ScriptedKill(nil), cfg.ScriptedKills...),
+		// Pristine originals for onReload (reloadDemo): the initial UNCLAIMED task
+		// set and an untouched copy of the scripted kills to re-arm from.
+		blueprint: append([]domain.Task(nil), tasks...),
+		cfgKills:  append([]ScriptedKill(nil), cfg.ScriptedKills...),
+		// Buffered so publishSnapshot's non-blocking send rarely drops; the shim
+		// owns the channel's receive side.
+		earthCh: make(chan wire.EarthUplink, 64),
 	}
+
+	// --- Earth-uplink shim (issue 09): a SEPARATE goroutine owns the artificial
+	// delay and the earth.uplink publish. It NEVER touches single-writer state,
+	// heartbeats, telemetry, awards, or world.snapshot — only the new earth.uplink
+	// feed is delayed (ADR-0002 / TECHSPEC §8). Latency is read atomically. ---
+	shim := newEarthShim(conn, st.earthCh)
 
 	// --- Inbound event channel: the ONLY way state is mutated. ---
 	events := make(chan any, 256)
@@ -203,6 +236,21 @@ func Run(ctx context.Context, cfg Config) error {
 		return err
 	}
 	defer unsub()
+
+	// Control subscription: runs on the NATS dispatcher.
+	unsubCtl, err := subscribeControl(ctx, conn, shim, events)
+	if err != nil {
+		return err
+	}
+	defer unsubCtl()
+
+	// Start the shim goroutine; its lifecycle is tied to ctx.
+	shimDone := make(chan struct{})
+	go func() {
+		defer close(shimDone)
+		shim.run(ctx)
+	}()
+	defer func() { <-shimDone }()
 
 	// --- Spawn in-process rovers, each its own independent NATS client. ---
 	roverCtx, cancelRovers := context.WithCancel(ctx)
@@ -305,6 +353,36 @@ func subscribe(ctx context.Context, conn *bus.Conn, events chan<- any) (func(), 
 	return cleanup, nil
 }
 
+// subscribeControl registers the dashboard control subscription, which runs on
+// the NATS dispatcher goroutine. The two commands it handles take deliberately
+// different paths (TECHSPEC §8):
+//
+//   - "setLatency" ONLY does an atomic store on the Earth-uplink shim. It does
+//     NOT enqueue onto the single-writer events channel, so changing latency
+//     cannot perturb auctions/leases/snapshots (ADR-0002).
+//   - "reloadDemo" MUTATES owned state (Planner, World Model, leases, auctions),
+//     so it must run on the single writer: the dispatcher only enqueues evReload.
+//
+// "kill" / "killContainer" / "setFailureProb" are handled by the agents and the
+// killer sidecar, not here.
+func subscribeControl(ctx context.Context, conn *bus.Conn, shim *earthShim, events chan<- any) (func(), error) {
+	unsubCtl, err := bus.SubscribeJSON(conn, wire.SubjControl, func(c wire.Control) {
+		switch c.Cmd {
+		case "setLatency":
+			shim.setLatency(c.Value)
+		case "reloadDemo":
+			select {
+			case events <- evReload{}:
+			case <-ctx.Done():
+			}
+		}
+	})
+	if err != nil {
+		return nil, fmt.Errorf("coordinator: subscribe control: %w", err)
+	}
+	return unsubCtl, nil
+}
+
 // spawnRovers starts each in-process rover as its own independent NATS client
 // (ADR-0001), inheriting the coordinator's heartbeat cadence when unset. Each
 // rover runs in its own goroutine and closes its connection on exit; roverCtx
@@ -368,7 +446,16 @@ func (st *state) handle(ctx context.Context, e any) {
 	case evHeartbeat:
 		st.onHeartbeat(ev.hb)
 	case evTelemetry:
+		// A downed rover coming back (alive false→true) is a real engine event:
+		// emit a "revived" beat so the dashboard can pulse the in-place comeback at
+		// the rover's recovery spot. The browser looks up the position by Robot id.
+		prev, had := st.rovers[ev.tel.Robot]
 		st.rovers[ev.tel.Robot] = ev.tel
+		if had && !prev.Alive && ev.tel.Alive {
+			st.emit(wire.Event{Kind: wire.EventRevived, Robot: ev.tel.Robot})
+		}
+	case evReload:
+		st.onReload(ctx)
 	}
 }
 
@@ -650,6 +737,75 @@ func (st *state) onExpired(ctx context.Context, id domain.TaskID) {
 	}
 }
 
+// onReload resets the demo board IN-PROCESS (reloadDemo control) so the swarm
+// rebuilds the dome from scratch — no pod/process restart. It runs on the single
+// writer, so it may freely touch the Planner, World Model, Lease Manager, and
+// open auctions without further synchronisation (TECHSPEC §8); it spawns no
+// goroutines.
+//
+// The crux is version monotonicity. world.Model.Apply is a strict version guard:
+// a record is accepted only if it beats the stored one. After a build, tasks sit
+// at a Version ≥ 2, so resetting them to Version 0 would be REJECTED and nothing
+// would change. So we stamp every reset record with base = (max stored Version) +
+// 1, which is strictly greater than every record currently held and therefore
+// always wins. The next tick then announces the now-UNCLAIMED ready tasks and the
+// swarm rebuilds.
+func (st *state) onReload(ctx context.Context) {
+	base := maxVersion(st.model.Snapshot()) + 1
+
+	// Rebuild the Planner fresh from the original blueprint so done/ready reset.
+	// The blueprint loaded cleanly once already, so a failure here is unexpected;
+	// log it and keep the prior plan rather than crash the writer.
+	if plan, err := planner.Load(st.blueprint); err != nil {
+		slog.Error("demo reload: reload planner", "error", err)
+	} else {
+		st.plan = plan
+	}
+
+	// Drop all live Leases by swapping in a fresh Manager. Stale Completes and
+	// Heartbeats from the prior epoch then find no live lease and become no-ops.
+	st.leases = lease.NewManager(st.clk, st.ttl)
+
+	// Clear open auctions and any armed/pending demo choreography from the prior
+	// epoch so the rebuild starts clean.
+	st.auctions = make(map[domain.TaskID]*auction)
+	st.armedKills = nil
+	st.pendingEvents = nil
+
+	// Re-arm the scripted kills from the pristine config copy (fired=false) so the
+	// kill→heal money shot replays in inproc mode. In external/k8s mode cfgKills is
+	// empty, so this is a harmless no-op.
+	st.scriptedKills = append([]ScriptedKill(nil), st.cfgKills...)
+
+	// Return every blueprint task to UNCLAIMED at the winning version and mirror it
+	// to KV so an independent observer sees the reset board immediately.
+	for _, t := range st.blueprint {
+		it := t
+		it.Status = domain.Unclaimed
+		it.Assignee = ""
+		it.LeaseExpiry = 0
+		it.Version = base
+		if st.model.Apply(it) {
+			st.mirror(ctx, it)
+		}
+	}
+
+	slog.Info("demo reloaded", "tasks", len(st.blueprint), "base_version", base)
+}
+
+// maxVersion returns the highest Version across the given task records, or 0 for
+// an empty set. onReload uses (maxVersion + 1) so every reset record strictly
+// beats the record currently held and is accepted by the monotonic World Model.
+func maxVersion(tasks []domain.Task) domain.Lamport {
+	var highest domain.Lamport
+	for _, t := range tasks {
+		if t.Version > highest {
+			highest = t.Version
+		}
+	}
+	return highest
+}
+
 // mirror writes the authoritative task record to NATS KV (the World Model
 // mirror, TECHSPEC §3 / ADR-0002).
 func (st *state) mirror(ctx context.Context, t domain.Task) {
@@ -708,12 +864,24 @@ func (st *state) publishSnapshot() {
 	events := st.pendingEvents
 	st.pendingEvents = nil
 
+	at := st.clk.Now()
 	_ = st.conn.PublishJSON(wire.SubjSnapshot, wire.Snapshot{
 		Type:      "snapshot",
 		Connected: st.conn.Connected(),
 		Rovers:    roverViews,
 		Tasks:     taskViews,
 		Events:    events,
-		At:        st.clk.Now(),
+		At:        at,
 	})
+
+	// AFTER the tactical snapshot is on the wire, hand a copy to the Earth-uplink
+	// shim with a NON-BLOCKING send: the single writer must never block, so a slow
+	// shim simply drops this frame (snapshots are full-state, drop-safe). No
+	// network or delay work happens on this writer goroutine — the shim owns it.
+	// This is the ONLY thing latency affects; world.snapshot above already went
+	// out undelayed (ADR-0002 / TECHSPEC §8).
+	select {
+	case st.earthCh <- wire.EarthUplink{Type: "earth", Rovers: roverViews, Tasks: taskViews, At: at}:
+	default:
+	}
 }

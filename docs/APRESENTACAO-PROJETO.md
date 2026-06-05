@@ -54,7 +54,7 @@ Uma plataforma de software de **controle de enxame** (swarm intelligence). Em ve
 
 A decisão tática vive na **borda** (um lander no próprio canteiro); a Terra só define metas e recebe telemetria por um canal assíncrono de alta latência — deliberadamente fora do loop tático.
 
-> Arquitetura completa em [C4-ptbr.md](./C4-ptbr.md) · linguagem de domínio em [CONTEXT.md](../CONTEXT.md) · requisitos em [PRD-SwarmBuild-MVP.md](../PRD-SwarmBuild-MVP.md).
+> Arquitetura completa em [C4-ptbr.md](./C4-ptbr.md) · linguagem de domínio em [CONTEXT.md](../CONTEXT.md) · requisitos em [PRD-SwarmBuild-MVP.md](./mvp/PRD-SwarmBuild-MVP.md).
 
 ### 2.4. Por que a arquitetura resolve o problema
 

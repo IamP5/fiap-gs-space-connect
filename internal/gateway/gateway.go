@@ -62,9 +62,10 @@ func (c *client) closeWith(code websocket.StatusCode, reason string) {
 type Gateway struct {
 	bus busConn
 
-	mu      sync.RWMutex
-	latest  []byte // last snapshot, marshalled once, served to new clients
-	clients map[*client]struct{}
+	mu          sync.RWMutex
+	latest      []byte // last snapshot, marshalled once, served to new clients
+	latestEarth []byte // last earth.uplink frame, marshalled once, served to new clients
+	clients     map[*client]struct{}
 }
 
 // New builds a Gateway over an established bus connection.
@@ -85,9 +86,19 @@ func Run(_ context.Context, b *bus.Conn) (*Gateway, func() error, error) {
 	if err != nil {
 		return nil, nil, err
 	}
-	// Returned stop func unsubscribes and closes all clients.
+	// Second subscription: the delayed Earth-uplink feed (issue 09). The gateway
+	// is a DUMB forwarder — the coordinator already applied the latency, so the
+	// gateway adds NO delay and never mutates the feed; it fans each frame out
+	// over the SAME per-client send path as a snapshot.
+	unsubEarth, err := bus.SubscribeJSON(b, wire.SubjEarthUplink, g.onEarthUplink)
+	if err != nil {
+		unsub()
+		return nil, nil, err
+	}
+	// Returned stop func unsubscribes both feeds and closes all clients.
 	stop := func() error {
 		unsub()
+		unsubEarth()
 		g.closeAll()
 		return nil
 	}
@@ -105,19 +116,47 @@ func (g *Gateway) onSnapshot(s wire.Snapshot) {
 
 	g.mu.Lock()
 	g.latest = b
+	g.mu.Unlock()
+
+	g.fanout(b)
+}
+
+// onEarthUplink is invoked on the NATS dispatcher goroutine for each delayed
+// Earth-uplink frame (issue 09). The gateway adds NO further delay — the
+// coordinator already lagged it — and never mutates it: it caches the last frame
+// (so a reconnecting client sees it) and fans it out over the same drop-safe
+// per-client path as a snapshot.
+func (g *Gateway) onEarthUplink(e wire.EarthUplink) {
+	b, err := json.Marshal(e)
+	if err != nil {
+		return // never fatal
+	}
+
+	g.mu.Lock()
+	g.latestEarth = b
+	g.mu.Unlock()
+
+	g.fanout(b)
+}
+
+// fanout pushes a pre-marshalled frame to every connected client without
+// blocking: a client whose buffer is full is dropped (laggard). Shared by the
+// snapshot and Earth-uplink feeds.
+func (g *Gateway) fanout(b []byte) {
+	g.mu.RLock()
 	clients := make([]*client, 0, len(g.clients))
 	for c := range g.clients {
 		clients = append(clients, c)
 	}
-	g.mu.Unlock()
+	g.mu.RUnlock()
 
 	for _, c := range clients {
 		select {
 		case c.send <- b:
 		default:
 			// Laggard: its buffer is full. Drop it so it can never wedge the
-			// snapshot loop. The client's writer goroutine will tear down the
-			// socket and deregister.
+			// fan-out. The client's writer goroutine will tear down the socket and
+			// deregister.
 			c.closeWith(websocket.StatusPolicyViolation, "client too slow")
 		}
 	}
@@ -178,6 +217,11 @@ func (g *Gateway) serveWS(w http.ResponseWriter, r *http.Request) {
 	if g.latest != nil {
 		// Non-blocking by construction: fresh buffered channel.
 		c.send <- g.latest
+	}
+	if g.latestEarth != nil {
+		// Seed the last Earth-uplink frame too (issue 09), so a reconnect sees the
+		// current lagging Earth view. Still non-blocking: buffer ≥ 2 frames.
+		c.send <- g.latestEarth
 	}
 	g.clients[c] = struct{}{}
 	g.mu.Unlock()

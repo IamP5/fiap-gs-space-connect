@@ -293,6 +293,21 @@ function draw(
       ctx.strokeStyle = `rgba(46,204,113,${(1 - p).toFixed(3)})`;
       ctx.stroke();
       ctx.restore();
+    } else if (b.kind === "revived" && b.robot_id) {
+      const rv = roverById.get(b.robot_id);
+      if (!rv) continue;
+      const p = beatProgress(b, nowMs);
+      const x = tx(rv.pos);
+      const y = ty(rv.pos);
+      // A wide cyan shockwave marking the in-place comeback — larger than the
+      // winner ring so the recovery reads as its own beat.
+      ctx.save();
+      ctx.beginPath();
+      ctx.arc(x, y, ROVER_R + 4 + p * 34, 0, Math.PI * 2);
+      ctx.lineWidth = 4 * (1 - p) + 0.5;
+      ctx.strokeStyle = `rgba(56,225,255,${(1 - p).toFixed(3)})`;
+      ctx.stroke();
+      ctx.restore();
     } else if (b.kind === "bid" && b.robot_id) {
       const rv = roverById.get(b.robot_id);
       if (!rv) continue;

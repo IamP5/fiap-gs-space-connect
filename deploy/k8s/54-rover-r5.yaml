@@ -1,0 +1,45 @@
+# Rover R5 — its OWN Pod. This is the whole point of the pod-per-rover variant:
+# each Rover is a standalone process (--mode=container) joining the swarm over
+# NATS, so the killer can `kubectl delete pod -l rover=R5` to take exactly this
+# Rover offline. Its Lease then TTL-expires and the swarm Self-heals by
+# Re-auction onto a surviving Rover Pod. Flags mirror internal/demo DomeRovers()
+# for R5 exactly (id/x/y/battery/capabilities), so the board is identical to
+# the in-proc headline.
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: rover-r5
+  namespace: swarmbuild
+  labels:
+    app: swarmbuild
+    role: rover
+    rover: R5
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: swarmbuild
+      role: rover
+      rover: R5
+  template:
+    metadata:
+      labels:
+        app: swarmbuild
+        role: rover
+        rover: R5 # the label the killer's selector (rover=R5) deletes
+    spec:
+      containers:
+        - name: rover
+          image: swarmbuild-agent:dev
+          imagePullPolicy: IfNotPresent # use the kind-loaded local image
+          args:
+            - --id=R5
+            - --x=30
+            - --y=-70
+            - --battery=0.80
+            - --capabilities=foundation,wall,dome-cap
+            - --mode=container
+            - --heartbeat-ms=700
+          env:
+            - name: NATS_URL
+              value: nats://nats:4222

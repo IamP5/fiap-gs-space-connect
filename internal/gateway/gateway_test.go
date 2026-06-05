@@ -57,6 +57,10 @@ func startGateway(t *testing.T) (*bus.Conn, string) {
 	return conn, addr
 }
 
+// statusLeased is the LEASED task status string reused across gateway test
+// fixtures (a constant keeps goconst happy).
+const statusLeased = "LEASED"
+
 func sampleSnapshot() wire.Snapshot {
 	return wire.Snapshot{
 		Type:      "snapshot",
@@ -65,7 +69,7 @@ func sampleSnapshot() wire.Snapshot {
 			{ID: "R1", Pos: domain.Vec2{X: 1, Y: 2}, Battery: 0.9, Alive: true, Load: 1, Task: "T1"},
 		},
 		Tasks: []wire.TaskView{
-			{ID: "T1", Type: "foundation", Pos: domain.Vec2{X: 3, Y: 4}, Status: "LEASED", Assignee: "R1", Version: 7},
+			{ID: "T1", Type: "foundation", Pos: domain.Vec2{X: 3, Y: 4}, Status: statusLeased, Assignee: "R1", Version: 7},
 		},
 		At: 42,
 	}

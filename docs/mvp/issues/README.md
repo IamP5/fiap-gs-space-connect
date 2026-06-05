@@ -24,4 +24,4 @@ Vertical tracer-bullet slices of the [TECHSPEC](../TECHSPEC.md). Each cuts end-t
 | [10](./10-crdt-partition-narrative.md) | CRDT partition narrative (stretch) | HITL | 05 |
 | [11](./11-container-encore.md) | Container encore (stretch) | HITL | 05 |
 
-> No issue tracker is configured for this project; these files are the issue backlog. Decisions they must respect: [ADR-0001..0004](../adr/). Domain vocabulary: [CONTEXT.md](../CONTEXT.md).
+> No issue tracker is configured for this project; these files are the issue backlog. Decisions they must respect: [ADR-0001..0004](../adr/). Domain vocabulary: [CONTEXT.md](../../../CONTEXT.md).

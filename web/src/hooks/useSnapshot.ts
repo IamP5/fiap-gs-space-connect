@@ -8,8 +8,14 @@
 // indicator and a no-op-friendly `send` for the browser → server control path.
 
 import { useCallback, useEffect, useRef, useState } from "react";
-import { isSnapshot, type Control, type Snapshot } from "../types/wire";
-import { MOCK_SNAPSHOT } from "../mocks/snapshot";
+import {
+  isEarthUplink,
+  isSnapshot,
+  type Control,
+  type EarthUplink,
+  type Snapshot,
+} from "../types/wire";
+import { MOCK_EARTH, MOCK_SNAPSHOT } from "../mocks/snapshot";
 
 const WS_URL = import.meta.env.VITE_WS_URL ?? "ws://localhost:8080/ws";
 const MOCK = import.meta.env.VITE_MOCK === "1";
@@ -20,6 +26,8 @@ const BACKOFF_MAX_MS = 10_000;
 export type Connection = {
   /** Latest world snapshot, or null before the first frame arrives. */
   snapshot: Snapshot | null;
+  /** Latest DELAYED Earth-uplink view (issue 09), or null before one arrives. */
+  earth: EarthUplink | null;
   /** True while the WebSocket itself is OPEN. */
   wsOpen: boolean;
   /** The WS URL in use (for display). */
@@ -30,6 +38,7 @@ export type Connection = {
 
 export function useSnapshot(): Connection {
   const [snapshot, setSnapshot] = useState<Snapshot | null>(MOCK ? MOCK_SNAPSHOT : null);
+  const [earth, setEarth] = useState<EarthUplink | null>(MOCK ? MOCK_EARTH : null);
   const [wsOpen, setWsOpen] = useState<boolean>(MOCK);
   const socketRef = useRef<WebSocket | null>(null);
 
@@ -58,8 +67,12 @@ export function useSnapshot(): Connection {
 
       ws.onmessage = (ev) => {
         try {
+          // Parse once, then route by `type`: a Snapshot is the live world; an
+          // EarthUplink is its DELAYED copy (issue 09). They share the socket but
+          // are tracked separately so the Earth panel can lag the live ledger.
           const parsed = JSON.parse(ev.data as string);
           if (isSnapshot(parsed)) setSnapshot(parsed);
+          else if (isEarthUplink(parsed)) setEarth(parsed);
         } catch {
           // Ignore malformed frames; never crash the pure render.
         }
@@ -115,5 +128,5 @@ export function useSnapshot(): Connection {
     }
   }, []);
 
-  return { snapshot, wsOpen, url: WS_URL, send };
+  return { snapshot, earth, wsOpen, url: WS_URL, send };
 }

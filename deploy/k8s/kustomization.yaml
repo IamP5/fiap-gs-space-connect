@@ -1,0 +1,23 @@
+# Kustomization for the SwarmBuild pod-per-rover swarm (the opt-in counterpart to
+# the in-proc docker-compose demo — ADR-0001). Apply the whole stack with:
+#   kubectl apply -k deploy/k8s/
+# Render without a cluster to validate the YAML:
+#   kubectl kustomize deploy/k8s/
+apiVersion: kustomize.config.k8s.io/v1beta1
+kind: Kustomization
+
+namespace: swarmbuild
+
+resources:
+  - 00-namespace.yaml
+  - 10-nats.yaml
+  - 20-coordinator.yaml
+  - 30-gateway.yaml
+  - 40-web.yaml
+  - 50-rover-r1.yaml
+  - 51-rover-r2.yaml
+  - 52-rover-r3.yaml
+  - 53-rover-r4.yaml
+  - 54-rover-r5.yaml
+  - 55-rover-r6.yaml
+  - 60-killer.yaml

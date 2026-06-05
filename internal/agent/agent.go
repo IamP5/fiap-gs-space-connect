@@ -13,6 +13,7 @@ package agent
 import (
 	"context"
 	"log/slog"
+	"math/rand/v2"
 	"swarmbuild/internal/bus"
 	"swarmbuild/internal/core/allocation"
 	"swarmbuild/internal/core/domain"
@@ -37,6 +38,21 @@ type Config struct {
 	// task again (it has "lost the capability" for it). Deterministic fault
 	// injection for the slice-03 self-heal demo/test.
 	FailTask domain.TaskID
+
+	// RecoverAfter is how long a killed rover stays OUT OF SERVICE before it
+	// revives IN PLACE — at the exact position where it went down. The dashboard
+	// "kill" is a recoverable outage, not a permanent death: we simulate a real
+	// failure. The swarm self-heals the downed rover's task while it is dark, then
+	// the SAME rover rejoins the swarm after this delay, at its failure spot.
+	// Zero means defaultRecoverAfter.
+	RecoverAfter time.Duration
+
+	// SettleAfterRevive is the post-revival grace window: once a rover comes back
+	// it is alive and visible at its recovery spot but HOLDS STATION — it does not
+	// bid for new work — for this long, so the in-place comeback is legible before
+	// it rejoins the swarm and drives off to the next task. Zero means
+	// defaultSettleAfterRevive.
+	SettleAfterRevive time.Duration
 }
 
 // Movement and work tuning. Movement is visual interpolation only — the rover
@@ -78,6 +94,26 @@ const (
 // telemetryEvery is how often a rover self-reports position/battery/health/load.
 const telemetryEvery = 200 * time.Millisecond
 
+// defaultRecoverAfter is how long a killed rover stays dark before it revives in
+// place when Config.RecoverAfter is left zero. Long enough to clearly watch the
+// rover go down and the swarm re-auction its task to a neighbour, short enough to
+// keep the demo moving — the downed rover then rejoins at its failure position.
+const defaultRecoverAfter = 6 * time.Second
+
+// defaultSettleAfterRevive is the post-revival hold window when
+// Config.SettleAfterRevive is left zero: a freshly revived rover sits at its
+// recovery spot (alive, but not bidding) this long so the in-place comeback is
+// visible before it picks up new work and drives away.
+const defaultSettleAfterRevive = 2500 * time.Millisecond
+
+// faultCheckEvery is the cadence of the random-fault roll while a rover is
+// executing a task (throughout the drive and work phases). On each tick the
+// rover rolls rand.Float64() < failProb; a HIT abandons the in-flight task
+// silently (see execute). This is the swarm-under-stress knob (issue 08): the
+// per-interval probability of inducing a failure on the currently-executing
+// task. failProb=0 ⇒ the roll never fires, so no induced failures ever.
+const faultCheckEvery = 250 * time.Millisecond
+
 // rover is the mutable self-state a Robot Agent owns. It is guarded by its own
 // small mutex because the NATS dispatcher goroutine (announce/award callbacks)
 // and the telemetry ticker goroutine both read and write it.
@@ -88,6 +124,12 @@ type rover struct {
 	load    int // tasks currently held
 	alive   bool
 
+	// failProb is this rover's probability, PER faultCheckEvery interval, of
+	// spontaneously abandoning the task it is currently executing (issue 08 —
+	// swarm under stress). It is set live by the broadcast "setFailureProb"
+	// control and clamped to [0,1]. 0 (the default) means no induced failures.
+	failProb float64
+
 	// inFlight is the set of tasks currently being executed by this rover. It
 	// guards against a redelivered/duplicate wire.Award spawning a second
 	// execute goroutine for the same task. Guarded by mu.
@@ -97,12 +139,30 @@ type rover struct {
 	// never bid on again (it has "lost the capability" for them). Guarded by mu.
 	refused map[domain.TaskID]struct{}
 
-	// dead is closed exactly once by kill() when the rover suffers a silent
-	// death (the "kill" control command). The drive, work and telemetry loops
-	// select on it to abandon their work without completing or heartbeating, so
-	// the coordinator self-heals the lease by TTL expiry.
-	dead     chan struct{}
-	killOnce sync.Once
+	// down is the recoverable-outage signal. kill() closes the CURRENT down
+	// channel to abort any in-flight execution (the drive/work loops select on
+	// the channel captured at the start of their run) and clears alive, so the
+	// rover stops bidding and heartbeating and the coordinator self-heals its
+	// lease by TTL expiry. The rover stays put at its failure position. After
+	// recoverAfter, revive() installs a FRESH open down channel and sets alive
+	// again, so the same rover rejoins the swarm in place. Guarded by mu.
+	down chan struct{}
+
+	// recoverAfter is this rover's outage window (Config.RecoverAfter, or
+	// defaultRecoverAfter when zero); reviveTimer fires revive() that long after a
+	// kill. The timer is held so Run can stop it on shutdown. Guarded by mu.
+	recoverAfter time.Duration
+	reviveTimer  *time.Timer
+
+	// recovering is the post-revival settle state: true from revive() until the
+	// settle window elapses. While recovering the rover is alive (visible at its
+	// recovery spot) but does NOT bid, so it holds station before rejoining the
+	// swarm. settleAfter is the window (Config.SettleAfterRevive, or
+	// defaultSettleAfterRevive when zero); settleTimer clears recovering. Both
+	// guarded by mu.
+	recovering  bool
+	settleAfter time.Duration
+	settleTimer *time.Timer
 }
 
 // snapshot returns a consistent copy of the rover's scoring-relevant state.
@@ -118,6 +178,27 @@ func (r *rover) addLoad(delta int) {
 	if r.load < 0 {
 		r.load = 0
 	}
+	r.mu.Unlock()
+}
+
+// failureProb returns this rover's current per-interval failure probability.
+func (r *rover) failureProb() float64 {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	return r.failProb
+}
+
+// setFailureProb sets this rover's per-interval failure probability, clamping p
+// to [0,1]. Driven by the broadcast "setFailureProb" control (issue 08).
+func (r *rover) setFailureProb(p float64) {
+	if p < 0 {
+		p = 0
+	}
+	if p > 1 {
+		p = 1
+	}
+	r.mu.Lock()
+	r.failProb = p
 	r.mu.Unlock()
 }
 
@@ -143,19 +224,97 @@ func (r *rover) release(task domain.TaskID) {
 	r.mu.Unlock()
 }
 
-// kill marks the rover silently dead: it clears alive (so the bid-on-announce
-// path stops bidding) and closes the dead channel exactly once, which the drive,
-// work and telemetry loops select on to stop heartbeating, abandon any in-flight
-// execution WITHOUT completing it, and go silent on the bus. A dead rover is
-// dead for its lifetime; a second kill is a harmless no-op (idempotent via
-// sync.Once, so dead is never double-closed).
+// kill takes the rover OUT OF SERVICE as a recoverable outage (a simulated real
+// failure), NOT a permanent death. It clears alive (so the bid-on-announce path
+// stops bidding and awards are dropped) and closes the CURRENT down channel,
+// which the drive and work loops select on to stop heartbeating and abandon any
+// in-flight execution WITHOUT completing it — so the coordinator self-heals the
+// lease by TTL expiry. The rover stays put at its failure position and keeps
+// emitting alive=false telemetry. It then schedules revive() after recoverAfter,
+// so the SAME rover rejoins the swarm in place. A kill while already down is a
+// harmless no-op (it neither double-closes down nor restarts the timer).
 func (r *rover) kill() {
-	r.killOnce.Do(func() {
-		r.mu.Lock()
-		r.alive = false
-		r.mu.Unlock()
-		close(r.dead)
-	})
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	if !r.alive {
+		return // already down: idempotent
+	}
+	r.alive = false
+	close(r.down)
+	d := r.recoverAfter
+	if d <= 0 {
+		d = defaultRecoverAfter
+	}
+	r.reviveTimer = time.AfterFunc(d, r.revive)
+}
+
+// revive brings a downed rover back into service at its CURRENT position once
+// the outage window elapses. It installs a fresh open down channel (so a future
+// kill gets its own signal) and sets alive, so the rover comes back from wherever
+// it went down — never from its start position. It then enters the SETTLE window
+// (recovering=true): the rover is alive and visible at its recovery spot but does
+// NOT bid for new work until the settle timer clears it, so the in-place comeback
+// is legible before it drives off. A no-op if the rover is already alive (e.g. a
+// revival that raced shutdown or a redundant call).
+func (r *rover) revive() {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	if r.alive {
+		return
+	}
+	r.down = make(chan struct{})
+	r.alive = true
+	r.reviveTimer = nil
+
+	r.recovering = true
+	d := r.settleAfter
+	if d <= 0 {
+		d = defaultSettleAfterRevive
+	}
+	r.settleTimer = time.AfterFunc(d, r.endSettle)
+}
+
+// endSettle ends the post-revival hold: the rover stops holding station and may
+// bid for new work again. Fired by the settle timer settleAfter a revive.
+func (r *rover) endSettle() {
+	r.mu.Lock()
+	r.recovering = false
+	r.settleTimer = nil
+	r.mu.Unlock()
+}
+
+// isRecovering reports whether the rover is in its post-revival settle window
+// (alive but holding station, not yet bidding). Read under the rover mutex.
+func (r *rover) isRecovering() bool {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	return r.recovering
+}
+
+// downCh returns the rover's CURRENT outage channel. An execute goroutine reads
+// it once at the start of its run, so a kill during that run aborts it via the
+// channel it captured, while a run that starts after a later revival selects on
+// the fresh channel that revival installed.
+func (r *rover) downCh() chan struct{} {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	return r.down
+}
+
+// stopTimers halts any pending revival or settle timer so a shutdown rover does
+// not flip itself back alive (or clear its settle state) after Run returns. Safe
+// to call when no timer is pending.
+func (r *rover) stopTimers() {
+	r.mu.Lock()
+	if r.reviveTimer != nil {
+		r.reviveTimer.Stop()
+		r.reviveTimer = nil
+	}
+	if r.settleTimer != nil {
+		r.settleTimer.Stop()
+		r.settleTimer = nil
+	}
+	r.mu.Unlock()
 }
 
 // refuse records task in the refused set so the rover never bids on it again.
@@ -245,11 +404,16 @@ func Run(ctx context.Context, cfg Config, conn *bus.Conn) error {
 	}
 
 	st := &rover{
-		pos:     cfg.Pos,
-		battery: cfg.Battery,
-		alive:   true,
-		dead:    make(chan struct{}),
+		pos:          cfg.Pos,
+		battery:      cfg.Battery,
+		alive:        true,
+		down:         make(chan struct{}),
+		recoverAfter: cfg.RecoverAfter,
+		settleAfter:  cfg.SettleAfterRevive,
 	}
+	// Stop any pending revival/settle timers on shutdown so a killed rover never
+	// flips itself back alive (or clears its settle state) after Run has returned.
+	defer st.stopTimers()
 
 	unsubAnnounce, err := subscribeAnnounce(conn, cfg, st)
 	if err != nil {
@@ -282,6 +446,9 @@ func subscribeAnnounce(conn *bus.Conn, cfg Config, st *rover) (func(), error) {
 		pos, battery, load, alive := st.snapshot()
 		if !alive {
 			return
+		}
+		if st.isRecovering() {
+			return // post-revival settle: back in place but holding station, not bidding yet
 		}
 		if st.refuses(a.TaskID) {
 			return // cooperatively failed this task: never bid on it again
@@ -320,23 +487,35 @@ func subscribeAward(ctx context.Context, conn *bus.Conn, cfg Config, st *rover, 
 	})
 }
 
-// subscribeControl wires control commands from the dashboard/coordinator. A
-// "kill" naming THIS rover triggers a silent death: it stops bidding,
-// heartbeating, executing and telemetering so the coordinator self-heals the
-// lease by TTL expiry. Kills for other robots are ignored; a repeated kill is a
-// no-op (kill is idempotent).
+// subscribeControl wires control commands from the dashboard/coordinator.
+//
+//   - A "kill" naming THIS rover triggers a recoverable outage: it stops bidding,
+//     heartbeating and executing so the coordinator self-heals the lease by TTL
+//     expiry, stays dark at its failure position, then revives in place after the
+//     outage window. Kills for other robots are ignored; a repeated kill while
+//     already down is a no-op (kill is idempotent).
+//   - A "setFailureProb" is BROADCAST (no Robot target): every rover sets its OWN
+//     per-interval random-failure probability (issue 08 — swarm under stress).
+//     The value is clamped to [0,1]; 0 disables induced failures.
 func subscribeControl(conn *bus.Conn, cfg Config, st *rover) (func(), error) {
 	return bus.SubscribeJSON(conn, wire.SubjControl, func(c wire.Control) {
-		if c.Cmd == "kill" && c.Robot == cfg.ID {
-			st.kill()
+		switch c.Cmd {
+		case "kill":
+			if c.Robot == cfg.ID {
+				st.kill()
+			}
+		case "setFailureProb":
+			st.setFailureProb(c.Value)
 		}
 	})
 }
 
-// telemetryLoop runs the rover's self-report stream until ctx is cancelled or
-// the rover suffers a silent death. On death it emits one final alive=false
-// telemetry so the dashboard shows the rover down, then goes silent on the bus
-// (a dead rover is silent); kill() has already cleared alive.
+// telemetryLoop runs the rover's self-report stream until ctx is cancelled. It
+// runs CONTINUOUSLY across a kill: while the rover is down it keeps emitting
+// alive=false telemetry at its (unchanging) failure position, so the dashboard
+// shows the rover stopped exactly where it failed rather than vanishing; once it
+// revives it resumes alive=true telemetry from that same spot. The kill itself
+// is reflected within one tick (alive flips in kill()).
 func telemetryLoop(ctx context.Context, conn *bus.Conn, cfg Config, st *rover) error {
 	ticker := time.NewTicker(telemetryEvery)
 	defer ticker.Stop()
@@ -346,9 +525,6 @@ func telemetryLoop(ctx context.Context, conn *bus.Conn, cfg Config, st *rover) e
 		select {
 		case <-ctx.Done():
 			return ctx.Err()
-		case <-st.dead:
-			publishTelemetry(conn, cfg, st)
-			return nil
 		case <-ticker.C:
 			publishTelemetry(conn, cfg, st)
 		}
@@ -371,6 +547,11 @@ func execute(ctx context.Context, cfg Config, conn *bus.Conn, st *rover, hb time
 	}
 	defer st.release(aw.TaskID)
 
+	// Capture THIS run's outage signal once: a kill during the run closes it and
+	// the drive/work loops abort; a kill+revive that already happened means this
+	// run selects on the fresh channel revival installed (it only runs while alive).
+	down := st.downCh()
+
 	st.addLoad(1)
 	defer st.addLoad(-1)
 
@@ -379,12 +560,27 @@ func execute(ctx context.Context, cfg Config, conn *bus.Conn, st *rover, hb time
 	heart := time.NewTicker(hb)
 	defer heart.Stop()
 
+	// fault is the random-failure roll, ticking throughout the drive and work
+	// phases (issue 08). On a HIT the rover silently ABANDONS the task — it
+	// returns without completing, failing or refusing — so it stops heartbeating
+	// this lease and the coordinator self-heals it by TTL expiry (the exact same
+	// heal path as a kill, but the rover stays ALIVE and immediately frees its
+	// load/inFlight via the defers above, so it can bid again at once).
+	fault := time.NewTicker(faultCheckEvery)
+	defer fault.Stop()
+
 	// Heartbeat immediately so the lease is renewed before the first TTL window
 	// can lapse, then on every tick throughout the drive and work phases below.
 	sendHeartbeat(conn, cfg.ID, aw.TaskID)
 
-	if !drive(ctx, cfg, conn, st, heart, aw) {
+	switch drive(ctx, cfg, conn, st, heart, fault, down, aw) {
+	case phaseDone:
+		// arrived at the worksite: fall through to the work phase below
+	case phaseAbort:
 		return // ctx cancelled or rover killed mid-drive: no completion
+	case phaseFault:
+		slog.Warn("fault", "rover", cfg.ID, "task", aw.TaskID, "phase", "drive")
+		return // random fault mid-drive: silently abandon, lease TTL-expires
 	}
 
 	// Cooperative failure: this rover is configured to FAIL this task. It has
@@ -404,8 +600,14 @@ func execute(ctx context.Context, cfg Config, conn *bus.Conn, st *rover, hb time
 		return
 	}
 
-	if !workPhase(ctx, cfg, conn, st, heart, aw) {
+	switch workPhase(ctx, cfg, conn, st, heart, fault, down, aw) {
+	case phaseDone:
+		// worked the task to completion: fall through to report Complete below
+	case phaseAbort:
 		return // ctx cancelled or rover killed mid-work: no completion
+	case phaseFault:
+		slog.Warn("fault", "rover", cfg.ID, "task", aw.TaskID, "phase", "work")
+		return // random fault mid-work: silently abandon, lease TTL-expires
 	}
 
 	_ = conn.PublishJSON(wire.SubjTaskComplete, wire.Complete{
@@ -415,11 +617,34 @@ func execute(ctx context.Context, cfg Config, conn *bus.Conn, st *rover, hb time
 	slog.Info("complete", "rover", cfg.ID, "task", aw.TaskID)
 }
 
+// phaseResult is the outcome of a drive or work phase, telling execute whether
+// to proceed, silently abandon (no completion), or silently abandon on a random
+// fault (issue 08).
+type phaseResult int
+
+const (
+	phaseDone  phaseResult = iota // phase finished normally (arrived / worked)
+	phaseAbort                    // ctx cancelled or rover killed: go silent, no completion
+	phaseFault                    // random fault hit: silently abandon, lease TTL-expires
+)
+
+// rollFault reports whether the random-failure roll fires this interval: a hit
+// with probability st.failProb (issue 08). At failProb=0 it can never fire.
+// math/rand/v2 is the correct, goroutine-safe choice here: this is sim fault
+// injection (a swarm-stress knob), not a security-sensitive draw.
+//
+//nolint:gosec // G404: sim fault injection, not security-sensitive; math/rand/v2 is intended.
+func rollFault(st *rover) bool {
+	return rand.Float64() < st.failureProb()
+}
+
 // drive interpolates the rover toward aw.Pos, one moveStep of travel per move
-// tick, heartbeating on the heart ticker meanwhile. It returns true on arrival,
-// false if ctx is cancelled or the rover is killed first (in which case the
-// caller must NOT complete the task — a dead rover goes silent).
-func drive(ctx context.Context, cfg Config, conn *bus.Conn, st *rover, heart *time.Ticker, aw wire.Award) bool {
+// tick, heartbeating on the heart ticker meanwhile. It returns phaseDone on
+// arrival, phaseAbort if ctx is cancelled or the rover is killed first, and
+// phaseFault if the random-failure roll fires (issue 08). On anything but
+// phaseDone the caller must NOT complete the task — the rover goes silent and
+// the coordinator self-heals the lease.
+func drive(ctx context.Context, cfg Config, conn *bus.Conn, st *rover, heart, fault *time.Ticker, down <-chan struct{}, aw wire.Award) phaseResult {
 	// maxStep is how far the rover may advance per move tick at cruise speed.
 	maxStep := roverSpeed * moveStep.Seconds()
 
@@ -428,29 +653,35 @@ func drive(ctx context.Context, cfg Config, conn *bus.Conn, st *rover, heart *ti
 
 	// Snap onto the target immediately if we are already there.
 	if st.moveToward(aw.Pos, maxStep) {
-		return true
+		return phaseDone
 	}
 	for {
 		select {
 		case <-ctx.Done():
-			return false
-		case <-st.dead:
-			return false // killed mid-drive: abandon without heartbeating or completing
+			return phaseAbort
+		case <-down:
+			return phaseAbort // killed mid-drive: abandon without heartbeating or completing
+		case <-fault.C:
+			if rollFault(st) {
+				return phaseFault // random fault mid-drive: silently abandon
+			}
 		case <-heart.C:
 			sendHeartbeat(conn, cfg.ID, aw.TaskID)
 		case <-move.C:
 			if st.moveToward(aw.Pos, maxStep) {
-				return true
+				return phaseDone
 			}
 		}
 	}
 }
 
 // workPhase holds the rover at the worksite for workDuration, draining battery
-// over time and heartbeating the lease. It returns true on completion, false if
-// ctx is cancelled or the rover is killed first (in which case the caller must
-// NOT complete the task — a dead rover goes silent).
-func workPhase(ctx context.Context, cfg Config, conn *bus.Conn, st *rover, heart *time.Ticker, aw wire.Award) bool {
+// over time and heartbeating the lease. It returns phaseDone on completion,
+// phaseAbort if ctx is cancelled or the rover is killed first, and phaseFault
+// if the random-failure roll fires (issue 08). On anything but phaseDone the
+// caller must NOT complete the task — the rover goes silent and the coordinator
+// self-heals the lease.
+func workPhase(ctx context.Context, cfg Config, conn *bus.Conn, st *rover, heart, fault *time.Ticker, down <-chan struct{}, aw wire.Award) phaseResult {
 	done := time.NewTimer(workDuration)
 	defer done.Stop()
 	tick := time.NewTicker(moveStep)
@@ -459,15 +690,19 @@ func workPhase(ctx context.Context, cfg Config, conn *bus.Conn, st *rover, heart
 	for {
 		select {
 		case <-ctx.Done():
-			return false
-		case <-st.dead:
-			return false // killed mid-work: abandon without heartbeating or completing
+			return phaseAbort
+		case <-down:
+			return phaseAbort // killed mid-work: abandon without heartbeating or completing
+		case <-fault.C:
+			if rollFault(st) {
+				return phaseFault // random fault mid-work: silently abandon
+			}
 		case <-heart.C:
 			sendHeartbeat(conn, cfg.ID, aw.TaskID)
 		case <-tick.C:
 			st.drainOverTime(drainPerWorkSec * moveStep.Seconds())
 		case <-done.C:
-			return true
+			return phaseDone
 		}
 	}
 }

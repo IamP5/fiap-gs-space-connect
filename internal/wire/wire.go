@@ -152,6 +152,7 @@ const (
 	EventExpired  = "expired"  // a lease TTL-expired; the task is orphaned and re-auctioned (TaskID)
 	EventSolidify = "solidify" // a task was completed end-to-end (Robot, TaskID)
 	EventKilled   = "killed"   // a rover was killed (scripted or by the dashboard) (Robot)
+	EventRevived  = "revived"  // a downed rover came back alive in place after its outage (Robot)
 )
 
 // Event is a discrete choreography beat derived from a real engine event
@@ -177,13 +178,49 @@ type Snapshot struct {
 	At        domain.Tick `json:"at"`
 }
 
+// EarthUplink is the delayed Earth-bound telemetry view (issue 09). It rides
+// the earth.uplink subject ONLY (ADR-0002 / TECHSPEC §8: the latency shim never
+// touches heartbeats or the tactical loop). It is a lagging copy of the world so
+// the Earth panel can show telemetry still in-flight while the swarm has already
+// healed locally. Type is always "earth" so the browser routes it apart from a
+// Snapshot.
+type EarthUplink struct {
+	Type   string      `json:"type"` // always "earth"
+	Rovers []RoverView `json:"rovers"`
+	Tasks  []TaskView  `json:"tasks"`
+	At     domain.Tick `json:"at"` // the world time this view reflects (lag = now - At)
+}
+
 // --- Browser → server control (TECHSPEC §4) ---
 
 // Control is a command from the dashboard. Skeleton wires the relay path; the
-// commands themselves (kill, setLatency, setFailureProb) arrive in later slices.
+// commands themselves (kill, killContainer, setLatency, setFailureProb,
+// reloadDemo) arrive in later slices.
+//
+// "kill" vs "killContainer" are two DISTINCT heal triggers that both land on the
+// same self-heal path (lease Expiry → Re-auction):
+//   - "kill" is the soft, in-proc death: the target Robot Agent flips itself dead
+//     (stops bidding/heartbeating/executing) so its Lease TTL-expires. This is the
+//     headline live demo and is handled by the agent (see internal/agent).
+//   - "killContainer" is the container Encore (ADR-0001): the target rover runs as
+//     a standalone container, and the killer sidecar does a real `docker kill` on
+//     the mapped container. It is consumed ONLY by the killer sidecar (see
+//     internal/killer) — no agent acts on it, and the browser never touches
+//     docker.sock. The killed container goes silent on the bus, its Lease expires,
+//     and the same Re-auction heals it over the REAL bus.
+//
+// "reloadDemo" is cmd-only (no Robot/Value): it resets the demo board IN-PROCESS
+// so the swarm rebuilds the dome from scratch — no pod/process restart. The
+// coordinator returns every Blueprint task to UNCLAIMED (stamped with a version
+// that beats the current record so the monotonic World Model accepts the reset),
+// reloads the Planner, drops all live Leases, and re-arms the scripted kills so
+// the kill→heal money shot replays. It works in both the in-proc compose mode and
+// the external (k8s pod-per-rover) mode. Consumed ONLY by the coordinator.
+//
+// Robot carries the target rover for both "kill" and "killContainer".
 type Control struct {
-	Cmd   string         `json:"cmd"`             // "kill" | "setLatency" | "setFailureProb"
-	Robot domain.RobotID `json:"robot,omitempty"` // target rover for "kill"
+	Cmd   string         `json:"cmd"`             // "kill" | "killContainer" | "setLatency" | "setFailureProb" | "reloadDemo"
+	Robot domain.RobotID `json:"robot,omitempty"` // target rover for "kill" / "killContainer"
 	Value float64        `json:"value,omitempty"` // slider value for latency/failure
 }
 

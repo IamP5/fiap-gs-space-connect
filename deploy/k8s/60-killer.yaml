@@ -1,0 +1,102 @@
+# Killer sidecar — the SINGLE privileged seam of the whole stack, retained for
+# parity with the docker-compose encore. It joins the swarm bus as a plain NATS
+# client and (with KILLER_ON_KILL=false) acts ONLY on the `killContainer` encore
+# control, doing a real `kubectl delete pod -l rover=Rx -n swarmbuild
+# --grace-period=0 --ignore-not-found`.
+#
+# IMPORTANT: the dashboard's headline KILL Rx is NOT a pod delete. It is a
+# recoverable in-process OUTAGE handled by the in-pod agent itself: the rover
+# stops bidding/heartbeating and goes dark AT ITS FAILURE POSITION (its Lease
+# TTL-expires → the swarm self-heals onto a neighbour), then the SAME rover
+# revives in place after its outage window (--recover-ms, ~6s). This simulates a
+# real failure without losing the rover's position or restarting the Pod — a
+# fresh Pod would boot at its start position, which is exactly what we DON'T want.
+# So KILLER_ON_KILL is false here; the killer never deletes a Pod for a plain KILL.
+#
+# The ONLY thing that can delete pods is this ServiceAccount, scoped by RBAC to
+# nothing but pods in the swarmbuild namespace (get/list/delete). The browser, the
+# gateway, the coordinator, and the Rover Pods NEVER get this token — exactly as
+# the docker-compose variant gives only the killer the docker socket.
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: killer
+  namespace: swarmbuild
+  labels:
+    app: swarmbuild
+    role: killer
+---
+# Least-privilege: a namespaced Role (not a ClusterRole) granting only the pod
+# verbs the killer needs, only in this namespace. No create, no exec, no other
+# resources — deleting a Rover Pod is the entire privilege.
+apiVersion: rbac.authorization.k8s.io/v1
+kind: Role
+metadata:
+  name: killer-pod-deleter
+  namespace: swarmbuild
+  labels:
+    app: swarmbuild
+    role: killer
+rules:
+  - apiGroups: [""]
+    resources: ["pods"]
+    verbs: ["get", "list", "delete"]
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: RoleBinding
+metadata:
+  name: killer-pod-deleter
+  namespace: swarmbuild
+  labels:
+    app: swarmbuild
+    role: killer
+subjects:
+  - kind: ServiceAccount
+    name: killer
+    namespace: swarmbuild
+roleRef:
+  kind: Role
+  name: killer-pod-deleter
+  apiGroup: rbac.authorization.k8s.io
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: killer
+  namespace: swarmbuild
+  labels:
+    app: swarmbuild
+    role: killer
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: swarmbuild
+      role: killer
+  template:
+    metadata:
+      labels:
+        app: swarmbuild
+        role: killer
+    spec:
+      # Bind the least-privilege SA: its mounted token is what kubectl inside the
+      # killer authenticates with. This is the one Pod in the stack with it.
+      serviceAccountName: killer
+      containers:
+        - name: killer
+          image: swarmbuild-killer-k8s:dev
+          imagePullPolicy: IfNotPresent # use the kind-loaded local image
+          env:
+            - name: NATS_URL
+              value: nats://nats:4222
+            - name: KILLER_BACKEND
+              value: kubectl # delete Pods via kubectl, not `docker kill`
+            - name: KILLER_ON_KILL
+              value: "false" # headline KILL is an in-process recoverable outage, NOT a pod delete
+            - name: KILLER_NAMESPACE
+              value: swarmbuild
+            # Robot=<pod label selector>; the parser cuts on the FIRST `=`, so
+            # R1=rover=R1 maps Robot R1 → selector `rover=R1`. The killer runs
+            # `kubectl delete pod -l rover=R1 -n swarmbuild ...`.
+            - name: KILLER_TARGETS
+              value: R1=rover=R1,R2=rover=R2,R3=rover=R3,R4=rover=R4,R5=rover=R5,R6=rover=R6

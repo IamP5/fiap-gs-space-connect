@@ -1,0 +1,65 @@
+# NATS — the swarm bus. Every Rover Pod, the coordinator, the gateway, and the
+# killer are plain NATS clients of this one service. JetStream on (-js), HTTP
+# monitoring on 8222 (-m) so we can readiness-probe /healthz.
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: nats
+  namespace: swarmbuild
+  labels:
+    app: swarmbuild
+    role: nats
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: swarmbuild
+      role: nats
+  template:
+    metadata:
+      labels:
+        app: swarmbuild
+        role: nats
+    spec:
+      containers:
+        - name: nats
+          image: nats:2.10-alpine
+          args: ["-js", "-m", "8222"] # JetStream on; monitoring (/healthz) on 8222
+          ports:
+            - name: client
+              containerPort: 4222
+            - name: monitor
+              containerPort: 8222
+          readinessProbe:
+            httpGet:
+              path: /healthz
+              port: 8222
+            initialDelaySeconds: 1
+            periodSeconds: 3
+            timeoutSeconds: 2
+          livenessProbe:
+            httpGet:
+              path: /healthz
+              port: 8222
+            initialDelaySeconds: 3
+            periodSeconds: 10
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: nats
+  namespace: swarmbuild
+  labels:
+    app: swarmbuild
+    role: nats
+spec:
+  selector:
+    app: swarmbuild
+    role: nats
+  ports:
+    - name: client
+      port: 4222
+      targetPort: 4222
+    - name: monitor
+      port: 8222
+      targetPort: 8222

@@ -1,7 +1,7 @@
 # SwarmBuild MVP — Technical Specification
 
-> Demo/showcase implementation of the [SwarmBuild PRD](../PRD-SwarmBuild-MVP.md).
-> Domain language: [CONTEXT.md](../CONTEXT.md). Load-bearing decisions: [docs/adr/](./adr/).
+> Demo/showcase implementation of the [SwarmBuild PRD](./PRD-SwarmBuild-MVP.md).
+> Domain language: [CONTEXT.md](../../CONTEXT.md). Load-bearing decisions: [docs/adr/](./adr/).
 > Status: ready to build.
 
 ## 1. What this is

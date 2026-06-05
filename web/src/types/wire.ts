@@ -35,7 +35,7 @@ export type TaskView = {
 // contradict the rovers/tasks state. Beats are transient — each snapshot carries
 // only those since the previous one. `value` carries the bid cost for "bid".
 export type WorldEvent = {
-  kind: string; // "bid" | "won" | "expired" | "solidify" | "killed"
+  kind: string; // "bid" | "won" | "expired" | "solidify" | "killed" | "revived"
   task_id?: string;
   robot_id?: string;
   value?: number;
@@ -51,8 +51,31 @@ export type Snapshot = {
   at: number;
 };
 
-// Browser → server control message (TECHSPEC §4). Not needed visually this
-// slice, but the shape is fixed here so the send path can use it.
+// EarthUplink — the DELAYED Earth-bound telemetry view (issue 09). It rides the
+// `earth.uplink` subject ONLY (ADR-0002: the latency shim never touches
+// heartbeats or the tactical loop), so it is a lagging copy of the world. At
+// high latency it trails the live Snapshot — that visible gap is the whole point
+// ("Earth never knew"). `type` is always "earth" so the browser routes it apart
+// from a Snapshot. Marshals as wire.go's EarthUplink: {type,rovers,tasks,at}.
+export type EarthUplink = {
+  type: "earth";
+  rovers: RoverView[];
+  tasks: TaskView[];
+  at: number; // the world time this view reflects (lag = snapshot.at - earth.at)
+};
+
+// Browser → server control message (TECHSPEC §4). `cmd`/`robot`/`value` already
+// cover every command — no shape change per command:
+//   · kill            (robot) — flag-flip an in-proc rover dead (the headline)
+//   · killContainer   (robot) — the encore: gateway relays it onto NATS and a
+//                                killer sidecar runs `docker kill` on the real
+//                                rover container (R7), which then self-heals
+//                                (Expiry → Re-auction → Self-heal); issue 11
+//   · reloadDemo               — reset the board so the swarm rebuilds the dome
+//                                from scratch (the Coordinator re-seeds the
+//                                worksite); cmd-only, no robot/value
+//   · setFailureProb  (value) — 0..1 per-rover induced failure rate (issue 08)
+//   · setLatency      (value) — ms of delay on the earth.uplink feed (issue 09)
 export type Control = {
   cmd: string;
   robot?: string;
@@ -70,4 +93,12 @@ export function isSnapshot(v: unknown): v is Snapshot {
     Array.isArray(o.rovers) &&
     Array.isArray(o.tasks)
   );
+}
+
+// Narrow an arbitrary parsed JSON value to an EarthUplink. Same defensive ethos
+// as isSnapshot: a malformed earth frame must never crash the pure render.
+export function isEarthUplink(v: unknown): v is EarthUplink {
+  if (typeof v !== "object" || v === null) return false;
+  const o = v as Record<string, unknown>;
+  return o.type === "earth" && Array.isArray(o.rovers) && Array.isArray(o.tasks);
 }

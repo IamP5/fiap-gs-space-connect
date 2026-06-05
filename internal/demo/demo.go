@@ -57,6 +57,13 @@ type Config struct {
 	// KillTarget is the task whose builder is killed in the rehearsal. It must be a
 	// task with standby rovers free to heal it (a wall, not the final dome-cap).
 	KillTarget domain.TaskID
+	// NoInProcRovers selects the pod-per-rover mode: the coordinator spawns NO
+	// in-process rovers and arms NO scripted kills. Rovers instead join over NATS
+	// from outside (each its own container/pod), and the dashboard's KILL becomes a
+	// real pod delete (handled by the killer sidecar's kubectl backend), so a
+	// scripted in-proc kill would be wrong here. The default (false) is the
+	// in-process swarm that the docker-compose demo runs, byte-for-byte unchanged.
+	NoInProcRovers bool
 }
 
 // Rehearsal is the default demo pacing: a kill→heal arc that reads in ~12–20 s.
@@ -71,6 +78,20 @@ func Rehearsal() Config {
 	}
 }
 
+// External is the pod-per-rover pacing: the same legible auction/lease windows as
+// Rehearsal, but with NO in-process rovers and NO scripted kill. The coordinator
+// still loads the blueprint and runs the auction, the Lease Manager, the World
+// Model, and snapshots; the rovers join over NATS from outside (each its own
+// container/pod), and the dashboard's KILL is a real pod delete that the swarm
+// Self-heals over the real bus. KillTarget is empty so DomeScenario produces no
+// ScriptedKills (a scripted in-proc kill has nothing to kill here).
+func External() Config {
+	cfg := Rehearsal()
+	cfg.NoInProcRovers = true
+	cfg.KillTarget = "" // no scripted kill: kills are real pod deletes from outside
+	return cfg
+}
+
 // DomeScenario assembles the full scripted board for the rehearsal: the lunar
 // habitat dome blueprint, a fixed six-rover swarm, and the single scripted kill,
 // all folded into a coordinator.Config. Because the board (positions, batteries,
@@ -78,15 +99,26 @@ func Rehearsal() Config {
 // reproduces beat-for-beat: the same rover wins the target wall, is killed at the
 // same beat, and the same standby heals it — every time.
 //
+// When cfg.NoInProcRovers is set (the External pod-per-rover mode), the returned
+// Config carries NO Rovers and NO ScriptedKills: the coordinator builds the same
+// dome but the rovers join over NATS from outside and kills are real pod deletes.
+//
 // natsURL is the bus to run against. Pass cfg from Rehearsal (or a tuned copy).
 func DomeScenario(natsURL string, cfg Config) coordinator.Config {
 	blueprint := DomeBlueprint()
-	rovers := DomeRovers()
 
+	// In pod-per-rover mode the coordinator runs ZERO in-process rovers (they join
+	// over NATS from outside) and arms NO scripted kill (kills are real pod deletes
+	// from the dashboard). Otherwise it spawns the fixed six-rover swarm and the
+	// single reproducible rehearsal kill, exactly as the docker-compose demo does.
+	var rovers []agent.Config
 	scripted := []coordinator.ScriptedKill(nil)
-	if cfg.KillTarget != "" {
-		scripted = []coordinator.ScriptedKill{
-			{WhenTaskLeased: cfg.KillTarget, After: cfg.KillAfterLeased},
+	if !cfg.NoInProcRovers {
+		rovers = DomeRovers()
+		if cfg.KillTarget != "" {
+			scripted = []coordinator.ScriptedKill{
+				{WhenTaskLeased: cfg.KillTarget, After: cfg.KillAfterLeased},
+			}
 		}
 	}
 

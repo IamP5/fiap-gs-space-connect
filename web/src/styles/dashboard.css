@@ -48,6 +48,78 @@
   color: var(--ink-mute);
 }
 
+/* ---- reload-demo button ----
+   A global demo control: resets the board so the swarm rebuilds the dome. Mirrors
+   the renderer-btn chrome (hairline-boxed caps), and carries the auto-margin that
+   pushes the whole right-hand cluster (reload · toggle · meta) hard-right. After a
+   click it shows a brief disabled "Reloading…" pulse so the operator sees it land. */
+.reload-btn {
+  margin-left: auto;
+  padding: 6px var(--s-md);
+  font-family: var(--display);
+  font-size: 12px;
+  font-weight: 700;
+  letter-spacing: 1.17px;
+  text-transform: uppercase;
+  color: var(--ink-mute);
+  background: transparent;
+  border: 1px solid var(--hairline-on-dark);
+  border-radius: var(--r-xs);
+  cursor: pointer;
+}
+
+.reload-btn:hover:not(:disabled) {
+  color: var(--on-primary);
+  border-color: var(--on-primary-mute);
+}
+
+.reload-btn:disabled {
+  color: var(--ink-mute);
+  cursor: not-allowed;
+}
+
+/* ---- renderer toggle (2D / 3D) ----
+   A hairline-boxed two-button switch, mirroring the badge chrome: no fill, the
+   active segment carries white text on a near-black fill, the rest is muted.
+   Sits in the right-hand cluster, after the reload-demo button. */
+.renderer-toggle {
+  display: inline-flex;
+  border: 1px solid var(--hairline-on-dark);
+  border-radius: var(--r-xs);
+  overflow: hidden;
+}
+
+/* The meta now follows the toggle, so it no longer needs the auto-margin. */
+.renderer-toggle + .meta {
+  margin-left: var(--s-md);
+}
+
+.renderer-btn {
+  padding: 6px var(--s-sm);
+  font-family: var(--display);
+  font-size: 12px;
+  font-weight: 700;
+  letter-spacing: 1.17px;
+  text-transform: uppercase;
+  color: var(--ink-mute);
+  background: transparent;
+  border: none;
+  cursor: pointer;
+}
+
+.renderer-btn + .renderer-btn {
+  border-left: 1px solid var(--hairline-on-dark);
+}
+
+.renderer-btn.is-active {
+  color: var(--on-primary);
+  background: var(--canvas-night-soft);
+}
+
+.renderer-btn:hover:not(.is-active) {
+  color: var(--on-primary-mute);
+}
+
 /* ---- connection indicator ----
    Eyebrow caps microtext + a single functional telemetry dot. No pill fill,
    no glow — the dot alone carries the signal. */
@@ -319,5 +391,498 @@
 }
 
 .kill-dismiss:hover {
+  color: var(--on-primary-mute);
+}
+
+/* ---- controls panel (stress dials) ----
+   Bottom-left dark chrome card, mirroring the ledger/kill treatment. Two range
+   sliders (failure + latency). Chrome stays black/white; the functional signal
+   color tints only the live numeric readout (a slider that is actively
+   stressing the swarm), never the chrome. */
+.controls-panel {
+  position: absolute;
+  bottom: var(--s-xl);
+  left: var(--s-xl);
+  width: 268px;
+  padding: var(--s-xl);
+  background: var(--canvas-night-soft);
+  border: 1px solid var(--hairline-on-dark);
+  border-radius: var(--r-xs);
+  z-index: 2;
+  display: flex;
+  flex-direction: column;
+  gap: var(--s-lg);
+}
+
+.controls-eyebrow {
+  font-family: var(--ui);
+  font-size: 12px;
+  letter-spacing: 0.96px;
+  text-transform: uppercase;
+  color: var(--ink-mute);
+}
+
+.control {
+  display: flex;
+  flex-direction: column;
+  gap: var(--s-xs);
+}
+
+.control-head {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+}
+
+.control-label {
+  font-family: var(--display);
+  font-size: 15px;
+  font-weight: 700;
+  letter-spacing: 1.17px;
+  text-transform: uppercase;
+  color: var(--on-primary);
+}
+
+.control-value {
+  font-family: var(--ui);
+  font-size: 13px;
+  font-weight: 700;
+  letter-spacing: 0.96px;
+  text-transform: uppercase;
+  color: var(--ink-mute);
+}
+
+/* A control that is actively stressing the swarm reads in the warn signal. */
+.control-value.is-live {
+  color: var(--signal-warn);
+}
+
+/* Range input — hairline track, square white thumb; no fills/glows. */
+.control-slider {
+  -webkit-appearance: none;
+  appearance: none;
+  width: 100%;
+  height: 2px;
+  background: var(--hairline-on-dark);
+  cursor: pointer;
+}
+
+.control-slider::-webkit-slider-thumb {
+  -webkit-appearance: none;
+  appearance: none;
+  width: 12px;
+  height: 12px;
+  border-radius: var(--r-xs);
+  background: var(--on-primary);
+  border: none;
+}
+
+.control-slider::-moz-range-thumb {
+  width: 12px;
+  height: 12px;
+  border-radius: var(--r-xs);
+  background: var(--on-primary);
+  border: none;
+}
+
+.control-caption {
+  margin: 0;
+  font-family: var(--ui);
+  font-size: 11px;
+  letter-spacing: 0.32px;
+  color: var(--ink-mute);
+  line-height: 1.4;
+}
+
+/* ---- earth panel (delayed Earth uplink) ----
+   Bottom-right dark chrome card. Shows how far Earth lags the live world and
+   what Earth thinks the swarm has built. The lag value is the live signal: it
+   reads ok-green while "live", warn-amber once it falls behind. */
+.earth-panel {
+  position: absolute;
+  bottom: var(--s-xl);
+  right: var(--s-xl);
+  width: 220px;
+  padding: var(--s-xl);
+  background: var(--canvas-night-soft);
+  border: 1px solid var(--hairline-on-dark);
+  border-radius: var(--r-xs);
+  z-index: 2;
+  display: flex;
+  flex-direction: column;
+  gap: var(--s-sm);
+}
+
+.earth-eyebrow {
+  font-family: var(--ui);
+  font-size: 12px;
+  letter-spacing: 0.96px;
+  text-transform: uppercase;
+  color: var(--ink-mute);
+}
+
+.earth-lag {
+  font-family: var(--display);
+  font-size: 22px;
+  font-weight: 700;
+  letter-spacing: 1.2px;
+  text-transform: uppercase;
+}
+
+.earth-lag.is-live {
+  color: var(--signal-ok);
+}
+
+.earth-lag.is-lagging {
+  color: var(--signal-warn);
+}
+
+.earth-stats {
+  margin: 0;
+  display: flex;
+  flex-direction: column;
+  gap: var(--s-xs);
+}
+
+.earth-stat {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  border-bottom: 1px solid var(--hairline-on-dark);
+  padding-bottom: var(--s-xs);
+}
+
+.earth-stat:last-child {
+  border-bottom: none;
+  padding-bottom: 0;
+}
+
+.earth-stat dt {
+  font-family: var(--ui);
+  font-size: 11px;
+  letter-spacing: 0.96px;
+  text-transform: uppercase;
+  color: var(--ink-mute);
+}
+
+.earth-stat dd {
+  margin: 0;
+  font-family: var(--ui);
+  font-size: 12px;
+  font-weight: 700;
+  letter-spacing: 0.5px;
+  color: var(--on-primary);
+}
+
+.earth-caption {
+  margin: 0;
+  font-family: var(--ui);
+  font-size: 11px;
+  letter-spacing: 0.32px;
+  color: var(--ink-mute);
+  line-height: 1.4;
+}
+
+.earth-empty {
+  margin: 0;
+  font-family: var(--ui);
+  font-size: 12px;
+  text-transform: uppercase;
+  letter-spacing: 0.96px;
+  color: var(--ink-mute);
+}
+
+/* ---- lab dock (stretch / encore affordances) ----
+   The opt-in "lab" layer — the CRDT partition narrative and the container
+   encore. Docked to the RIGHT EDGE and vertically centred so it never covers the
+   central worksite (the headline 3D money shot), and set apart from the four
+   corner panels so it reads as an opt-in layer, never headline chrome (ADR-0003).
+   Each card collapses to its header, so the operator only spends screen space on
+   what they are actively showing. */
+.encore-column {
+  position: absolute;
+  top: 50%;
+  right: var(--s-xl);
+  transform: translateY(-50%);
+  width: 296px;
+  max-height: calc(100% - var(--s-xxl) * 2);
+  overflow-y: auto;
+  z-index: 3;
+  display: flex;
+  flex-direction: column;
+  gap: var(--s-md);
+}
+
+/* Shared dark-chrome card for the two lab panels, matching the corner panels. */
+.lab-card {
+  background: var(--canvas-night-soft);
+  border: 1px solid var(--hairline-on-dark);
+  border-radius: var(--r-sm);
+  overflow: hidden;
+}
+
+/* The header doubles as the collapse toggle: the whole row is the button. */
+.lab-head {
+  width: 100%;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--s-sm);
+  padding: var(--s-md) var(--s-lg);
+  background: transparent;
+  border: none;
+  cursor: pointer;
+  font-family: var(--ui);
+  font-size: 12px;
+  letter-spacing: 0.96px;
+  text-transform: uppercase;
+  color: var(--ink-mute);
+  transition: color 0.15s ease;
+}
+
+.lab-head:hover {
+  color: var(--on-primary-mute);
+}
+
+/* Chevron: a corner glyph that points up when open, down when closed. */
+.lab-chevron {
+  flex: none;
+  width: 7px;
+  height: 7px;
+  border-right: 1.5px solid currentColor;
+  border-bottom: 1.5px solid currentColor;
+  transform: rotate(-135deg);
+  transition: transform 0.18s ease;
+}
+
+.lab-card[data-open="false"] .lab-chevron {
+  transform: rotate(45deg);
+}
+
+/* Collapsible body. */
+.lab-body {
+  padding: 0 var(--s-lg) var(--s-lg);
+  display: flex;
+  flex-direction: column;
+  gap: var(--s-md);
+}
+
+/* ---- partition narrative (CRDT, issue 10) ----
+   A self-contained, deterministic replay of the proven World Model merge: two
+   divergent rover views of the same task, shown SIDE BY SIDE, reconcile to the
+   single lower-rover-id winner. The three phase labels carry the narrative. */
+
+/* The three-state machine: PARTITIONED → RECONCILING → CONVERGED. The active
+   beat reads in the warn signal (mid-flight) until it lands on CONVERGED; past
+   beats brighten so the progression is legible. */
+.partition-phases {
+  display: flex;
+  align-items: center;
+  gap: var(--s-xs);
+  font-family: var(--display);
+  font-size: 11px;
+  font-weight: 700;
+  letter-spacing: 1.17px;
+  text-transform: uppercase;
+}
+
+.partition-phase {
+  color: var(--ink-mute);
+  transition: color 0.2s ease;
+}
+
+.partition-phase.is-done {
+  color: var(--on-primary-mute);
+}
+
+.partition-phase.is-active {
+  color: var(--signal-warn);
+}
+
+/* The terminal CONVERGED beat reads in the ok signal once it is the active one. */
+.partition-phase:last-child.is-active {
+  color: var(--signal-ok);
+}
+
+.partition-phase + .partition-phase::before {
+  content: "→";
+  margin-right: var(--s-xs);
+  color: var(--hairline-on-dark);
+}
+
+/* The two divergent copies, SIDE BY SIDE so the split reads spatially. */
+.partition-split {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: var(--s-sm);
+}
+
+.partition-view {
+  display: flex;
+  flex-direction: column;
+  gap: var(--s-xxs);
+  padding: var(--s-sm);
+  background: var(--canvas-night);
+  border: 1px solid var(--hairline-on-dark);
+  border-radius: var(--r-xs);
+  transition: border-color 0.2s ease;
+}
+
+.partition-view-label {
+  font-family: var(--ui);
+  font-size: 10px;
+  letter-spacing: 0.96px;
+  text-transform: uppercase;
+  color: var(--ink-mute);
+}
+
+.partition-view-id {
+  font-family: var(--display);
+  font-size: 22px;
+  font-weight: 700;
+  line-height: 1;
+  letter-spacing: 0.5px;
+  color: var(--on-primary);
+  transition: color 0.2s ease;
+}
+
+.partition-view-task {
+  display: flex;
+  align-items: center;
+  gap: var(--s-xxs);
+  font-family: var(--ui);
+  font-size: 11px;
+  letter-spacing: 0.32px;
+  color: var(--ink-mute);
+}
+
+/* On CONVERGED both copies agree → they read in the ok signal. */
+.partition-split.is-converged .partition-view {
+  border-color: rgba(46, 204, 113, 0.4);
+}
+
+.partition-split.is-converged .partition-view-id {
+  color: var(--signal-ok);
+}
+
+/* The merged result — the single winner the two copies fold into (CONVERGED). */
+.partition-merged {
+  display: flex;
+  align-items: center;
+  gap: var(--s-xs);
+  padding: var(--s-xs) var(--s-sm);
+  background: rgba(46, 204, 113, 0.08);
+  border: 1px solid rgba(46, 204, 113, 0.5);
+  border-radius: var(--r-xs);
+  font-family: var(--ui);
+  font-size: 11px;
+  letter-spacing: 0.5px;
+  text-transform: uppercase;
+  color: var(--signal-ok);
+}
+
+.partition-merged-id {
+  margin-left: auto;
+  font-family: var(--display);
+  font-weight: 700;
+  letter-spacing: 0.5px;
+}
+
+.partition-caption {
+  margin: 0;
+  font-family: var(--ui);
+  font-size: 11px;
+  letter-spacing: 0.32px;
+  color: var(--ink-mute);
+  line-height: 1.4;
+}
+
+.partition-btn {
+  align-self: flex-start;
+  padding: var(--s-xs) var(--s-md);
+  font-family: var(--display);
+  font-size: 13px;
+  font-weight: 700;
+  letter-spacing: 1.17px;
+  text-transform: uppercase;
+  color: var(--on-primary);
+  background: transparent;
+  border: 1px solid var(--hairline-on-dark);
+  border-radius: var(--r-xs);
+  cursor: pointer;
+  transition: border-color 0.15s ease;
+}
+
+.partition-btn:hover:not(:disabled) {
+  border-color: var(--on-primary-mute);
+}
+
+.partition-btn:disabled {
+  color: var(--ink-mute);
+  cursor: not-allowed;
+}
+
+/* ---- encore panel (real container kill, issue 11) ----
+   The optional encore: a two-step guarded button that fails a REAL rover
+   container over the real bus. The danger signal tints the armed FIRE button
+   only — same restraint as the kill panel. */
+.encore-caption {
+  margin: 0;
+  font-family: var(--ui);
+  font-size: 11px;
+  letter-spacing: 0.32px;
+  color: var(--ink-mute);
+  line-height: 1.4;
+}
+
+.encore-btn {
+  align-self: flex-start;
+  padding: var(--s-xs) var(--s-md);
+  font-family: var(--display);
+  font-size: 13px;
+  font-weight: 700;
+  letter-spacing: 1.17px;
+  text-transform: uppercase;
+  color: var(--on-primary);
+  background: transparent;
+  border: 1px solid var(--hairline-on-dark);
+  border-radius: var(--r-xs);
+  cursor: pointer;
+}
+
+.encore-btn:hover {
+  border-color: var(--on-primary-mute);
+}
+
+/* The armed FIRE button carries the danger signal (it kills a real container). */
+.encore-btn-fire {
+  color: var(--signal-down);
+  border-color: var(--signal-down);
+}
+
+.encore-btn-fire:hover {
+  color: var(--canvas-night);
+  background: var(--signal-down);
+}
+
+.encore-confirm {
+  display: flex;
+  align-items: center;
+  gap: var(--s-md);
+}
+
+.encore-cancel {
+  padding: 0;
+  font-family: var(--ui);
+  font-size: 11px;
+  letter-spacing: 0.96px;
+  text-transform: uppercase;
+  color: var(--ink-mute);
+  background: transparent;
+  border: none;
+  cursor: pointer;
+}
+
+.encore-cancel:hover {
   color: var(--on-primary-mute);
 }

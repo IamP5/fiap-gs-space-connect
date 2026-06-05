@@ -1,0 +1,8 @@
+# The SwarmBuild pod-per-rover swarm lives in its own namespace so the killer's
+# RBAC (delete pods) can be scoped to exactly this namespace and nothing else.
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: swarmbuild
+  labels:
+    app: swarmbuild

@@ -8,10 +8,10 @@ The whole pitch is a ~30-second money shot: kill a rover mid-wall, watch its tas
 re-auction and another rover finish the wall; the dome still closes.
 
 - Product thesis & domain language: [CONTEXT.md](./CONTEXT.md)
-- Product requirements: [PRD-SwarmBuild-MVP.md](./PRD-SwarmBuild-MVP.md)
-- Technical spec: [docs/TECHSPEC.md](./docs/TECHSPEC.md)
-- Load-bearing decisions: [docs/adr/](./docs/adr/)
-- Build backlog (vertical slices): [docs/issues/](./docs/issues/)
+- Product requirements: [PRD-SwarmBuild-MVP.md](./docs/mvp/PRD-SwarmBuild-MVP.md)
+- Technical spec: [docs/TECHSPEC.md](./docs/mvp/TECHSPEC.md)
+- Load-bearing decisions: [docs/adr/](./docs/mvp/adr/)
+- Build backlog (vertical slices): [docs/issues/](./docs/mvp/issues/)
 
 ## Architecture
 
@@ -44,6 +44,17 @@ docker compose -f deploy/docker-compose.yml up --build
 # Pre-demo smoke (build, assert healthy + auction completes, tear down):
 ./deploy/smoke.sh            # add --keep to leave it running
 ```
+
+The optional **container encore** (`docker kill` a real Rover container that heals over
+the bus) ships in the same compose file. See [docs/encore.md](./docs/mvp/encore.md) for how
+to run and rehearse it (and the Adapter seam for a spin-off capability profile).
+
+For the **pod-per-rover** variant — every Rover as its own Kubernetes Pod, the
+Coordinator running with no in-process Rovers, and the dashboard KILL doing a real
+`kubectl delete pod` that Self-heals by Re-auction onto a surviving Pod — see
+[deploy/k8s/README.md](./deploy/k8s/README.md) (`./deploy/k8s/up.sh` on a local kind
+cluster). The fast in-process compose stack above stays the headline (ADR-0001); this
+is the opt-in "each Rover is a real, separately-killable system" proof.
 
 ## Deep core (built)
 

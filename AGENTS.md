@@ -18,8 +18,9 @@ Engineering substance = four pure, unit-tested Go **deep modules** (`allocation`
 `world`, `planner`), wrapped in a thin sim + NATS bus + dashboard that make them *visible*.
 
 **Read these first:** [CONTEXT.md](./CONTEXT.md) (domain language — load-bearing),
-[PRD-SwarmBuild-MVP.md](./PRD-SwarmBuild-MVP.md), [docs/TECHSPEC.md](./docs/TECHSPEC.md),
-[docs/adr/](./docs/adr/).
+[PRD-SwarmBuild-MVP.md](./docs/mvp/PRD-SwarmBuild-MVP.md), [docs/TECHSPEC.md](./docs/mvp/TECHSPEC.md),
+[docs/adr/](./docs/mvp/adr/). The optional container encore (`docker kill` a real Rover that
+heals over the bus) is documented in [docs/encore.md](./docs/mvp/encore.md).
 
 ## Layout
 
