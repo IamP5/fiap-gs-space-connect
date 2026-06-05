@@ -66,6 +66,11 @@ func dial(t *testing.T) *bus.Conn {
 // func; it waits for the subscription to be live before returning.
 func runKiller(t *testing.T, conn *bus.Conn, cfg killer.Config) context.CancelFunc {
 	t.Helper()
+	// Baseline the connection's subscription count BEFORE launching: killer.Run
+	// calls SubscribeJSON on its own goroutine, so we wait for the count to rise
+	// past this baseline to know its subscription is registered.
+	base := conn.Raw().NumSubscriptions()
+
 	ctx, cancel := context.WithCancel(context.Background())
 	done := make(chan struct{})
 	go func() {
@@ -78,7 +83,20 @@ func runKiller(t *testing.T, conn *bus.Conn, cfg killer.Config) context.CancelFu
 		cancel()
 		<-done
 	})
-	// Flush so the SubscribeJSON is registered on the server before tests publish.
+
+	// Wait until killer.Run's SubscribeJSON has actually registered before we let
+	// the test publish. A bare Flush() here would race the Run goroutine: it can
+	// run before SubscribeJSON is even called, leaving the subject subscriber-less
+	// when the test publishes, so NATS core silently drops the frame and the kill
+	// never fires (flaky "got none within 2s" under -shuffle/-race).
+	deadline := time.Now().Add(2 * time.Second)
+	for conn.Raw().NumSubscriptions() <= base {
+		if time.Now().After(deadline) {
+			t.Fatal("killer subscription never became live within 2s")
+		}
+		time.Sleep(time.Millisecond)
+	}
+	// Flush so the registered subscription is acked by the server before publishing.
 	_ = conn.Flush()
 	return cancel
 }
