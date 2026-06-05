@@ -10,6 +10,19 @@
 // Drop-in swap for WorldCanvas: same `{ snapshot, selected, onPick }` contract,
 // so App can toggle between the 3D scene and the 2D fallback.
 //
+// PERFORMANCE MODEL (the dashboard must run light on a projector laptop):
+//   - frameloop="demand": the render loop is IDLE unless something changed. We
+//     invalidate() on a new snapshot and WHILE beats animate; OrbitControls
+//     (makeDefault) invalidates during interaction. No 60fps idle burn.
+//   - Beats animate by MUTATING mesh/material refs inside useFrame — they NEVER
+//     trigger a React re-render. The snapshot→mesh tree only re-renders when a
+//     new snapshot arrives (~12 Hz), not per animation frame (r3f-fundamentals
+//     "Avoiding Re-renders"; r3f-animation "Transient Subscriptions").
+//   - Geometry buffers are shared: ONE set is created per Canvas mount and
+//     disposed on unmount, instead of every rover allocating its own
+//     (r3f-geometry "Reuse geometries").
+//   - dpr capped at 1.5 and bloom kept cheap (small kernel, no MSAA).
+//
 // HARD SCOPE GUARD (ADR-0004 — obeyed here):
 //   - Rover is PRIMITIVE geometry (low-poly box body + cylinder wheels). No CC0
 //     glTF was available offline and we must NOT fetch unlicensed assets, so the
@@ -21,9 +34,10 @@
 //   - No custom physics, no hand-modelled art.
 
 import { useEffect, useMemo, useRef, useState } from "react";
-import { Canvas, useFrame, type ThreeEvent } from "@react-three/fiber";
+import { Canvas, useFrame, useThree, type ThreeEvent } from "@react-three/fiber";
 import { Line, OrbitControls } from "@react-three/drei";
 import { EffectComposer, SelectiveBloom } from "@react-three/postprocessing";
+import { KernelSize } from "postprocessing";
 import * as THREE from "three";
 import type { RoverView, Snapshot, TaskView } from "../types/wire";
 import { batteryPercent } from "../lib/format";
@@ -54,6 +68,46 @@ const SIGNAL_IDLE = "#9aa4b2"; // idle / unclaimed
 // leaks onto the terrain, rovers, or dome (ADR-0004's "bloom only on halos").
 const HALO_BLOOM_LAYER = 11;
 
+// ---- shared geometry buffers ------------------------------------------------
+
+// Every rover/task draws from the SAME geometry instances, created once per
+// Canvas mount and disposed on unmount (r3f-geometry "Reuse geometries"). This
+// is the difference between holding ~10 GPU buffers and ~10×N. Built in a
+// useMemo so a 3D→2D→3D toggle gets a fresh, valid set each remount.
+type SceneGeo = {
+  hit: THREE.SphereGeometry;
+  body: THREE.BoxGeometry;
+  mast: THREE.BoxGeometry;
+  wheel: THREE.CylinderGeometry;
+  halo: THREE.RingGeometry;
+  won: THREE.RingGeometry;
+  sel: THREE.RingGeometry;
+  battery: THREE.BoxGeometry; // unit box, scaled in x by charge
+  foundation: THREE.BoxGeometry;
+  wall: THREE.BoxGeometry;
+  dome: THREE.SphereGeometry;
+};
+
+function makeSceneGeo(): SceneGeo {
+  return {
+    hit: new THREE.SphereGeometry(0.95, 16, 16),
+    body: new THREE.BoxGeometry(0.7, 0.34, 0.95),
+    mast: new THREE.BoxGeometry(0.3, 0.2, 0.3),
+    wheel: new THREE.CylinderGeometry(0.2, 0.2, 0.16, 12),
+    halo: new THREE.RingGeometry(0.62, 0.82, 40),
+    won: new THREE.RingGeometry(0.82, 0.98, 40),
+    sel: new THREE.RingGeometry(0.9, 1.02, 48),
+    battery: new THREE.BoxGeometry(1, 0.06, 0.06),
+    foundation: new THREE.BoxGeometry(1.1, 0.3, 1.1),
+    wall: new THREE.BoxGeometry(0.9, 1.1, 0.9),
+    dome: new THREE.SphereGeometry(1.0, 24, 16, 0, Math.PI * 2, 0, Math.PI / 2),
+  };
+}
+
+function disposeSceneGeo(g: SceneGeo) {
+  for (const key of Object.keys(g) as (keyof SceneGeo)[]) g[key].dispose();
+}
+
 // Rover status → halo color. Idle (alive, no task), bidding (a transient beat,
 // handled separately), working (alive, holding a task), dead. Pure read of the
 // snapshot rover.
@@ -68,9 +122,9 @@ function roverHaloColor(r: RoverView): string {
 type Rover3DProps = {
   rover: RoverView;
   map: SceneMap;
+  geo: SceneGeo;
   selected: boolean;
-  bidPulse: number; // 0 = no active bid beat; else 0..1 progress
-  wonPulse: number; // 0 = no active winner beat; else 0..1 progress
+  beats: React.RefObject<ActiveBeat[]>; // live beat list, read in useFrame
   onPick: (id: string) => void;
 };
 
@@ -80,30 +134,80 @@ type Rover3DProps = {
 // click raycast reliably selects the rover the user sees — the proxy uses the
 // SAME world→scene map as the rendered body, so the hit can never drift (the 3D
 // analogue of the 2D canvas's shared-projection guarantee).
-function Rover3D({ rover, map, selected, bidPulse, wonPulse, onPick }: Rover3DProps) {
+//
+// The bid-flash and winner-glow are animated by mutating refs in useFrame
+// (below), NOT by re-rendering — this component only re-renders when its
+// snapshot-derived props change (~12 Hz), never per animation frame.
+function Rover3D({ rover, map, geo, selected, beats, onPick }: Rover3DProps) {
   const p = map.at(rover.pos);
   const dim = !rover.alive;
   const bodyColor = dim ? "#2a2a2e" : "#f0f0fa";
+  const haloColor = roverHaloColor(rover);
 
   const haloRef = useRef<THREE.Mesh>(null);
+  const haloMatRef = useRef<THREE.MeshStandardMaterial>(null);
   const wonRef = useRef<THREE.Mesh>(null);
+  const wonMatRef = useRef<THREE.MeshStandardMaterial>(null);
 
   // Put the status halo + winner ring on the bloom layer so ONLY they glow.
+  // Once on mount — the meshes are stable across re-renders.
   useEffect(() => {
     haloRef.current?.layers.enable(HALO_BLOOM_LAYER);
     wonRef.current?.layers.enable(HALO_BLOOM_LAYER);
-  });
+  }, []);
 
-  const haloColor = roverHaloColor(rover);
-  // A bid beat momentarily flips the halo amber and pulses it (the "bid flash").
-  const flashColor = bidPulse > 0 ? SIGNAL_WARN : haloColor;
-  const haloScale = 1 + (bidPulse > 0 ? Math.sin(bidPulse * Math.PI) * 0.35 : 0);
+  // Animate the bid-flash (halo pulse + amber) and the winner glow by mutating
+  // the meshes directly. Reads the live beat list every frame — but the loop is
+  // demand-driven, so this only runs while a render is invalidated (i.e. while
+  // beats are active or the user is interacting).
+  const id = rover.id;
+  useFrame(() => {
+    const list = beats.current;
+    if (!list) return;
+    const now = performance.now();
+    let bid = 0;
+    let won = 0;
+    for (const b of list) {
+      if (b.robot_id !== id) continue;
+      if (b.kind === "bid") bid = beatProgress(b, now);
+      else if (b.kind === "won") won = beatProgress(b, now);
+    }
+
+    const halo = haloRef.current;
+    const haloMat = haloMatRef.current;
+    if (halo && haloMat) {
+      halo.scale.setScalar(1 + (bid > 0 ? Math.sin(bid * Math.PI) * 0.35 : 0));
+      const c = bid > 0 ? SIGNAL_WARN : haloColor;
+      haloMat.color.set(c);
+      haloMat.emissive.set(c);
+    }
+
+    const wonMesh = wonRef.current;
+    const wonMat = wonMatRef.current;
+    if (wonMesh && wonMat) {
+      if (won > 0) {
+        wonMesh.visible = true;
+        wonMesh.scale.setScalar(1 + won * 1.6);
+        wonMat.opacity = 1 - won;
+        wonMat.emissiveIntensity = 2.4 * (1 - won);
+      } else if (wonMesh.visible) {
+        wonMesh.visible = false;
+      }
+    }
+  });
 
   // The selection halo is the clear KILL-target affordance, mirroring the 2D
   // canvas: danger-red around a live rover, muted around a dead one.
   const selColor = dim ? SIGNAL_IDLE : SIGNAL_DOWN;
 
   const battery = batteryPercent(rover.battery);
+  const batteryColor = dim
+    ? "#555"
+    : battery > 50
+      ? SIGNAL_OK
+      : battery > 20
+        ? SIGNAL_WARN
+        : SIGNAL_DOWN;
 
   return (
     <group position={[p.x, p.y, p.z]}>
@@ -111,6 +215,7 @@ function Rover3D({ rover, map, selected, bidPulse, wonPulse, onPick }: Rover3DPr
           reliably land; shares this group's transform (= map.at), so the raycast
           hit and the rendered rover are positioned by the exact same math. */}
       <mesh
+        geometry={geo.hit}
         position={[0, 0.45, 0]}
         onClick={(e: ThreeEvent<MouseEvent>) => {
           e.stopPropagation(); // empty-space deselect is handled by the ground
@@ -119,13 +224,11 @@ function Rover3D({ rover, map, selected, bidPulse, wonPulse, onPick }: Rover3DPr
         onPointerOver={() => (document.body.style.cursor = "pointer")}
         onPointerOut={() => (document.body.style.cursor = "default")}
       >
-        <sphereGeometry args={[0.95, 16, 16]} />
         <meshBasicMaterial transparent opacity={0} depthWrite={false} />
       </mesh>
 
       {/* Body — low-poly box (PRIMITIVE fallback per ADR-0004). */}
-      <mesh position={[0, 0.42, 0]} raycast={() => null}>
-        <boxGeometry args={[0.7, 0.34, 0.95]} />
+      <mesh geometry={geo.body} position={[0, 0.42, 0]} raycast={() => null}>
         <meshStandardMaterial
           color={bodyColor}
           metalness={0.2}
@@ -134,8 +237,7 @@ function Rover3D({ rover, map, selected, bidPulse, wonPulse, onPick }: Rover3DPr
         />
       </mesh>
       {/* Sensor mast block, so the rover reads as front-facing. */}
-      <mesh position={[0, 0.66, -0.18]} raycast={() => null}>
-        <boxGeometry args={[0.3, 0.2, 0.3]} />
+      <mesh geometry={geo.mast} position={[0, 0.66, -0.18]} raycast={() => null}>
         <meshStandardMaterial color={bodyColor} metalness={0.2} roughness={0.7} />
       </mesh>
       {/* Four cylinder wheels (PRIMITIVE). */}
@@ -149,29 +251,30 @@ function Rover3D({ rover, map, selected, bidPulse, wonPulse, onPick }: Rover3DPr
       ).map(([wx, wz], i) => (
         <mesh
           key={i}
+          geometry={geo.wheel}
           position={[wx, 0.2, wz]}
           rotation={[0, 0, Math.PI / 2]}
           raycast={() => null}
         >
-          <cylinderGeometry args={[0.2, 0.2, 0.16, 12]} />
           <meshStandardMaterial color={dim ? "#141416" : "#3a3a3f"} roughness={0.9} />
         </mesh>
       ))}
 
       {/* Status halo — a thin ring on the ground under the rover. This is the
           ONLY rover element on the bloom layer, so the glow is confined to it.
-          Uses an emissive, non-tone-mapped material so it reads as "lit". */}
+          Uses an emissive, non-tone-mapped material so it reads as "lit". Color
+          + scale are mutated in useFrame (the bid-flash) without re-rendering. */}
       <mesh
         ref={haloRef}
+        geometry={geo.halo}
         position={[0, 0.04, 0]}
         rotation={[-Math.PI / 2, 0, 0]}
-        scale={haloScale}
         raycast={() => null}
       >
-        <ringGeometry args={[0.62, 0.82, 40]} />
         <meshStandardMaterial
-          color={flashColor}
-          emissive={flashColor}
+          ref={haloMatRef}
+          color={haloColor}
+          emissive={haloColor}
           emissiveIntensity={dim ? 1.4 : 2.2}
           toneMapped={false}
           transparent
@@ -180,43 +283,53 @@ function Rover3D({ rover, map, selected, bidPulse, wonPulse, onPick }: Rover3DPr
         />
       </mesh>
 
-      {/* Winner glow — an expanding ring on a "won" beat (the auction winner). */}
-      {wonPulse > 0 ? (
-        <mesh
-          ref={wonRef}
-          position={[0, 0.05, 0]}
-          rotation={[-Math.PI / 2, 0, 0]}
-          scale={1 + wonPulse * 1.6}
-          raycast={() => null}
-        >
-          <ringGeometry args={[0.82, 0.98, 40]} />
-          <meshStandardMaterial
-            color={SIGNAL_OK}
-            emissive={SIGNAL_OK}
-            emissiveIntensity={2.4 * (1 - wonPulse)}
-            toneMapped={false}
-            transparent
-            opacity={1 - wonPulse}
-            side={THREE.DoubleSide}
-          />
-        </mesh>
-      ) : null}
+      {/* Winner glow — an expanding ring on a "won" beat (the auction winner).
+          Always mounted but hidden; visibility/scale/opacity are driven in
+          useFrame so it costs nothing to keep around between beats. */}
+      <mesh
+        ref={wonRef}
+        geometry={geo.won}
+        position={[0, 0.05, 0]}
+        rotation={[-Math.PI / 2, 0, 0]}
+        visible={false}
+        raycast={() => null}
+      >
+        <meshStandardMaterial
+          ref={wonMatRef}
+          color={SIGNAL_OK}
+          emissive={SIGNAL_OK}
+          emissiveIntensity={0}
+          toneMapped={false}
+          transparent
+          opacity={0}
+          side={THREE.DoubleSide}
+        />
+      </mesh>
 
       {/* Selection halo — the KILL-target affordance (NOT on the bloom layer, so
           it stays a crisp outline rather than a glow). */}
       {selected ? (
-        <mesh position={[0, 0.06, 0]} rotation={[-Math.PI / 2, 0, 0]} raycast={() => null}>
-          <ringGeometry args={[0.9, 1.02, 48]} />
+        <mesh
+          geometry={geo.sel}
+          position={[0, 0.06, 0]}
+          rotation={[-Math.PI / 2, 0, 0]}
+          raycast={() => null}
+        >
           <meshBasicMaterial color={selColor} transparent opacity={0.95} side={THREE.DoubleSide} />
         </mesh>
       ) : null}
 
-      {/* Battery tick: a short bar whose color encodes charge (functional). */}
-      <mesh position={[0, 0.92, 0]} raycast={() => null}>
-        <boxGeometry args={[0.5 * (battery / 100) + 0.02, 0.06, 0.06]} />
+      {/* Battery tick: a short bar whose color encodes charge (functional). A
+          shared unit box scaled in x, so charge changes never reallocate. */}
+      <mesh
+        geometry={geo.battery}
+        position={[0, 0.92, 0]}
+        scale={[0.5 * (battery / 100) + 0.02, 1, 1]}
+        raycast={() => null}
+      >
         <meshStandardMaterial
-          color={dim ? "#555" : battery > 50 ? SIGNAL_OK : battery > 20 ? SIGNAL_WARN : SIGNAL_DOWN}
-          emissive={dim ? "#000" : battery > 50 ? SIGNAL_OK : battery > 20 ? SIGNAL_WARN : SIGNAL_DOWN}
+          color={batteryColor}
+          emissive={batteryColor}
           emissiveIntensity={0.6}
           toneMapped={false}
         />
@@ -263,64 +376,75 @@ function LeaseBeam({ from, to, map }: { from: RoverView; to: TaskView; map: Scen
 // the mid ring, the dome task the cap. A DONE task is "built" (solid, lit by a
 // brief solidify pop); a not-yet-done task is a faint ghost of the structure to
 // come. Position + height come from lib/scene.ts — a pure read of the snapshot.
+// The solidify pop (scale + green flash) is animated in useFrame by mutating
+// refs, so a completing block never forces a scene re-render.
 function TaskBlock({
   task,
   map,
-  solidify,
+  geo,
+  beats,
 }: {
   task: TaskView;
   map: SceneMap;
-  solidify: number; // 0 = none; else 0..1 solidify-pop progress
+  geo: SceneGeo;
+  beats: React.RefObject<ActiveBeat[]>;
 }) {
   const tier = tierOf(task.type);
   const h = tierHeight(tier);
   const p = map.at(task.pos, 0);
   const built = isBuilt(task);
 
-  // Solidify pop: a brief upward scale + flash on a just-completed task.
-  const popScale = solidify > 0 ? 1 + Math.sin(solidify * Math.PI) * 0.25 : 1;
-
   const color = built ? "#cfcfd6" : task.status === "LEASED" ? SIGNAL_WARN : SIGNAL_IDLE;
   const opacity = built ? 1 : task.status === "LEASED" ? 0.5 : 0.28;
 
   // The dome cap reads as a hemisphere; foundations/walls as low blocks.
   const isCap = tier === "dome";
+  const blockGeo = isCap ? geo.dome : tier === "foundation" ? geo.foundation : geo.wall;
+
+  const meshRef = useRef<THREE.Mesh>(null);
+  const matRef = useRef<THREE.MeshStandardMaterial>(null);
+
+  const id = task.id;
+  useFrame(() => {
+    const mesh = meshRef.current;
+    const mat = matRef.current;
+    if (!mesh || !mat) return;
+    const list = beats.current;
+    let solidify = 0;
+    if (list) {
+      const now = performance.now();
+      for (const b of list) {
+        if (b.kind === "solidify" && b.task_id === id) {
+          solidify = beatProgress(b, now);
+          break;
+        }
+      }
+    }
+    // Solidify pop: a brief upward scale + green flash on a just-completed task.
+    mesh.scale.setScalar(solidify > 0 ? 1 + Math.sin(solidify * Math.PI) * 0.25 : 1);
+    if (solidify > 0) {
+      mat.emissive.set(SIGNAL_OK);
+      mat.emissiveIntensity = 1.5 * (1 - solidify);
+    } else if (mat.emissiveIntensity !== 0) {
+      mat.emissiveIntensity = 0;
+    }
+  });
 
   return (
     <group position={[p.x, 0, p.z]}>
-      {isCap ? (
-        <mesh position={[0, h, 0]} scale={popScale} raycast={() => null}>
-          <sphereGeometry args={[1.0, 24, 16, 0, Math.PI * 2, 0, Math.PI / 2]} />
-          <meshStandardMaterial
-            color={color}
-            roughness={0.85}
-            metalness={0.05}
-            transparent
-            opacity={opacity}
-            emissive={solidify > 0 ? SIGNAL_OK : "#000000"}
-            emissiveIntensity={solidify > 0 ? 1.5 * (1 - solidify) : 0}
-            toneMapped={false}
-          />
-        </mesh>
-      ) : (
-        <mesh
-          position={[0, h, 0]}
-          scale={[popScale, popScale, popScale]}
-          raycast={() => null}
-        >
-          <boxGeometry args={tier === "foundation" ? [1.1, 0.3, 1.1] : [0.9, 1.1, 0.9]} />
-          <meshStandardMaterial
-            color={color}
-            roughness={0.9}
-            metalness={0.05}
-            transparent
-            opacity={opacity}
-            emissive={solidify > 0 ? SIGNAL_OK : "#000000"}
-            emissiveIntensity={solidify > 0 ? 1.5 * (1 - solidify) : 0}
-            toneMapped={false}
-          />
-        </mesh>
-      )}
+      <mesh ref={meshRef} geometry={blockGeo} position={[0, h, 0]} raycast={() => null}>
+        <meshStandardMaterial
+          ref={matRef}
+          color={color}
+          roughness={isCap ? 0.85 : 0.9}
+          metalness={0.05}
+          transparent
+          opacity={opacity}
+          emissive="#000000"
+          emissiveIntensity={0}
+          toneMapped={false}
+        />
+      </mesh>
     </group>
   );
 }
@@ -357,10 +481,9 @@ function LunarTerrain() {
 // ---- bloom (selective, halos only) -----------------------------------------
 
 // SelectiveBloom blooms ONLY meshes on HALO_BLOOM_LAYER (the status/winner
-// halos), never the full scene — ADR-0004's hard guard. It needs the light and
-// the scene refs; we resolve the halo objects by walking the scene for anything
-// on the bloom layer each render is overkill, so instead we let SelectiveBloom
-// target the whole scene but gate by layer via `selectionLayer`.
+// halos), never the full scene — ADR-0004's hard guard. Kept cheap: a small
+// blur kernel and no composer MSAA, so it adds minimal GPU cost and plays nicely
+// with frameloop="demand" (it renders only on invalidated frames).
 function HaloBloom({ lightRef }: { lightRef: React.RefObject<THREE.DirectionalLight> }) {
   // The directional light mounts in the same pass as this component, so its ref
   // is null on first render. Force exactly one re-render after mount so the ref
@@ -373,7 +496,8 @@ function HaloBloom({ lightRef }: { lightRef: React.RefObject<THREE.DirectionalLi
   return (
     // multisampling={0}: SelectiveBloom does its own threshold/blur, so MSAA on
     // the composer only adds a depth/stencil blit step some ANGLE/macOS drivers
-    // warn about. Bloom-only needs no extra AA here.
+    // warn about. A SMALL kernel keeps the blur passes (and their render targets)
+    // light — the halos are tiny, so a wide kernel would be wasted GPU memory.
     <EffectComposer multisampling={0}>
       <SelectiveBloom
         lights={[light]}
@@ -382,7 +506,8 @@ function HaloBloom({ lightRef }: { lightRef: React.RefObject<THREE.DirectionalLi
         luminanceThreshold={0.1}
         luminanceSmoothing={0.2}
         mipmapBlur
-        radius={0.7}
+        kernelSize={KernelSize.SMALL}
+        radius={0.6}
       />
     </EffectComposer>
   );
@@ -394,49 +519,69 @@ type Scene3DProps = {
   onPick: (id: string | null) => void;
 };
 
-// The actual scene contents (inside <Canvas>). Kept as one component so the
-// snapshot → meshes mapping is a single pure pass, and so beats animate smoothly
-// between snapshots via a continuous rAF (useFrame), exactly like the 2D canvas.
+// The actual scene contents (inside <Canvas>). The snapshot → meshes mapping is
+// a single pure pass that re-renders ONLY when a new snapshot arrives. Beats
+// animate via per-mesh useFrame ref-mutation (in Rover3D/TaskBlock), so the
+// React tree never re-renders per frame. This component's own useFrame just
+// prunes expired beats and keeps the demand loop alive while any beat is live.
 function SceneContents({ snapshot, selected, onPick }: Scene3DProps) {
   const lightRef = useRef<THREE.DirectionalLight>(null);
+  const invalidate = useThree((s) => s.invalidate);
+
+  // Shared geometry buffers — one set per Canvas mount, disposed on unmount.
+  const geo = useMemo(makeSceneGeo, []);
+  useEffect(() => () => disposeSceneGeo(geo), [geo]);
 
   // Beat bookkeeping — DECORATION ONLY, derived from the server's own events
   // (mirrors WorldCanvas). Stamped with performance.now() so animation progress
-  // is independent of snapshot cadence; pruned each frame.
+  // is independent of snapshot cadence. Held in a ref and read by each mesh's
+  // useFrame; mutating it never triggers a React re-render.
   const beats = useRef<ActiveBeat[]>([]);
   const lastAt = useRef<number>(Number.NEGATIVE_INFINITY);
-  const nowRef = useRef<number>(0);
-  // A frame tick: bumped only WHILE beats are active, to force a re-render so the
-  // declarative pulse meshes animate smoothly between the ~12 Hz snapshots. When
-  // no beats are live this stays put, so the scene re-renders only on snapshot
-  // change (cheap) — a pure decoration that never touches world state.
-  const [, setTick] = useState(0);
 
+  // On each new snapshot, fold its events into the live beat list and wake the
+  // demand loop so the new pulses (and the new mesh positions) get drawn.
   useEffect(() => {
     if (snapshot && snapshot.at !== lastAt.current) {
       lastAt.current = snapshot.at;
-      const now = performance.now();
       const incoming = snapshot.events ?? [];
       if (incoming.length > 0) {
+        const now = performance.now();
         beats.current = [...beats.current, ...incoming.map((e) => ({ ...e, spawn: now }))];
-        setTick((t) => t + 1); // kick the animation loop awake
+        invalidate(); // kick the demand loop awake to animate the new beats
       }
     }
-  }, [snapshot]);
+  }, [snapshot, invalidate]);
 
-  // Prune expired beats and advance the clock the render reads for beat
-  // progress, so pulses fade smoothly (mirrors WorldCanvas's rAF). While any
-  // beat is live we bump React state each frame to re-render the pulse meshes;
-  // once they all expire we stop, so idle frames cost nothing extra.
+  // Prune expired beats once per rendered frame, and keep the demand loop alive
+  // while any beat is still animating (plus one trailing frame, so the per-mesh
+  // useFrames reset their meshes to base once the last beat clears). When no
+  // beats are live we stop invalidating, so the loop idles — zero GPU burn.
   useFrame(() => {
-    const now = performance.now();
-    nowRef.current = now;
     const before = beats.current.length;
-    beats.current = activeBeats(beats.current, now);
-    if (beats.current.length > 0 || before > 0) setTick((t) => (t + 1) % 1_000_000);
+    if (before > 0) beats.current = activeBeats(beats.current, performance.now());
+    if (beats.current.length > 0 || before > 0) invalidate();
   });
 
-  if (!snapshot) {
+  // The world→scene map (and the task lookup) only change when a new snapshot
+  // arrives, so memoize them on snapshot identity rather than rebuilding every
+  // render — cheap, but it keeps the snapshot pass allocation-light.
+  const map = useMemo(
+    () =>
+      snapshot
+        ? sceneMap(
+            snapshot.rovers.map((r) => r.pos),
+            snapshot.tasks.map((t) => t.pos),
+          )
+        : null,
+    [snapshot],
+  );
+  const taskById = useMemo(
+    () => (snapshot ? new Map(snapshot.tasks.map((t) => [t.id, t])) : null),
+    [snapshot],
+  );
+
+  if (!snapshot || !map || !taskById) {
     return (
       <>
         <ambientLight intensity={0.4} />
@@ -444,26 +589,6 @@ function SceneContents({ snapshot, selected, onPick }: Scene3DProps) {
       </>
     );
   }
-
-  const map = sceneMap(
-    snapshot.rovers.map((r) => r.pos),
-    snapshot.tasks.map((t) => t.pos),
-  );
-
-  const now = nowRef.current || performance.now();
-
-  // Per-rover bid/won pulses and per-task solidify pulses, from active beats.
-  const bidPulse = new Map<string, number>();
-  const wonPulse = new Map<string, number>();
-  const solidify = new Map<string, number>();
-  for (const b of beats.current) {
-    const p = beatProgress(b, now);
-    if (b.kind === "bid" && b.robot_id) bidPulse.set(b.robot_id, p);
-    else if (b.kind === "won" && b.robot_id) wonPulse.set(b.robot_id, p);
-    else if (b.kind === "solidify" && b.task_id) solidify.set(b.task_id, p);
-  }
-
-  const taskById = new Map(snapshot.tasks.map((t) => [t.id, t]));
 
   return (
     <group>
@@ -477,7 +602,7 @@ function SceneContents({ snapshot, selected, onPick }: Scene3DProps) {
 
       {/* Tasks / rising dome. */}
       {snapshot.tasks.map((t) => (
-        <TaskBlock key={t.id} task={t} map={map} solidify={solidify.get(t.id) ?? 0} />
+        <TaskBlock key={t.id} task={t} map={map} geo={geo} beats={beats} />
       ))}
 
       {/* Lease beams (rover → held task), under the rovers. */}
@@ -494,9 +619,9 @@ function SceneContents({ snapshot, selected, onPick }: Scene3DProps) {
           key={r.id}
           rover={r}
           map={map}
+          geo={geo}
           selected={selected === r.id}
-          bidPulse={bidPulse.get(r.id) ?? 0}
-          wonPulse={wonPulse.get(r.id) ?? 0}
+          beats={beats}
           onPick={onPick}
         />
       ))}
@@ -512,14 +637,20 @@ function SceneContents({ snapshot, selected, onPick }: Scene3DProps) {
 // allowed but clamped (no roll past the horizon, bounded zoom) so it can't be
 // knocked into a useless pose on a projector. A click on empty space (the
 // ground / background) deselects via onPointerMissed.
+//
+// frameloop="demand": the render loop is idle until something invalidates it —
+// a new snapshot, an animating beat, or orbit interaction (OrbitControls is
+// makeDefault, so drei invalidates on change + damping). dpr is capped at 1.5
+// so a retina projector doesn't pay for 4× the pixels.
 export function Scene3D({ snapshot, selected, onPick }: Scene3DProps) {
   return (
     <Canvas
       className="world-canvas"
-      dpr={[1, 2]}
+      frameloop="demand"
+      dpr={[1, 1.5]}
       camera={{ position: [0, 14, 18], fov: 42, near: 0.1, far: 200 }}
       onPointerMissed={() => onPick(null)} // click empty space → deselect
-      gl={{ antialias: true }}
+      gl={{ antialias: true, powerPreference: "high-performance" }}
     >
       <color attach="background" args={["#000000"]} />
       <SceneContents snapshot={snapshot} selected={selected} onPick={onPick} />
