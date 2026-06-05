@@ -1,0 +1,35 @@
+# Coordinator — the live brain (auction, Lease/Expiry, Re-auction, World Model).
+# In this pod-per-rover variant it runs with ZERO in-process rovers
+# (COORDINATOR_ROVERS=external): every Rover is its own Pod (50-..55-rover-r*.yaml)
+# joining over NATS, so the kill is a real `kubectl delete pod`, not an in-proc
+# scripted kill. The coordinator can't tell which host a Rover runs in — that
+# equivalence is the point.
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: coordinator
+  namespace: swarmbuild
+  labels:
+    app: swarmbuild
+    role: coordinator
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: swarmbuild
+      role: coordinator
+  template:
+    metadata:
+      labels:
+        app: swarmbuild
+        role: coordinator
+    spec:
+      containers:
+        - name: coordinator
+          image: swarmbuild-coordinator:dev
+          imagePullPolicy: IfNotPresent # use the kind-loaded local image
+          env:
+            - name: NATS_URL
+              value: nats://nats:4222
+            - name: COORDINATOR_ROVERS
+              value: external # no in-process rovers — every Rover is its own Pod

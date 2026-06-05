@@ -1,0 +1,115 @@
+# SwarmBuild on Kubernetes — pod-per-rover swarm
+
+This is the **opt-in "every Rover is a Pod" variant** of the SwarmBuild demo. It
+runs each Rover as its own Kubernetes Pod, and the kill is a **real
+`kubectl delete pod`** instead of an in-process scripted kill. A killed Rover Pod
+goes silent, its **Lease** TTL-expires, and the swarm **Self-heals** by
+**Re-auction** onto a surviving Rover Pod — over the same real NATS bus as the
+headline demo.
+
+It is the counterpart to the fast in-proc demo, not a replacement (ADR-0001). The
+headline money shot stays `docker compose -f deploy/docker-compose.yml up` — six
+Rovers in-process inside the coordinator, paced for the ~30s wow. This variant
+trades that speed for a genuinely distributed kill seam: pod-per-rover plus a
+cluster-aware killer with least-privilege RBAC.
+
+## What's in here
+
+| File | What it is |
+| --- | --- |
+| `00-namespace.yaml` | Namespace `swarmbuild` (scopes the killer's RBAC). |
+| `10-nats.yaml` | NATS (JetStream, `-m 8222`) Deployment + Service — the swarm bus. |
+| `20-coordinator.yaml` | Coordinator with `COORDINATOR_ROVERS=external` (zero in-process Rovers). |
+| `30-gateway.yaml` | WS Gateway Deployment + Service (`:8080`). |
+| `40-web.yaml` | Dashboard (nginx) Deployment + Service (`:80`). |
+| `50-rover-r1.yaml` … `55-rover-r6.yaml` | One Deployment per Rover, R1..R6. |
+| `60-killer.yaml` | Killer ServiceAccount + Role + RoleBinding + Deployment. |
+| `kustomization.yaml` | Ties it together for `kubectl apply -k`. |
+| `up.sh` / `down.sh` | kind-based bring-up / teardown. |
+
+The Rover roster (ids, positions, batteries, capabilities) mirrors
+`internal/demo/demo.go` `DomeRovers()` exactly, so the board is identical to the
+in-proc headline: R1..R6 at `x = -50 + 20*(i-1)`, `y = -70`, battery
+`1.0 - 0.05*(i-1)` (R1=1.00 … R6=0.75), each capable of
+`foundation,wall,dome-cap`, `--mode=container`, `--heartbeat-ms=700`.
+
+## Quickstart
+
+Prereqs: `docker`, `kind`, and `kubectl` on your PATH.
+
+```sh
+./deploy/k8s/up.sh
+```
+
+`up.sh` creates a kind cluster named `swarmbuild` (if absent), builds the five
+images, `kind load`s them (no registry needed — `imagePullPolicy: IfNotPresent`
+uses the loaded local images), applies the manifests, and waits for every
+rollout. Then, in two terminals (or background them):
+
+```sh
+kubectl -n swarmbuild port-forward svc/web 5173:80
+kubectl -n swarmbuild port-forward svc/gateway 8080:8080
+```
+
+Open **http://localhost:5173**. The dashboard reaches the gateway at
+`ws://localhost:8080/ws` (baked into the web image at build time), which the
+second port-forward serves.
+
+Tear down:
+
+```sh
+./deploy/k8s/down.sh            # delete the swarmbuild namespace (keep the cluster)
+./deploy/k8s/down.sh --cluster  # also delete the kind cluster
+```
+
+## How the kill flows
+
+```
+dashboard KILL Rx
+  → control.command on NATS (relayed by the gateway)
+  → killer (KILLER_ON_KILL=true) maps Rx → selector rover=Rx
+  → kubectl delete pod -l rover=Rx -n swarmbuild --grace-period=0 --ignore-not-found
+  → the Rover Pod gets SIGKILL and goes silent
+  → its Lease TTL-expires (heartbeat silence)
+  → the orphaned Task Re-auctions
+  → a surviving Rover Pod wins and finishes it → Self-heal; the dome still closes
+```
+
+Because each Rover is its own Deployment with `replicas: 1`, Kubernetes will
+eventually recreate the killed Pod — but the heal happens over the bus long
+before that, exactly as the in-proc demo heals before anything restarts. The
+visible beat is the Lease expiry and Re-auction, not the Pod coming back.
+
+## RBAC — the single privileged seam
+
+Deleting a Rover Pod is the **only** privileged action in the stack, and only the
+`killer` ServiceAccount can do it:
+
+- a namespaced **Role** (`killer-pod-deleter`) grants `get`, `list`, `delete` on
+  **pods only**, in the **`swarmbuild` namespace only** — no ClusterRole, no
+  exec, no other resources;
+- a **RoleBinding** ties that Role to the `killer` ServiceAccount;
+- only the killer Deployment sets `serviceAccountName: killer`, so only its Pod
+  mounts that token.
+
+The browser, the gateway, the coordinator, and the Rover Pods never get it. This
+is the Kubernetes mirror of the docker-compose variant, where only the killer
+sidecar mounts `docker.sock`.
+
+## Images
+
+The deployment expects these five local images, kind-loaded by `up.sh` (or pushed
+to a registry your cluster can pull, if you adapt the manifests):
+
+| Image | Built from |
+| --- | --- |
+| `swarmbuild-coordinator:dev` | `deploy/Dockerfile`, `TARGET=./cmd/coordinator` |
+| `swarmbuild-gateway:dev` | `deploy/Dockerfile`, `TARGET=./cmd/gateway` |
+| `swarmbuild-agent:dev` | `deploy/Dockerfile`, `TARGET=./cmd/agent` |
+| `swarmbuild-web:dev` | `web/`, `VITE_WS_URL=ws://localhost:8080/ws` |
+| `swarmbuild-killer-k8s:dev` | `deploy/Dockerfile.killer.k8s` (`./cmd/killer` + `kubectl`) |
+
+`Dockerfile.killer.k8s` is the Kubernetes twin of `deploy/Dockerfile.killer`:
+same killer binary, but its runtime carries a pinned static `kubectl` (copied
+from `bitnami/kubectl:1.31`) instead of the docker CLI, and it runs as non-root —
+its only privilege is the ServiceAccount token, not a uid.

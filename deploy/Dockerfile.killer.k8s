@@ -1,0 +1,41 @@
+# Build image for the SwarmBuild killer sidecar in the KUBERNETES variant of the
+# stack (the pod-per-rover swarm, the opt-in counterpart to the in-proc compose
+# demo — ADR-0001). Same killer binary as deploy/Dockerfile.killer, but its
+# runtime stage carries `kubectl` instead of the docker CLI: here the killer does
+# a real `kubectl delete pod -l rover=Rx` rather than `docker kill`, so a killed
+# Rover Pod goes silent, its Lease TTL-expires, and the swarm Self-heals by
+# Re-auction over the same real bus.
+#   docker build -f deploy/Dockerfile.killer.k8s -t swarmbuild-killer-k8s:dev .
+# Build context is the repo root (so go.mod and all packages are visible).
+FROM golang:1.25 AS build
+WORKDIR /src
+
+# Cache module downloads.
+COPY go.mod go.sum ./
+RUN go mod download
+
+COPY . .
+ARG TARGET=./cmd/killer
+RUN CGO_ENABLED=0 GOOS=linux go build -trimpath -o /out/killer "${TARGET}"
+
+# Runtime: a small base plus a pinned, statically-linked kubectl. kubectl is the
+# ONLY privileged tool the sidecar shells out to; it talks to the apiserver via
+# the mounted ServiceAccount token (the `killer` SA, least-privilege RBAC scoped
+# to delete pods in the swarmbuild namespace — see deploy/k8s/60-killer.yaml).
+# The browser/gateway/coordinator never get this token. kubectl is fetched from
+# the OFFICIAL Kubernetes release host (dl.k8s.io) for the image's target arch —
+# canonical and always available, with no dependency on a third-party image whose
+# tags can disappear. It is a static binary, so it runs as-is on alpine.
+FROM alpine:3.20
+ARG TARGETARCH
+ARG KUBECTL_VERSION=v1.31.4
+RUN apk add --no-cache ca-certificates \
+  && wget -qO /usr/local/bin/kubectl \
+       "https://dl.k8s.io/release/${KUBECTL_VERSION}/bin/linux/${TARGETARCH}/kubectl" \
+  && chmod 0755 /usr/local/bin/kubectl
+COPY --from=build /out/killer /usr/local/bin/killer
+
+# Run as non-root: the killer needs no root in-container — its only privilege is
+# the RBAC carried by the ServiceAccount token, not a uid.
+USER 65532:65532
+ENTRYPOINT ["killer"]

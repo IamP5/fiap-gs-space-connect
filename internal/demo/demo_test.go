@@ -113,6 +113,38 @@ func TestDomeScenario_IsDeterministic(t *testing.T) {
 	}
 }
 
+// TestExternal_YieldsNoRoversAndNoScriptedKills proves the pod-per-rover mode:
+// demo.External() (and any Config with NoInProcRovers) makes DomeScenario produce a
+// coordinator.Config with NO Rovers and NO ScriptedKills, so the coordinator spawns
+// nothing in-process and arms no scripted kill (rovers join over NATS and kills are
+// real pod deletes). The same dome blueprint is still built. The inproc default is
+// cross-checked alongside so the backward-compatible path is pinned: it DOES carry
+// the six-rover swarm and the single rehearsal kill.
+func TestExternal_YieldsNoRoversAndNoScriptedKills(t *testing.T) {
+	ext := DomeScenario("nats://x", External())
+
+	if ext.Rovers != nil {
+		t.Fatalf("External scenario has %d in-process rovers, want none (pod-per-rover: rovers join over NATS)", len(ext.Rovers))
+	}
+	if ext.ScriptedKills != nil {
+		t.Fatalf("External scenario has %d scripted kills, want none (kills are real pod deletes)", len(ext.ScriptedKills))
+	}
+	// The dome is still built; only the hosting of rovers and kills changes.
+	if !reflect.DeepEqual(ext.Blueprint, DomeScenario("nats://x", Rehearsal()).Blueprint) {
+		t.Fatal("External scenario builds a different blueprint than the rehearsal; only rover hosting and kills should change")
+	}
+
+	// Backward-compatibility cross-check: the inproc default still carries the
+	// six-rover swarm and exactly one scripted kill.
+	inproc := DomeScenario("nats://x", Rehearsal())
+	if len(inproc.Rovers) != 6 {
+		t.Fatalf("inproc scenario has %d rovers, want 6 (the docker-compose demo swarm)", len(inproc.Rovers))
+	}
+	if len(inproc.ScriptedKills) != 1 {
+		t.Fatalf("inproc scenario has %d scripted kills, want 1 (the rehearsal kill)", len(inproc.ScriptedKills))
+	}
+}
+
 // TestRehearsal_KillTargetIsAHealableWall asserts the rehearsal kills a WALL,
 // never the dome-cap (no standby can heal the keystone late in the build) and
 // never a foundation. It also checks the timing makes the heal legible: the

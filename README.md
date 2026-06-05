@@ -49,6 +49,13 @@ The optional **container encore** (`docker kill` a real Rover container that hea
 the bus) ships in the same compose file. See [docs/encore.md](./docs/encore.md) for how
 to run and rehearse it (and the Adapter seam for a spin-off capability profile).
 
+For the **pod-per-rover** variant — every Rover as its own Kubernetes Pod, the
+Coordinator running with no in-process Rovers, and the dashboard KILL doing a real
+`kubectl delete pod` that Self-heals by Re-auction onto a surviving Pod — see
+[deploy/k8s/README.md](./deploy/k8s/README.md) (`./deploy/k8s/up.sh` on a local kind
+cluster). The fast in-process compose stack above stays the headline (ADR-0001); this
+is the opt-in "each Rover is a real, separately-killable system" proof.
+
 ## Deep core (built)
 
 Four pure modules under `internal/core/`, importing only `swarmbuild/internal/core/domain`

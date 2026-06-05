@@ -13,6 +13,13 @@ import (
 	"time"
 )
 
+// Control command strings used across the tests, hoisted to constants so the
+// linter's repeated-literal check stays happy and the wire vocabulary lives once.
+const (
+	cmdKill          = "kill"
+	cmdKillContainer = "killContainer"
+)
+
 // recordingKill is a killer.KillFunc that records the containers it was asked to
 // kill, so a test can assert the kill path without shelling out to docker.
 type recordingKill struct {
@@ -90,17 +97,17 @@ func TestRun_KillContainer(t *testing.T) {
 	}{
 		{
 			name:       "killContainer for the mapped target kills the mapped container",
-			ctrl:       wire.Control{Cmd: "killContainer", Robot: "R7"},
+			ctrl:       wire.Control{Cmd: cmdKillContainer, Robot: "R7"},
 			wantKilled: encore,
 		},
 		{
 			name:       "killContainer for an unmapped robot does not kill",
-			ctrl:       wire.Control{Cmd: "killContainer", Robot: "R3"},
+			ctrl:       wire.Control{Cmd: cmdKillContainer, Robot: "R3"},
 			wantKilled: "",
 		},
 		{
 			name:       "soft kill command is ignored by the sidecar",
-			ctrl:       wire.Control{Cmd: "kill", Robot: "R7"},
+			ctrl:       wire.Control{Cmd: cmdKill, Robot: "R7"},
 			wantKilled: "",
 		},
 		{
@@ -151,6 +158,88 @@ func TestRun_KillContainer(t *testing.T) {
 	}
 }
 
+// TestRun_ActOnKill proves the pod-per-rover gate: the dashboard's normal "kill"
+// fires a real kill ONLY when ActOnKill is set, and "killContainer" fires in both
+// modes. The ActOnKill=false rows are the backward-compatibility proof: with the
+// docker-compose default, "kill" stays the agent's soft in-proc death and the
+// sidecar ignores it.
+func TestRun_ActOnKill(t *testing.T) {
+	const podSel = "rover=R3"
+	targets := map[domain.RobotID]string{"R3": podSel}
+
+	tests := []struct {
+		name       string
+		actOnKill  bool
+		ctrl       wire.Control
+		wantKilled string // "" means no kill expected
+	}{
+		{
+			name:       "kill is ignored when ActOnKill is off (backward compatible)",
+			actOnKill:  false,
+			ctrl:       wire.Control{Cmd: cmdKill, Robot: "R3"},
+			wantKilled: "",
+		},
+		{
+			name:       "killContainer still kills when ActOnKill is off",
+			actOnKill:  false,
+			ctrl:       wire.Control{Cmd: cmdKillContainer, Robot: "R3"},
+			wantKilled: podSel,
+		},
+		{
+			name:       "kill kills the mapped target when ActOnKill is on",
+			actOnKill:  true,
+			ctrl:       wire.Control{Cmd: cmdKill, Robot: "R3"},
+			wantKilled: podSel,
+		},
+		{
+			name:       "killContainer still kills when ActOnKill is on",
+			actOnKill:  true,
+			ctrl:       wire.Control{Cmd: cmdKillContainer, Robot: "R3"},
+			wantKilled: podSel,
+		},
+		{
+			name:       "kill for an unmapped robot never kills, even with ActOnKill on",
+			actOnKill:  true,
+			ctrl:       wire.Control{Cmd: cmdKill, Robot: "R9"},
+			wantKilled: "",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			conn := dial(t)
+			rec := newRecordingKill()
+			runKiller(t, conn, killer.Config{Targets: targets, Kill: rec.fn, ActOnKill: tt.actOnKill})
+
+			if err := conn.PublishJSON(wire.SubjControl, tt.ctrl); err != nil {
+				t.Fatalf("publish control: %v", err)
+			}
+			_ = conn.Flush()
+
+			if tt.wantKilled != "" {
+				select {
+				case got := <-rec.calls:
+					if got != tt.wantKilled {
+						t.Fatalf("killed target = %q, want %q", got, tt.wantKilled)
+					}
+				case <-time.After(2 * time.Second):
+					t.Fatal("expected a kill, got none within 2s")
+				}
+				return
+			}
+
+			select {
+			case got := <-rec.calls:
+				t.Fatalf("expected no kill, but killed %q", got)
+			case <-time.After(200 * time.Millisecond):
+			}
+			if n := rec.count(); n != 0 {
+				t.Fatalf("expected no kills, got %d", n)
+			}
+		})
+	}
+}
+
 // TestRun_RequiresKillFunc guards the misconfiguration: Run must reject a Config
 // with no Kill func rather than panic on the first command.
 func TestRun_RequiresKillFunc(t *testing.T) {
@@ -173,7 +262,7 @@ func TestRun_KillFailureKeepsServing(t *testing.T) {
 	})
 
 	for range 2 {
-		if err := conn.PublishJSON(wire.SubjControl, wire.Control{Cmd: "killContainer", Robot: "R7"}); err != nil {
+		if err := conn.PublishJSON(wire.SubjControl, wire.Control{Cmd: cmdKillContainer, Robot: "R7"}); err != nil {
 			t.Fatalf("publish control: %v", err)
 		}
 	}
@@ -215,6 +304,13 @@ func TestParseTargets(t *testing.T) {
 			name: "trailing comma is skipped",
 			spec: "R7=c,",
 			want: map[domain.RobotID]string{"R7": "c"},
+		},
+		{
+			// kubectl backend: the target value is a label selector that itself
+			// contains "=", so the pair must split on the FIRST "=" only.
+			name: "label-selector targets with = in the value cut on first =",
+			spec: "R3=rover=R3,R6=rover=R6",
+			want: map[domain.RobotID]string{"R3": "rover=R3", "R6": "rover=R6"},
 		},
 		{
 			name:    "missing equals is malformed",

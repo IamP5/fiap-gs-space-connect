@@ -4,6 +4,10 @@
 // swarm, and the reproducible rehearsal kill) and spawns the in-process rovers
 // that build it — including the kill → self-heal money shot, paced so a
 // first-time viewer can read it (slice 06).
+//
+// COORDINATOR_ROVERS=external switches to pod-per-rover mode: the coordinator
+// spawns no in-process rovers and arms no scripted kill; rovers join over NATS as
+// their own containers/pods and the dashboard's KILL is a real pod delete.
 package main
 
 import (
@@ -39,7 +43,22 @@ func run() error {
 	// choreography. Every visual beat the browser draws is triggered by a real
 	// engine event emitted while this scenario runs; demo only sets WHEN the
 	// rehearsal kill fires and HOW WIDE the timing windows are.
-	cfg := demo.DomeScenario(natsURL, demo.Rehearsal())
+	//
+	// COORDINATOR_ROVERS selects how the swarm is hosted:
+	//   - "inproc" (default/empty): the coordinator spawns the six-rover swarm
+	//     in-process and arms the reproducible rehearsal kill — the docker-compose
+	//     demo, byte-for-byte unchanged.
+	//   - "external": pod-per-rover mode. The coordinator spawns NO rovers and arms
+	//     NO scripted kill; rovers join over NATS as their own containers/pods, and
+	//     the dashboard's KILL is a real pod delete (the killer sidecar's kubectl
+	//     backend, KILLER_BACKEND=kubectl). The coordinator still runs the auction,
+	//     the Lease Manager, the World Model, and snapshots, and the swarm
+	//     Self-heals over the real bus.
+	pacing := demo.Rehearsal()
+	if os.Getenv("COORDINATOR_ROVERS") == "external" {
+		pacing = demo.External()
+	}
+	cfg := demo.DomeScenario(natsURL, pacing)
 
 	ctx, stop := signal.NotifyContext(context.Background(), syscall.SIGINT, syscall.SIGTERM)
 	defer stop()
