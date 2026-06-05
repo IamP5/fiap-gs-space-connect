@@ -34,14 +34,15 @@ func main() {
 // error — a fatal log inside main would skip every defer.
 func run() error {
 	var (
-		mode    = flag.String("mode", "inproc", "rover host: inproc|container (container = standalone)")
-		id      = flag.String("id", "R1", "rover id")
-		posX    = flag.Float64("x", 0, "rover start X position")
-		posY    = flag.Float64("y", 0, "rover start Y position")
-		battery = flag.Float64("battery", 1.0, "rover battery in (0,1]")
-		caps    = flag.String("capabilities", "foundation", "comma-separated capabilities")
-		hbMS    = flag.Int("heartbeat-ms", 500, "heartbeat interval in milliseconds")
-		natsURL = flag.String("nats-url", "", "NATS URL (overrides NATS_URL env)")
+		mode      = flag.String("mode", "inproc", "rover host: inproc|container (container = standalone)")
+		id        = flag.String("id", "R1", "rover id")
+		posX      = flag.Float64("x", 0, "rover start X position")
+		posY      = flag.Float64("y", 0, "rover start Y position")
+		battery   = flag.Float64("battery", 1.0, "rover battery in (0,1]")
+		caps      = flag.String("capabilities", "foundation", "comma-separated capabilities")
+		hbMS      = flag.Int("heartbeat-ms", 500, "heartbeat interval in milliseconds")
+		recoverMS = flag.Int("recover-ms", 6000, "recoverable-outage window: ms a killed rover stays down before reviving in place")
+		natsURL   = flag.String("nats-url", "", "NATS URL (overrides NATS_URL env)")
 	)
 	flag.Parse()
 
@@ -59,6 +60,7 @@ func run() error {
 		Battery:        *battery,
 		Capabilities:   parseCapabilities(*caps),
 		HeartbeatEvery: time.Duration(*hbMS) * time.Millisecond,
+		RecoverAfter:   time.Duration(*recoverMS) * time.Millisecond,
 	}
 
 	ctx, stop := signal.NotifyContext(context.Background(), syscall.SIGINT, syscall.SIGTERM)

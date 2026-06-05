@@ -1,9 +1,17 @@
-# Killer sidecar — the SINGLE privileged seam of the whole stack. It joins the
-# swarm bus as a plain NATS client, listens for the dashboard's KILL Rx control
-# (KILLER_ON_KILL=true), and does a real `kubectl delete pod -l rover=Rx -n
-# swarmbuild --grace-period=0 --ignore-not-found`. The killed Rover Pod gets
-# SIGKILL, goes silent, its Lease TTL-expires, and the swarm Self-heals by
-# Re-auction onto a surviving Rover Pod.
+# Killer sidecar — the SINGLE privileged seam of the whole stack, retained for
+# parity with the docker-compose encore. It joins the swarm bus as a plain NATS
+# client and (with KILLER_ON_KILL=false) acts ONLY on the `killContainer` encore
+# control, doing a real `kubectl delete pod -l rover=Rx -n swarmbuild
+# --grace-period=0 --ignore-not-found`.
+#
+# IMPORTANT: the dashboard's headline KILL Rx is NOT a pod delete. It is a
+# recoverable in-process OUTAGE handled by the in-pod agent itself: the rover
+# stops bidding/heartbeating and goes dark AT ITS FAILURE POSITION (its Lease
+# TTL-expires → the swarm self-heals onto a neighbour), then the SAME rover
+# revives in place after its outage window (--recover-ms, ~6s). This simulates a
+# real failure without losing the rover's position or restarting the Pod — a
+# fresh Pod would boot at its start position, which is exactly what we DON'T want.
+# So KILLER_ON_KILL is false here; the killer never deletes a Pod for a plain KILL.
 #
 # The ONLY thing that can delete pods is this ServiceAccount, scoped by RBAC to
 # nothing but pods in the swarmbuild namespace (get/list/delete). The browser, the
@@ -84,7 +92,7 @@ spec:
             - name: KILLER_BACKEND
               value: kubectl # delete Pods via kubectl, not `docker kill`
             - name: KILLER_ON_KILL
-              value: "true" # act on the dashboard KILL Rx control
+              value: "false" # headline KILL is an in-process recoverable outage, NOT a pod delete
             - name: KILLER_NAMESPACE
               value: swarmbuild
             # Robot=<pod label selector>; the parser cuts on the FIRST `=`, so

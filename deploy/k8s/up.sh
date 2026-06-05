@@ -4,8 +4,10 @@
 # manifests, wait for rollouts, then auto-start the port-forwards.
 #
 # This is the opt-in "every Rover is a Pod" variant (ADR-0001). The fast headline
-# is still `docker compose -f deploy/docker-compose.yml up` — this one trades
-# speed for a real `kubectl delete pod` kill seam.
+# is still `docker compose -f deploy/docker-compose.yml up`; this one shows each
+# rover as its own Pod. The dashboard KILL is a recoverable in-process outage
+# (the rover goes dark in place and revives after ~6s), identical to the other
+# modes — the Pod is NOT deleted.
 #
 #   ./deploy/k8s/up.sh
 # Brings everything up AND port-forwards web→localhost:5173 and
@@ -149,8 +151,9 @@ else
   echo "  Try opening http://localhost:5173 anyway; the forwards may still be settling."
 fi
 echo
-echo "Hit KILL Rx on the dashboard — the killer does a real kubectl delete pod"
-echo "-l rover=Rx; its Lease expires and the swarm self-heals. The in-app"
-echo "\"Reload demo\" button rebuilds the dome with no pod restart."
+echo "Hit KILL Rx on the dashboard — the rover suffers a recoverable OUTAGE: it"
+echo "goes dark at its current position (the Pod keeps running), its Lease expires,"
+echo "the swarm self-heals onto a neighbour, then the SAME rover revives in place"
+echo "after ~6s. The in-app \"Reload demo\" button rebuilds the dome with no restart."
 echo
 echo "Tear down (also stops the port-forwards) with: ./deploy/k8s/down.sh"

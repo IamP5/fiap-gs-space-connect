@@ -1,17 +1,28 @@
 # SwarmBuild on Kubernetes — pod-per-rover swarm
 
 This is the **opt-in "every Rover is a Pod" variant** of the SwarmBuild demo. It
-runs each Rover as its own Kubernetes Pod, and the kill is a **real
-`kubectl delete pod`** instead of an in-process scripted kill. A killed Rover Pod
-goes silent, its **Lease** TTL-expires, and the swarm **Self-heals** by
-**Re-auction** onto a surviving Rover Pod — over the same real NATS bus as the
-headline demo.
+runs each Rover as its own Kubernetes Pod, so `kubectl get pods` shows the swarm
+topology directly. The dashboard **KILL Rx is a recoverable in-process outage**
+(identical to the other modes): the rover goes dark **at its current position**
+(the Pod keeps running — it is **not** deleted), its **Lease** TTL-expires, the
+swarm **Self-heals** by **Re-auction** onto a surviving Rover Pod, and then the
+**same rover revives in place** after its outage window (`--recover-ms`, ~6s) —
+all over the same real NATS bus as the headline demo.
+
+> **Why not a real `kubectl delete pod`?** A deleted Pod restarts a *fresh* agent
+> process that boots at its **start** position, and it comes back almost instantly
+> — the opposite of a believable failure. We want the rover to stop *where it
+> failed*, stay down for a beat while the swarm covers for it, then recover at that
+> same spot. That requires the process (and its in-memory position) to survive the
+> kill, so the headline KILL is handled in-process by the agent itself, in every
+> mode. The real-process-death proof lives in the docker-compose **container
+> encore** (R7), not here.
 
 It is the counterpart to the fast in-proc demo, not a replacement (ADR-0001). The
 headline money shot stays `docker compose -f deploy/docker-compose.yml up` — six
 Rovers in-process inside the coordinator, paced for the ~30s wow. This variant
-trades that speed for a genuinely distributed kill seam: pod-per-rover plus a
-cluster-aware killer with least-privilege RBAC.
+shows the same swarm with each rover as a distinct Pod, plus a cluster-aware
+killer (retained for encore parity) with least-privilege RBAC.
 
 ## What's in here
 
@@ -78,23 +89,28 @@ removes the pidfile before tearing down the namespace.
 ```
 dashboard KILL Rx
   → control.command on NATS (relayed by the gateway)
-  → killer (KILLER_ON_KILL=true) maps Rx → selector rover=Rx
-  → kubectl delete pod -l rover=Rx -n swarmbuild --grace-period=0 --ignore-not-found
-  → the Rover Pod gets SIGKILL and goes silent
+  → the in-pod agent for Rx handles it ITSELF (the killer ignores it — KILLER_ON_KILL=false):
+      • clears alive, stops bidding/heartbeating, abandons any in-flight task
+      • stays put at its FAILURE position, keeps emitting alive=false telemetry
   → its Lease TTL-expires (heartbeat silence)
   → the orphaned Task Re-auctions
   → a surviving Rover Pod wins and finishes it → Self-heal; the dome still closes
+  → ~6s later the SAME rover revives IN PLACE (alive=true at its failure spot) and bids again
 ```
 
-Because each Rover is its own Deployment with `replicas: 1`, Kubernetes will
-eventually recreate the killed Pod — but the heal happens over the bus long
-before that, exactly as the in-proc demo heals before anything restarts. The
-visible beat is the Lease expiry and Re-auction, not the Pod coming back.
+The Pod is never deleted — the rover's process (and its position) survive the
+outage, which is exactly what lets it come back where it went down rather than
+teleporting to its start position. The killer Deployment and its pod-delete RBAC
+remain in the manifests for parity with the compose **container encore**
+(`killContainer`), but with `KILLER_ON_KILL=false` they take no part in a plain
+KILL. (`killContainer` is not wired in this k8s topology — there is no R7 Pod.)
 
 ## RBAC — the single privileged seam
 
 Deleting a Rover Pod is the **only** privileged action in the stack, and only the
-`killer` ServiceAccount can do it:
+`killer` ServiceAccount can do it. (With `KILLER_ON_KILL=false` the killer only
+ever exercises this for a `killContainer` encore, which this k8s topology does not
+send — but the least-privilege scoping is retained so the seam stays honest):
 
 - a namespaced **Role** (`killer-pod-deleter`) grants `get`, `list`, `delete` on
   **pods only**, in the **`swarmbuild` namespace only** — no ClusterRole, no
