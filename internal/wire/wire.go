@@ -193,10 +193,25 @@ type EarthUplink struct {
 // --- Browser → server control (TECHSPEC §4) ---
 
 // Control is a command from the dashboard. Skeleton wires the relay path; the
-// commands themselves (kill, setLatency, setFailureProb) arrive in later slices.
+// commands themselves (kill, killContainer, setLatency, setFailureProb) arrive
+// in later slices.
+//
+// "kill" vs "killContainer" are two DISTINCT heal triggers that both land on the
+// same self-heal path (lease Expiry → Re-auction):
+//   - "kill" is the soft, in-proc death: the target Robot Agent flips itself dead
+//     (stops bidding/heartbeating/executing) so its Lease TTL-expires. This is the
+//     headline live demo and is handled by the agent (see internal/agent).
+//   - "killContainer" is the container Encore (ADR-0001): the target rover runs as
+//     a standalone container, and the killer sidecar does a real `docker kill` on
+//     the mapped container. It is consumed ONLY by the killer sidecar (see
+//     internal/killer) — no agent acts on it, and the browser never touches
+//     docker.sock. The killed container goes silent on the bus, its Lease expires,
+//     and the same Re-auction heals it over the REAL bus.
+//
+// Robot carries the target rover for both "kill" and "killContainer".
 type Control struct {
-	Cmd   string         `json:"cmd"`             // "kill" | "setLatency" | "setFailureProb"
-	Robot domain.RobotID `json:"robot,omitempty"` // target rover for "kill"
+	Cmd   string         `json:"cmd"`             // "kill" | "killContainer" | "setLatency" | "setFailureProb"
+	Robot domain.RobotID `json:"robot,omitempty"` // target rover for "kill" / "killContainer"
 	Value float64        `json:"value,omitempty"` // slider value for latency/failure
 }
 

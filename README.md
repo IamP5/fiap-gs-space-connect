@@ -45,6 +45,10 @@ docker compose -f deploy/docker-compose.yml up --build
 ./deploy/smoke.sh            # add --keep to leave it running
 ```
 
+The optional **container encore** (`docker kill` a real Rover container that heals over
+the bus) ships in the same compose file. See [docs/encore.md](./docs/encore.md) for how
+to run and rehearse it (and the Adapter seam for a spin-off capability profile).
+
 ## Deep core (built)
 
 Four pure modules under `internal/core/`, importing only `swarmbuild/internal/core/domain`

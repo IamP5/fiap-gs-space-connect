@@ -57,3 +57,52 @@ services:
       - "5173:80"
     depends_on:
       - gateway
+
+  # --- Container Encore (ADR-0001, issue 11) -------------------------------
+  # rover-encore + killer are the OPTIONAL encore: a genuinely separate rover
+  # (R7) joins the swarm over NATS as its own container, and the killer sidecar
+  # does a real `docker kill` on it from a dashboard control. The killed
+  # container goes silent, its Lease TTL-expires, and the swarm Self-heals by
+  # Re-auction over the SAME real bus as the in-proc headline. They are NOT
+  # required for `make smoke` / the core demo — that runs on the in-proc rovers.
+
+  # R7 runs the SAME agent binary as the in-proc rovers, but as a standalone
+  # container (--mode=container) joining over NATS. Its capabilities cover every
+  # dome task type (foundation|wall|dome-cap, matching internal/demo's roster) so
+  # it can win and finish a re-auctioned task. container_name is fixed so the
+  # killer can target it deterministically.
+  rover-encore:
+    build:
+      context: ..
+      dockerfile: deploy/Dockerfile
+      args:
+        TARGET: ./cmd/agent
+    container_name: swarmbuild-rover-encore
+    command: ["--mode=container", "--id=R7", "--capabilities=foundation,wall,dome-cap"]
+    environment:
+      NATS_URL: nats://nats:4222
+    depends_on:
+      nats:
+        condition: service_healthy
+    restart: on-failure
+
+  # The killer sidecar: the ONLY service that gets the docker CLI (via
+  # Dockerfile.killer's docker:cli runtime) and the host docker socket. It maps
+  # R7 → swarmbuild-rover-encore (KILLER_TARGETS) and, on a killContainer control
+  # from the dashboard, does `docker kill swarmbuild-rover-encore`. The browser
+  # and every other service NEVER get the socket.
+  killer:
+    build:
+      context: ..
+      dockerfile: deploy/Dockerfile.killer
+    environment:
+      NATS_URL: nats://nats:4222
+      KILLER_TARGETS: R7=swarmbuild-rover-encore
+    volumes:
+      # ONLY the killer sidecar mounts docker.sock (read-only is enough for
+      # `docker kill`). This is the single privileged seam of the whole stack.
+      - /var/run/docker.sock:/var/run/docker.sock:ro
+    depends_on:
+      nats:
+        condition: service_healthy
+    restart: on-failure

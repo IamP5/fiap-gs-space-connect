@@ -65,7 +65,14 @@ export type EarthUplink = {
 };
 
 // Browser → server control message (TECHSPEC §4). `cmd`/`robot`/`value` already
-// cover kill (robot) and the slider commands setFailureProb/setLatency (value).
+// cover every command — no shape change per command:
+//   · kill            (robot) — flag-flip an in-proc rover dead (the headline)
+//   · killContainer   (robot) — the encore: gateway relays it onto NATS and a
+//                                killer sidecar runs `docker kill` on the real
+//                                rover container (R7), which then self-heals
+//                                (Expiry → Re-auction → Self-heal); issue 11
+//   · setFailureProb  (value) — 0..1 per-rover induced failure rate (issue 08)
+//   · setLatency      (value) — ms of delay on the earth.uplink feed (issue 09)
 export type Control = {
   cmd: string;
   robot?: string;

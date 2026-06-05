@@ -1,0 +1,23 @@
+# Build image for the SwarmBuild killer sidecar (the container Encore of
+# ADR-0001). Unlike the other binaries (deploy/Dockerfile → distroless), the
+# killer needs the `docker` CLI at runtime to do `docker kill`, so its runtime
+# stage is docker:cli (alpine-based, ships the docker client) rather than
+# distroless. The static binary is built identically and copied in.
+#   docker build -f deploy/Dockerfile.killer .
+# Build context is the repo root (so go.mod and all packages are visible).
+FROM golang:1.25 AS build
+WORKDIR /src
+
+# Cache module downloads.
+COPY go.mod go.sum ./
+RUN go mod download
+
+COPY . .
+RUN CGO_ENABLED=0 GOOS=linux go build -trimpath -o /out/killer ./cmd/killer
+
+# Runtime: docker:cli ships the docker client the sidecar shells out to. This is
+# the ONLY image in the stack that gets the docker CLI and the host docker socket
+# (mounted in docker-compose.yml) — the browser/gateway/coordinator never do.
+FROM docker:cli
+COPY --from=build /out/killer /usr/local/bin/killer
+ENTRYPOINT ["killer"]

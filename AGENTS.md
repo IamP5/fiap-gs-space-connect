@@ -19,7 +19,8 @@ Engineering substance = four pure, unit-tested Go **deep modules** (`allocation`
 
 **Read these first:** [CONTEXT.md](./CONTEXT.md) (domain language — load-bearing),
 [PRD-SwarmBuild-MVP.md](./PRD-SwarmBuild-MVP.md), [docs/TECHSPEC.md](./docs/TECHSPEC.md),
-[docs/adr/](./docs/adr/).
+[docs/adr/](./docs/adr/). The optional container encore (`docker kill` a real Rover that
+heals over the bus) is documented in [docs/encore.md](./docs/encore.md).
 
 ## Layout
 

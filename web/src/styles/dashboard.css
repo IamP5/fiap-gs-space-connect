@@ -562,3 +562,238 @@
   letter-spacing: 0.96px;
   color: var(--ink-mute);
 }
+
+/* ---- encore column (stretch / encore affordances) ----
+   Top-center stacked group, deliberately set apart from the four corner panels
+   so it reads as the opt-in "encore" layer (partition narrative + container
+   kill), never as part of the headline chrome (ADR-0003). Same dark-chrome card
+   treatment as the ledger/kill/controls cards. */
+.encore-column {
+  position: absolute;
+  top: var(--s-xl);
+  left: 50%;
+  transform: translateX(-50%);
+  width: 300px;
+  z-index: 3;
+  display: flex;
+  flex-direction: column;
+  gap: var(--s-md);
+}
+
+/* ---- partition panel (CRDT partition narrative, issue 10) ----
+   A self-contained, deterministic replay of the proven World Model merge: two
+   divergent rover views of the same task reconcile to the single lower-rover-id
+   winner. The three explicit phase labels carry the narrative. */
+.partition-panel {
+  padding: var(--s-xl);
+  background: var(--canvas-night-soft);
+  border: 1px solid var(--hairline-on-dark);
+  border-radius: var(--r-xs);
+  display: flex;
+  flex-direction: column;
+  gap: var(--s-md);
+}
+
+.partition-eyebrow {
+  font-family: var(--ui);
+  font-size: 12px;
+  letter-spacing: 0.96px;
+  text-transform: uppercase;
+  color: var(--ink-mute);
+}
+
+/* The three-state machine: PARTITIONED → RECONCILING → CONVERGED. The active
+   beat reads in the warn signal (mid-flight) until it lands on CONVERGED. */
+.partition-phases {
+  display: flex;
+  align-items: center;
+  gap: var(--s-xs);
+  font-family: var(--display);
+  font-size: 11px;
+  font-weight: 700;
+  letter-spacing: 1.17px;
+  text-transform: uppercase;
+}
+
+.partition-phase {
+  color: var(--ink-mute);
+}
+
+.partition-phase.is-active {
+  color: var(--signal-warn);
+}
+
+/* The terminal CONVERGED beat reads in the ok signal once it is the active one. */
+.partition-phase:last-child.is-active {
+  color: var(--signal-ok);
+}
+
+.partition-phase + .partition-phase::before {
+  content: "→";
+  margin-right: var(--s-xs);
+  color: var(--hairline-on-dark);
+}
+
+.partition-views {
+  display: flex;
+  flex-direction: column;
+  gap: var(--s-xs);
+}
+
+.partition-view {
+  display: flex;
+  flex-direction: column;
+  gap: var(--s-xxs);
+  padding: var(--s-xs) 0;
+  border-bottom: 1px solid var(--hairline-on-dark);
+}
+
+.partition-view:last-child {
+  border-bottom: none;
+}
+
+.partition-view-label {
+  font-family: var(--ui);
+  font-size: 11px;
+  letter-spacing: 0.96px;
+  text-transform: uppercase;
+  color: var(--ink-mute);
+}
+
+.partition-task {
+  display: flex;
+  align-items: center;
+  gap: var(--s-xs);
+  font-size: 13px;
+  letter-spacing: 0.32px;
+}
+
+.partition-task-id {
+  font-weight: 700;
+  color: var(--on-primary);
+}
+
+.partition-task-assignee {
+  margin-left: auto;
+  font-family: var(--ui);
+  font-size: 12px;
+  font-weight: 700;
+  letter-spacing: 0.5px;
+  color: var(--on-primary-mute);
+}
+
+.partition-caption {
+  margin: 0;
+  font-family: var(--ui);
+  font-size: 11px;
+  letter-spacing: 0.32px;
+  color: var(--ink-mute);
+  line-height: 1.4;
+}
+
+.partition-btn {
+  align-self: flex-start;
+  padding: var(--s-xs) var(--s-md);
+  font-family: var(--display);
+  font-size: 13px;
+  font-weight: 700;
+  letter-spacing: 1.17px;
+  text-transform: uppercase;
+  color: var(--on-primary);
+  background: transparent;
+  border: 1px solid var(--hairline-on-dark);
+  border-radius: var(--r-xs);
+  cursor: pointer;
+}
+
+.partition-btn:hover:not(:disabled) {
+  border-color: var(--on-primary-mute);
+}
+
+.partition-btn:disabled {
+  color: var(--ink-mute);
+  cursor: not-allowed;
+}
+
+/* ---- encore panel (real container kill, issue 11) ----
+   The optional encore: a two-step guarded button that fails a REAL rover
+   container over the real bus. The danger signal tints the armed FIRE button
+   only — same restraint as the kill panel. */
+.encore-panel {
+  padding: var(--s-xl);
+  background: var(--canvas-night-soft);
+  border: 1px solid var(--hairline-on-dark);
+  border-radius: var(--r-xs);
+  display: flex;
+  flex-direction: column;
+  gap: var(--s-sm);
+}
+
+.encore-eyebrow {
+  font-family: var(--ui);
+  font-size: 12px;
+  letter-spacing: 0.96px;
+  text-transform: uppercase;
+  color: var(--ink-mute);
+}
+
+.encore-caption {
+  margin: 0;
+  font-family: var(--ui);
+  font-size: 11px;
+  letter-spacing: 0.32px;
+  color: var(--ink-mute);
+  line-height: 1.4;
+}
+
+.encore-btn {
+  align-self: flex-start;
+  padding: var(--s-xs) var(--s-md);
+  font-family: var(--display);
+  font-size: 13px;
+  font-weight: 700;
+  letter-spacing: 1.17px;
+  text-transform: uppercase;
+  color: var(--on-primary);
+  background: transparent;
+  border: 1px solid var(--hairline-on-dark);
+  border-radius: var(--r-xs);
+  cursor: pointer;
+}
+
+.encore-btn:hover {
+  border-color: var(--on-primary-mute);
+}
+
+/* The armed FIRE button carries the danger signal (it kills a real container). */
+.encore-btn-fire {
+  color: var(--signal-down);
+  border-color: var(--signal-down);
+}
+
+.encore-btn-fire:hover {
+  color: var(--canvas-night);
+  background: var(--signal-down);
+}
+
+.encore-confirm {
+  display: flex;
+  align-items: center;
+  gap: var(--s-md);
+}
+
+.encore-cancel {
+  padding: 0;
+  font-family: var(--ui);
+  font-size: 11px;
+  letter-spacing: 0.96px;
+  text-transform: uppercase;
+  color: var(--ink-mute);
+  background: transparent;
+  border: none;
+  cursor: pointer;
+}
+
+.encore-cancel:hover {
+  color: var(--on-primary-mute);
+}

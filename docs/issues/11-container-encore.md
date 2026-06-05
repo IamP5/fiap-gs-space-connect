@@ -8,11 +8,11 @@ Prove the rovers are genuinely separate systems, as an encore after the safe in-
 
 ## Acceptance criteria
 
-- [ ] The agent binary runs identically as a container, joining the swarm over NATS
-- [ ] A killer sidecar executes `docker kill` on a control command; the browser never accesses `docker.sock`
-- [ ] Killing the container triggers the same expiry → re-auction → heal over the real bus
-- [ ] The path is rehearsed working on the presentation laptop (macOS / Docker Desktop)
-- [ ] The Adapter seam is documented so a second capability profile compiles (spin-off proof)
+- [x] The agent binary runs identically as a container, joining the swarm over NATS (`rover-encore` = `R7`, `--mode=container`; see [deploy/docker-compose.yml](../../deploy/docker-compose.yml))
+- [x] A killer sidecar executes `docker kill` on a control command; the browser never accesses `docker.sock` (`internal/killer`, `cmd/killer`; only the killer mounts the socket)
+- [x] Killing the container triggers the same expiry → re-auction → heal over the real bus (`killContainer` → `docker kill` → Lease TTL-expiry → Re-auction, unchanged coordinator path)
+- [ ] The path is rehearsed working on the presentation laptop (macOS / Docker Desktop) — **manual step**: the path is made real and the exact steps are documented in [docs/encore.md](../encore.md#rehearsal-note-macos--docker-desktop--do-this-before-presenting); a live `docker kill` rehearsal on the laptop is still required before presenting
+- [x] The Adapter seam is documented so a second capability profile compiles (spin-off proof) — see [docs/encore.md](../encore.md#the-adapter-seam--how-a-second-capability-profile-compiles-spin-off-proof)
 
 ## Blocked by
 
