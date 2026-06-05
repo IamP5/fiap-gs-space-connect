@@ -46,6 +46,13 @@ type Config struct {
 	// the SAME rover rejoins the swarm after this delay, at its failure spot.
 	// Zero means defaultRecoverAfter.
 	RecoverAfter time.Duration
+
+	// SettleAfterRevive is the post-revival grace window: once a rover comes back
+	// it is alive and visible at its recovery spot but HOLDS STATION — it does not
+	// bid for new work — for this long, so the in-place comeback is legible before
+	// it rejoins the swarm and drives off to the next task. Zero means
+	// defaultSettleAfterRevive.
+	SettleAfterRevive time.Duration
 }
 
 // Movement and work tuning. Movement is visual interpolation only — the rover
@@ -92,6 +99,12 @@ const telemetryEvery = 200 * time.Millisecond
 // rover go down and the swarm re-auction its task to a neighbour, short enough to
 // keep the demo moving — the downed rover then rejoins at its failure position.
 const defaultRecoverAfter = 6 * time.Second
+
+// defaultSettleAfterRevive is the post-revival hold window when
+// Config.SettleAfterRevive is left zero: a freshly revived rover sits at its
+// recovery spot (alive, but not bidding) this long so the in-place comeback is
+// visible before it picks up new work and drives away.
+const defaultSettleAfterRevive = 2500 * time.Millisecond
 
 // faultCheckEvery is the cadence of the random-fault roll while a rover is
 // executing a task (throughout the drive and work phases). On each tick the
@@ -140,6 +153,16 @@ type rover struct {
 	// kill. The timer is held so Run can stop it on shutdown. Guarded by mu.
 	recoverAfter time.Duration
 	reviveTimer  *time.Timer
+
+	// recovering is the post-revival settle state: true from revive() until the
+	// settle window elapses. While recovering the rover is alive (visible at its
+	// recovery spot) but does NOT bid, so it holds station before rejoining the
+	// swarm. settleAfter is the window (Config.SettleAfterRevive, or
+	// defaultSettleAfterRevive when zero); settleTimer clears recovering. Both
+	// guarded by mu.
+	recovering  bool
+	settleAfter time.Duration
+	settleTimer *time.Timer
 }
 
 // snapshot returns a consistent copy of the rover's scoring-relevant state.
@@ -227,9 +250,12 @@ func (r *rover) kill() {
 
 // revive brings a downed rover back into service at its CURRENT position once
 // the outage window elapses. It installs a fresh open down channel (so a future
-// kill gets its own signal) and sets alive, so the rover resumes bidding from
-// wherever it went down — never from its start position. A no-op if the rover is
-// already alive (e.g. a revival that raced shutdown or a redundant call).
+// kill gets its own signal) and sets alive, so the rover comes back from wherever
+// it went down — never from its start position. It then enters the SETTLE window
+// (recovering=true): the rover is alive and visible at its recovery spot but does
+// NOT bid for new work until the settle timer clears it, so the in-place comeback
+// is legible before it drives off. A no-op if the rover is already alive (e.g. a
+// revival that raced shutdown or a redundant call).
 func (r *rover) revive() {
 	r.mu.Lock()
 	defer r.mu.Unlock()
@@ -239,6 +265,30 @@ func (r *rover) revive() {
 	r.down = make(chan struct{})
 	r.alive = true
 	r.reviveTimer = nil
+
+	r.recovering = true
+	d := r.settleAfter
+	if d <= 0 {
+		d = defaultSettleAfterRevive
+	}
+	r.settleTimer = time.AfterFunc(d, r.endSettle)
+}
+
+// endSettle ends the post-revival hold: the rover stops holding station and may
+// bid for new work again. Fired by the settle timer settleAfter a revive.
+func (r *rover) endSettle() {
+	r.mu.Lock()
+	r.recovering = false
+	r.settleTimer = nil
+	r.mu.Unlock()
+}
+
+// isRecovering reports whether the rover is in its post-revival settle window
+// (alive but holding station, not yet bidding). Read under the rover mutex.
+func (r *rover) isRecovering() bool {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	return r.recovering
 }
 
 // downCh returns the rover's CURRENT outage channel. An execute goroutine reads
@@ -251,13 +301,18 @@ func (r *rover) downCh() chan struct{} {
 	return r.down
 }
 
-// stopReviveTimer halts any pending revival so a shutdown rover does not flip
-// itself back alive after Run returns. Safe to call when no timer is pending.
-func (r *rover) stopReviveTimer() {
+// stopTimers halts any pending revival or settle timer so a shutdown rover does
+// not flip itself back alive (or clear its settle state) after Run returns. Safe
+// to call when no timer is pending.
+func (r *rover) stopTimers() {
 	r.mu.Lock()
 	if r.reviveTimer != nil {
 		r.reviveTimer.Stop()
 		r.reviveTimer = nil
+	}
+	if r.settleTimer != nil {
+		r.settleTimer.Stop()
+		r.settleTimer = nil
 	}
 	r.mu.Unlock()
 }
@@ -354,10 +409,11 @@ func Run(ctx context.Context, cfg Config, conn *bus.Conn) error {
 		alive:        true,
 		down:         make(chan struct{}),
 		recoverAfter: cfg.RecoverAfter,
+		settleAfter:  cfg.SettleAfterRevive,
 	}
-	// Stop any pending revival on shutdown so a killed rover never flips itself
-	// back alive after Run has returned.
-	defer st.stopReviveTimer()
+	// Stop any pending revival/settle timers on shutdown so a killed rover never
+	// flips itself back alive (or clears its settle state) after Run has returned.
+	defer st.stopTimers()
 
 	unsubAnnounce, err := subscribeAnnounce(conn, cfg, st)
 	if err != nil {
@@ -390,6 +446,9 @@ func subscribeAnnounce(conn *bus.Conn, cfg Config, st *rover) (func(), error) {
 		pos, battery, load, alive := st.snapshot()
 		if !alive {
 			return
+		}
+		if st.isRecovering() {
+			return // post-revival settle: back in place but holding station, not bidding yet
 		}
 		if st.refuses(a.TaskID) {
 			return // cooperatively failed this task: never bid on it again

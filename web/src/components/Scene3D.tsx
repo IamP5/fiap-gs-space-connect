@@ -62,6 +62,7 @@ const SIGNAL_OK = "#2ecc71"; // working / done
 const SIGNAL_WARN = "#f5a623"; // bidding / leased
 const SIGNAL_DOWN = "#e74c3c"; // dead / kill target
 const SIGNAL_IDLE = "#9aa4b2"; // idle / unclaimed
+const SIGNAL_REVIVE = "#38e1ff"; // recovered — the in-place comeback pulse
 
 // A dedicated render layer for the halo meshes. SelectiveBloom is told to bloom
 // ONLY objects on this layer, so the glow is confined to status halos and never
@@ -148,12 +149,15 @@ function Rover3D({ rover, map, geo, selected, beats, onPick }: Rover3DProps) {
   const haloMatRef = useRef<THREE.MeshStandardMaterial>(null);
   const wonRef = useRef<THREE.Mesh>(null);
   const wonMatRef = useRef<THREE.MeshStandardMaterial>(null);
+  const revivedRef = useRef<THREE.Mesh>(null);
+  const revivedMatRef = useRef<THREE.MeshStandardMaterial>(null);
 
-  // Put the status halo + winner ring on the bloom layer so ONLY they glow.
-  // Once on mount — the meshes are stable across re-renders.
+  // Put the status halo + winner ring + recovery pulse on the bloom layer so ONLY
+  // they glow. Once on mount — the meshes are stable across re-renders.
   useEffect(() => {
     haloRef.current?.layers.enable(HALO_BLOOM_LAYER);
     wonRef.current?.layers.enable(HALO_BLOOM_LAYER);
+    revivedRef.current?.layers.enable(HALO_BLOOM_LAYER);
   }, []);
 
   // Animate the bid-flash (halo pulse + amber) and the winner glow by mutating
@@ -167,10 +171,12 @@ function Rover3D({ rover, map, geo, selected, beats, onPick }: Rover3DProps) {
     const now = performance.now();
     let bid = 0;
     let won = 0;
+    let revived = 0;
     for (const b of list) {
       if (b.robot_id !== id) continue;
       if (b.kind === "bid") bid = beatProgress(b, now);
       else if (b.kind === "won") won = beatProgress(b, now);
+      else if (b.kind === "revived") revived = beatProgress(b, now);
     }
 
     const halo = haloRef.current;
@@ -192,6 +198,22 @@ function Rover3D({ rover, map, geo, selected, beats, onPick }: Rover3DProps) {
         wonMat.emissiveIntensity = 2.4 * (1 - won);
       } else if (wonMesh.visible) {
         wonMesh.visible = false;
+      }
+    }
+
+    // Recovery pulse — a wide cyan shockwave on a "revived" beat, marking the
+    // in-place comeback before the rover holds station then drives off. Bigger
+    // and brighter than the winner ring so the recovery reads as its own beat.
+    const revMesh = revivedRef.current;
+    const revMat = revivedMatRef.current;
+    if (revMesh && revMat) {
+      if (revived > 0) {
+        revMesh.visible = true;
+        revMesh.scale.setScalar(1 + revived * 2.8);
+        revMat.opacity = 1 - revived;
+        revMat.emissiveIntensity = 3.0 * (1 - revived);
+      } else if (revMesh.visible) {
+        revMesh.visible = false;
       }
     }
   });
@@ -298,6 +320,29 @@ function Rover3D({ rover, map, geo, selected, beats, onPick }: Rover3DProps) {
           ref={wonMatRef}
           color={SIGNAL_OK}
           emissive={SIGNAL_OK}
+          emissiveIntensity={0}
+          toneMapped={false}
+          transparent
+          opacity={0}
+          side={THREE.DoubleSide}
+        />
+      </mesh>
+
+      {/* Recovery pulse — an expanding cyan ring on a "revived" beat (the rover's
+          in-place comeback). Reuses the winner ring geometry; hidden until the
+          beat drives it in useFrame. */}
+      <mesh
+        ref={revivedRef}
+        geometry={geo.won}
+        position={[0, 0.055, 0]}
+        rotation={[-Math.PI / 2, 0, 0]}
+        visible={false}
+        raycast={() => null}
+      >
+        <meshStandardMaterial
+          ref={revivedMatRef}
+          color={SIGNAL_REVIVE}
+          emissive={SIGNAL_REVIVE}
           emissiveIntensity={0}
           toneMapped={false}
           transparent

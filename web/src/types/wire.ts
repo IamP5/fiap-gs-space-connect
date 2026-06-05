@@ -35,7 +35,7 @@ export type TaskView = {
 // contradict the rovers/tasks state. Beats are transient — each snapshot carries
 // only those since the previous one. `value` carries the bid cost for "bid".
 export type WorldEvent = {
-  kind: string; // "bid" | "won" | "expired" | "solidify" | "killed"
+  kind: string; // "bid" | "won" | "expired" | "solidify" | "killed" | "revived"
   task_id?: string;
   robot_id?: string;
   value?: number;

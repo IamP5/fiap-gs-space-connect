@@ -446,7 +446,14 @@ func (st *state) handle(ctx context.Context, e any) {
 	case evHeartbeat:
 		st.onHeartbeat(ev.hb)
 	case evTelemetry:
+		// A downed rover coming back (alive false→true) is a real engine event:
+		// emit a "revived" beat so the dashboard can pulse the in-place comeback at
+		// the rover's recovery spot. The browser looks up the position by Robot id.
+		prev, had := st.rovers[ev.tel.Robot]
 		st.rovers[ev.tel.Robot] = ev.tel
+		if had && !prev.Alive && ev.tel.Alive {
+			st.emit(wire.Event{Kind: wire.EventRevived, Robot: ev.tel.Robot})
+		}
 	case evReload:
 		st.onReload(ctx)
 	}

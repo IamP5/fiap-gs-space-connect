@@ -152,6 +152,7 @@ const (
 	EventExpired  = "expired"  // a lease TTL-expired; the task is orphaned and re-auctioned (TaskID)
 	EventSolidify = "solidify" // a task was completed end-to-end (Robot, TaskID)
 	EventKilled   = "killed"   // a rover was killed (scripted or by the dashboard) (Robot)
+	EventRevived  = "revived"  // a downed rover came back alive in place after its outage (Robot)
 )
 
 // Event is a discrete choreography beat derived from a real engine event

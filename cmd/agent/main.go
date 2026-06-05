@@ -42,6 +42,7 @@ func run() error {
 		caps      = flag.String("capabilities", "foundation", "comma-separated capabilities")
 		hbMS      = flag.Int("heartbeat-ms", 500, "heartbeat interval in milliseconds")
 		recoverMS = flag.Int("recover-ms", 6000, "recoverable-outage window: ms a killed rover stays down before reviving in place")
+		settleMS  = flag.Int("settle-ms", 2500, "post-revival settle window: ms a revived rover holds station before bidding again")
 		natsURL   = flag.String("nats-url", "", "NATS URL (overrides NATS_URL env)")
 	)
 	flag.Parse()
@@ -55,12 +56,13 @@ func run() error {
 	}
 
 	cfg := agent.Config{
-		ID:             domain.RobotID(*id),
-		Pos:            domain.Vec2{X: *posX, Y: *posY},
-		Battery:        *battery,
-		Capabilities:   parseCapabilities(*caps),
-		HeartbeatEvery: time.Duration(*hbMS) * time.Millisecond,
-		RecoverAfter:   time.Duration(*recoverMS) * time.Millisecond,
+		ID:                domain.RobotID(*id),
+		Pos:               domain.Vec2{X: *posX, Y: *posY},
+		Battery:           *battery,
+		Capabilities:      parseCapabilities(*caps),
+		HeartbeatEvery:    time.Duration(*hbMS) * time.Millisecond,
+		RecoverAfter:      time.Duration(*recoverMS) * time.Millisecond,
+		SettleAfterRevive: time.Duration(*settleMS) * time.Millisecond,
 	}
 
 	ctx, stop := signal.NotifyContext(context.Background(), syscall.SIGINT, syscall.SIGTERM)

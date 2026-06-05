@@ -46,6 +46,8 @@ export function beatLifetimeMs(kind: string): number {
       return 700;
     case "solidify":
       return 600;
+    case "revived":
+      return 1100; // a deliberate, legible recovery pulse — the in-place comeback
     case "expired":
       return 500;
     default:

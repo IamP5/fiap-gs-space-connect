@@ -245,10 +245,11 @@ func TestKillIsRecoverableOutageInPlace(t *testing.T) {
 	if _, _, _, alive := st.snapshot(); alive {
 		t.Fatalf("rover should remain down after a second kill")
 	}
-	st.stopReviveTimer()
+	st.stopTimers()
 
 	// Revive brings the rover back IN PLACE: alive again, at the SAME position,
 	// with a FRESH (open) down channel so a future kill has its own signal.
+	st.settleAfter = time.Hour // hold the settle window open for the assertions
 	st.revive()
 	gotPos, _, _, alive := st.snapshot()
 	if !alive {
@@ -264,6 +265,16 @@ func TestKillIsRecoverableOutageInPlace(t *testing.T) {
 		t.Fatalf("the revived rover's down channel should be open (killable again)")
 	}
 
+	// A just-revived rover SETTLES: alive but holding station (not bidding) until
+	// the settle window elapses.
+	if !st.isRecovering() {
+		t.Fatalf("a just-revived rover should be in its settle window (recovering)")
+	}
+	st.endSettle()
+	if st.isRecovering() {
+		t.Fatalf("endSettle should clear the settle window so the rover bids again")
+	}
+
 	// And it can be killed again on the fresh channel — the outage is repeatable.
 	st.recoverAfter = time.Hour
 	fresh := st.down
@@ -271,7 +282,7 @@ func TestKillIsRecoverableOutageInPlace(t *testing.T) {
 	if !isClosed(fresh) {
 		t.Fatalf("a second outage should close the fresh down channel")
 	}
-	st.stopReviveTimer()
+	st.stopTimers()
 }
 
 func TestRefuseRecordsTaskAndPredicate(t *testing.T) {
