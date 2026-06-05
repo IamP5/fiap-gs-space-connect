@@ -8,10 +8,10 @@ The whole pitch is a ~30-second money shot: kill a rover mid-wall, watch its tas
 re-auction and another rover finish the wall; the dome still closes.
 
 - Product thesis & domain language: [CONTEXT.md](./CONTEXT.md)
-- Product requirements: [PRD-SwarmBuild-MVP.md](./PRD-SwarmBuild-MVP.md)
-- Technical spec: [docs/TECHSPEC.md](./docs/TECHSPEC.md)
-- Load-bearing decisions: [docs/adr/](./docs/adr/)
-- Build backlog (vertical slices): [docs/issues/](./docs/issues/)
+- Product requirements: [PRD-SwarmBuild-MVP.md](./docs/mvp/PRD-SwarmBuild-MVP.md)
+- Technical spec: [docs/TECHSPEC.md](./docs/mvp/TECHSPEC.md)
+- Load-bearing decisions: [docs/adr/](./docs/mvp/adr/)
+- Build backlog (vertical slices): [docs/issues/](./docs/mvp/issues/)
 
 ## Architecture
 
@@ -46,7 +46,7 @@ docker compose -f deploy/docker-compose.yml up --build
 ```
 
 The optional **container encore** (`docker kill` a real Rover container that heals over
-the bus) ships in the same compose file. See [docs/encore.md](./docs/encore.md) for how
+the bus) ships in the same compose file. See [docs/encore.md](./docs/mvp/encore.md) for how
 to run and rehearse it (and the Adapter seam for a spin-off capability profile).
 
 For the **pod-per-rover** variant — every Rover as its own Kubernetes Pod, the

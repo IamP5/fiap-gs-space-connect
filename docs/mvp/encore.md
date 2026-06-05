@@ -49,7 +49,7 @@ over a real container boundary and the real bus (ADR-0002: the encore is only me
 ## How to run it
 
 The encore services live alongside the core stack in
-[`deploy/docker-compose.yml`](../deploy/docker-compose.yml):
+[`deploy/docker-compose.yml`](../../deploy/docker-compose.yml):
 
 ```sh
 docker compose -f deploy/docker-compose.yml up --build
@@ -75,15 +75,15 @@ swarmbuild-rover-encore`; watch `R7`'s task orphan, its Lease drain and expire, 
 standby Rover Re-auction and finish it — the dome still closes.
 
 The encore services are **not** required for the core demo or `make smoke`
-([`deploy/smoke.sh`](../deploy/smoke.sh) asserts the in-proc heal and the dome closing,
+([`deploy/smoke.sh`](../../deploy/smoke.sh) asserts the in-proc heal and the dome closing,
 which run entirely on the in-process roster). Adding the encore is purely additive.
 
 ## Why the killer needs its own image
 
-The default runtime image ([`deploy/Dockerfile`](../deploy/Dockerfile)) is
+The default runtime image ([`deploy/Dockerfile`](../../deploy/Dockerfile)) is
 `distroless/static` — no shell, no `docker` CLI. The killer must shell out to
 `docker kill`, so it has a dedicated build,
-[`deploy/Dockerfile.killer`](../deploy/Dockerfile.killer), whose runtime stage is
+[`deploy/Dockerfile.killer`](../../deploy/Dockerfile.killer), whose runtime stage is
 `docker:cli` (alpine-based, ships the docker client). Compose mounts
 `/var/run/docker.sock` **only** into the killer (read-only is enough for `docker
 kill`). This is the single privileged seam of the whole stack — the browser, gateway,
