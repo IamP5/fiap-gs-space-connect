@@ -250,6 +250,15 @@ var materialSchema = strictObj(map[string]any{
 // buildOpSchema is the strict schema for one wire.BuildOp. shape is constrained to
 // the rendered primitives so the model never wastes an op on the no-op "model"
 // slot; model_ref is nullable (only meaningful for that future shape).
+//
+// asset_key is nullable (ADR-0010, issue #61): the model MAY emit a curated Asset
+// KEY (from the catalog key list injected into the prompt) instead of leaning on a
+// procedural shape. The server resolves key → self-hosted model_ref + normalization
+// transform before any op rides a snapshot, and the coordinator's single-writer fold
+// rejects a key absent from the Task's closed catalog (or unsuited to its type), so
+// the model never emits a free-form model_ref. A null/empty asset_key is a plain
+// procedural op (the shape is used). model_ref stays model-emittable-as-null only:
+// the model picks a key, never a URL.
 var buildOpSchema = strictObj(map[string]any{
 	"op":        enum(wire.BuildOpPlace),
 	"shape":     enum(string(wire.ShapeBox), string(wire.ShapeCylinder), string(wire.ShapeSphere)),
@@ -258,6 +267,7 @@ var buildOpSchema = strictObj(map[string]any{
 	"scale":     vec3Schema,
 	"material":  materialSchema,
 	"model_ref": nullable("string"),
+	"asset_key": nullable("string"),
 })
 
 // strictRequestSchema is the object-rooted strict request schema:
