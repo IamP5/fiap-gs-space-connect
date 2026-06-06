@@ -97,7 +97,12 @@ kubectl apply -k "${K8S_DIR}"
 # new reloadDemo control, or a web bundle missing the latest UI).
 if [[ ${CLUSTER_PREEXISTED} -eq 1 ]]; then
   echo "▶ cluster pre-existed → restarting deployments to pick up rebuilt images…"
-  kubectl -n "${NS}" rollout restart deployment --all
+  # NOTE: `rollout restart deployment --all` is rejected by newer kubectl
+  # (unknown flag). Restart by explicit name instead (nats is excluded — its
+  # upstream image is unchanged, so there's no reason to bounce JetStream).
+  kubectl -n "${NS}" rollout restart deployment \
+    coordinator gateway web killer \
+    rover-r1 rover-r2 rover-r3 rover-r4 rover-r5 rover-r6
 fi
 
 echo "▶ waiting for rollouts to be ready…"
