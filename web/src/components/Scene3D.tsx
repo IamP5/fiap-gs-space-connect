@@ -59,6 +59,8 @@ import {
   beatProgress,
 } from "../lib/choreography";
 import { GLTFLoader } from "three/examples/jsm/loaders/GLTFLoader.js";
+import { DRACOLoader } from "three/examples/jsm/loaders/DRACOLoader.js";
+import { MeshoptDecoder } from "three/examples/jsm/libs/meshopt_decoder.module.js";
 import {
   type MeshDesc,
   type ModelDesc,
@@ -449,6 +451,15 @@ function LeaseBeam({ from, to, map }: { from: RoverView; to: TaskView; map: Scen
 // same .glb parse it ONCE (r3f-geometry "reuse"), and the parsed scene is cloned
 // per placement so transforms/materials never cross-contaminate.
 const gltfLoader = new GLTFLoader();
+// Self-hosted Draco + meshopt decoders so conditioned (compressed) .glb load
+// OFFLINE — no gstatic CDN fetch (the projector may have no network). The
+// decoder files live in web/public/draco/ and are served from the same origin;
+// '/draco/' is where DRACOLoader looks for draco_wasm_wrapper.js +
+// draco_decoder.wasm (the glTF decoder variant vendored from three's examples).
+const dracoLoader = new DRACOLoader();
+dracoLoader.setDecoderPath("/draco/");
+gltfLoader.setDRACOLoader(dracoLoader);
+gltfLoader.setMeshoptDecoder(MeshoptDecoder);
 const gltfCache = new Map<string, Promise<THREE.Group>>();
 
 function loadGLTF(url: string): Promise<THREE.Group> {
