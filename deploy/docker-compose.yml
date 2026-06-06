@@ -26,6 +26,13 @@ services:
         TARGET: ./cmd/coordinator
     environment:
       NATS_URL: nats://nats:4222
+      # Live Build Mode (bh-08): pass an API key through from the host shell to give
+      # the in-process rovers the Model seam. Unset ⇒ empty ⇒ the demo stays pure
+      # replay (no live builds). Server-side only; never reaches the browser.
+      OPENAI_API_KEY: ${OPENAI_API_KEY:-}
+      GEMINI_API_KEY: ${GEMINI_API_KEY:-}
+      LAB_PROVIDER: ${LAB_PROVIDER:-}
+      LAB_MODEL: ${LAB_MODEL:-}
     depends_on:
       nats:
         condition: service_healthy
@@ -40,6 +47,12 @@ services:
     environment:
       NATS_URL: nats://nats:4222
       GATEWAY_ADDR: ":8080"
+      # Optional: the lab "LIVE GENERATION" console (bh-07) uses the same key. Unset
+      # ⇒ the lab endpoint returns 503 and the rest of the dashboard is unaffected.
+      OPENAI_API_KEY: ${OPENAI_API_KEY:-}
+      GEMINI_API_KEY: ${GEMINI_API_KEY:-}
+      LAB_PROVIDER: ${LAB_PROVIDER:-}
+      LAB_MODEL: ${LAB_MODEL:-}
     ports:
       - "8080:8080" # WebSocket (/ws) + /healthz
     depends_on:
