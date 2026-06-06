@@ -84,6 +84,16 @@ func (a Vec2) Dist(b Vec2) float64 {
 	return math.Hypot(dx, dy)
 }
 
+// Vec3 is a 3D vector used by the Build spec (TECHSPEC §4): a position,
+// rotation (Euler radians), or scale expressed relative to a Task's Build
+// envelope frame. Like Vec2 it carries no JSON tags, so it marshals with
+// capital X/Y/Z — the TS mirror reads it the same way (see web/src/types/wire.ts).
+type Vec3 struct {
+	X float64
+	Y float64
+	Z float64
+}
+
 // Task is the authoritative record of one unit of construction in the World
 // Model (TECHSPEC §4). Zero value is a well-formed UNCLAIMED task with no
 // assignee.

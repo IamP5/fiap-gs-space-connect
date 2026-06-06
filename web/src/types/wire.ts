@@ -7,7 +7,38 @@
 
 export type Vec2 = { X: number; Y: number };
 
+// Vec3 mirrors Go's domain.Vec3 (no JSON tags, so capital X/Y/Z), used by the
+// Build spec for a position, rotation (Euler radians), or scale in the Task's
+// Build-envelope frame.
+export type Vec3 = { X: number; Y: number; Z: number };
+
 export type TaskStatus = "UNCLAIMED" | "LEASED" | "DONE";
+
+// --- Build spec (TECHSPEC §4, ADR-0006) — forward-compatible geometry-as-data.
+//
+// An ordered list of declarative BuildOps the renderer INTERPRETS into meshes,
+// never executes. Mirrors wire.go's BuildOp/Material exactly (snake_case JSON
+// field names) so the two round-trip. box|cylinder|sphere render today; "model"
+// (with model_ref) and material `map` are reserved future glTF/texture slots the
+// current renderer treats as no-ops.
+export type BuildShape = "box" | "cylinder" | "sphere" | "model";
+
+export type Material = {
+  color: string;
+  roughness?: number; // 0..1; omitted ⇒ renderer default
+  metalness?: number; // 0..1; omitted ⇒ renderer default
+  map?: string; // future texture reference; no-op today
+};
+
+export type BuildOp = {
+  op: "place";
+  shape: BuildShape;
+  pos: Vec3;
+  rot: Vec3;
+  scale: Vec3;
+  material: Material;
+  model_ref?: string; // future glTF reference; only with shape "model"
+};
 
 export type RoverView = {
   id: string;
@@ -27,6 +58,9 @@ export type TaskView = {
   lease_expiry?: number;
   version: number;
   deps?: string[];
+  // Accumulated, ordered Build spec (ADR-0006). Absent ⇒ the renderer falls back
+  // to the deterministic `tierOf` primitive, so the field is purely additive.
+  build_spec?: BuildOp[];
 };
 
 // A choreography beat (slice 06), derived server-side from a REAL engine event
@@ -76,10 +110,18 @@ export type EarthUplink = {
 //                                worksite); cmd-only, no robot/value
 //   · setFailureProb  (value) — 0..1 per-rover induced failure rate (issue 08)
 //   · setLatency      (value) — ms of delay on the earth.uplink feed (issue 09)
+//   · placeBlueprint  (blueprint_id, origin, rotation) — drag a pre-authored
+//                       Blueprint into the world; the coordinator validates
+//                       bounds/terrain/no-overlap then injects its task DAG, which
+//                       the Auction builds exactly as today (bh-05). The fields
+//                       are snake_case to mirror wire.go's Control JSON tags.
 export type Control = {
   cmd: string;
   robot?: string;
   value?: number;
+  blueprint_id?: string; // placeBlueprint: catalog Blueprint id
+  origin?: Vec2; // placeBlueprint: worksite anchor for the injected DAG
+  rotation?: number; // placeBlueprint: radians about the origin
 };
 
 // Narrow an arbitrary parsed JSON value to a Snapshot. Defensive: a malformed

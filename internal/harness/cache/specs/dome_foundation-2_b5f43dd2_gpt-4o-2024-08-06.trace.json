@@ -1,0 +1,205 @@
+{
+  "blueprint_id": "dome",
+  "task_id": "foundation-2",
+  "model": "gpt-4o-2024-08-06",
+  "contract": {
+    "blueprint_id": "dome",
+    "task_id": "foundation-2",
+    "type": "foundation",
+    "envelope": {
+      "center": {
+        "X": 0,
+        "Y": 0,
+        "Z": 0
+      },
+      "size": {
+        "X": 3,
+        "Y": 2.4,
+        "Z": 3
+      }
+    },
+    "done": {
+      "description": "a stable plinth: a slab base with supporting pillars and a small finial, clearly richer than a single block",
+      "min_ops": 3,
+      "min_coverage": 0.02
+    },
+    "style": "moon-base habitat, pale prefab panels, brushed metal accents"
+  },
+  "iterations": [
+    {
+      "gen_ops": [
+        {
+          "op": "place",
+          "shape": "box",
+          "pos": {
+            "X": 0,
+            "Y": -1.1,
+            "Z": 0
+          },
+          "rot": {
+            "X": 0,
+            "Y": 0,
+            "Z": 0
+          },
+          "scale": {
+            "X": 2.7,
+            "Y": 0.2,
+            "Z": 2.7
+          },
+          "material": {
+            "color": "#d3d3d3",
+            "roughness": 0.9,
+            "metalness": 0.1
+          }
+        },
+        {
+          "op": "place",
+          "shape": "cylinder",
+          "pos": {
+            "X": -1.1,
+            "Y": -0.8,
+            "Z": -1.1
+          },
+          "rot": {
+            "X": 0,
+            "Y": 0,
+            "Z": 0
+          },
+          "scale": {
+            "X": 0.3,
+            "Y": 0.8,
+            "Z": 0.3
+          },
+          "material": {
+            "color": "#b0c4de",
+            "roughness": 0.6,
+            "metalness": 0.3
+          }
+        },
+        {
+          "op": "place",
+          "shape": "cylinder",
+          "pos": {
+            "X": 1.1,
+            "Y": -0.8,
+            "Z": -1.1
+          },
+          "rot": {
+            "X": 0,
+            "Y": 0,
+            "Z": 0
+          },
+          "scale": {
+            "X": 0.3,
+            "Y": 0.8,
+            "Z": 0.3
+          },
+          "material": {
+            "color": "#b0c4de",
+            "roughness": 0.6,
+            "metalness": 0.3
+          }
+        },
+        {
+          "op": "place",
+          "shape": "cylinder",
+          "pos": {
+            "X": -1.1,
+            "Y": -0.8,
+            "Z": 1.1
+          },
+          "rot": {
+            "X": 0,
+            "Y": 0,
+            "Z": 0
+          },
+          "scale": {
+            "X": 0.3,
+            "Y": 0.8,
+            "Z": 0.3
+          },
+          "material": {
+            "color": "#b0c4de",
+            "roughness": 0.6,
+            "metalness": 0.3
+          }
+        },
+        {
+          "op": "place",
+          "shape": "cylinder",
+          "pos": {
+            "X": 1.1,
+            "Y": -0.8,
+            "Z": 1.1
+          },
+          "rot": {
+            "X": 0,
+            "Y": 0,
+            "Z": 0
+          },
+          "scale": {
+            "X": 0.3,
+            "Y": 0.8,
+            "Z": 0.3
+          },
+          "material": {
+            "color": "#b0c4de",
+            "roughness": 0.6,
+            "metalness": 0.3
+          }
+        },
+        {
+          "op": "place",
+          "shape": "sphere",
+          "pos": {
+            "X": 0,
+            "Y": -0.2,
+            "Z": 0
+          },
+          "rot": {
+            "X": 0,
+            "Y": 0,
+            "Z": 0
+          },
+          "scale": {
+            "X": 0.6,
+            "Y": 0.5,
+            "Z": 0.6
+          },
+          "material": {
+            "color": "#b0c4de",
+            "roughness": 0.6,
+            "metalness": 0.3
+          }
+        }
+      ],
+      "verdict": {
+        "hard_gate": {
+          "envelope": true,
+          "collision": true,
+          "done": true
+        },
+        "rubric": {
+          "done_coverage": {
+            "score": 2,
+            "evidence": "envelope coverage ≈ 9% over 6 ops (target ≥ 2%)"
+          },
+          "silhouette": {
+            "score": 0,
+            "evidence": "silhouette scoring deferred to the vision pass (bh-06)"
+          },
+          "coherence": {
+            "score": 2,
+            "evidence": "3 shape(s), 2 colour(s); grounded, varied"
+          }
+        }
+      }
+    }
+  ],
+  "outcome": {
+    "result": "accepted",
+    "cached": true,
+    "quality_flag": "ok",
+    "reason": "hard gate passed; soft score 4/4"
+  }
+}

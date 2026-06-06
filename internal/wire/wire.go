@@ -42,11 +42,26 @@ func SubjTelemetry(robot domain.RobotID) string { return "robot.telemetry." + st
 // SubjTelemetryWildcard matches every rover telemetry stream.
 const SubjTelemetryWildcard = "robot.telemetry.*"
 
+// SubjBuildOp is the subject a rover streams build ops on for a given task as it
+// works (bh-02). The coordinator subscribes to the build.op.* wildcard and
+// appends each received op to the Task's durable, accumulating Build spec.
+func SubjBuildOp(task domain.TaskID) string { return "build.op." + string(task) }
+
+// SubjBuildOpWildcard matches every rover build-op stream.
+const SubjBuildOpWildcard = "build.op.*"
+
 // --- KV ---.
 const (
 	// KVBucketWorld mirrors the World Model: key = task id, value = TaskRecord JSON.
 	KVBucketWorld = "world"
 )
+
+// KVSpecKey is the World-bucket key the coordinator mirrors a Task's
+// accumulating Build spec under (bh-02): "spec/<task id>", value = the ordered
+// []BuildOp JSON. It is namespaced away from the bare task-id key (which holds
+// the domain.Task record) so the durable spec survives independently and a
+// reader can fetch the partial structure of a killed Task to confirm resume.
+func KVSpecKey(task domain.TaskID) string { return "spec/" + string(task) }
 
 // --- Bus messages (rover ↔ coordinator) ---
 
@@ -71,11 +86,15 @@ type Bid struct {
 // worksite location so the winning rover knows where to drive (slice 02: the
 // rover interpolates toward Pos, draining battery, before it works the task).
 type Award struct {
-	TaskID   domain.TaskID  `json:"task_id"`
-	Robot    domain.RobotID `json:"robot_id"`
-	Pos      domain.Vec2    `json:"pos"`
-	LeaseTTL domain.Tick    `json:"lease_ttl"`
-	Version  domain.Lamport `json:"version"`
+	TaskID domain.TaskID  `json:"task_id"`
+	Robot  domain.RobotID `json:"robot_id"`
+	// Type is the task's kind, carried so the winning Rover knows which
+	// deterministic build-op stream to emit while working it (bh-02) without
+	// having to remember the prior Announce.
+	Type     domain.TaskType `json:"type,omitempty"`
+	Pos      domain.Vec2     `json:"pos"`
+	LeaseTTL domain.Tick     `json:"lease_ttl"`
+	Version  domain.Lamport  `json:"version"`
 }
 
 // Complete reports that a rover finished its leased task.
@@ -138,6 +157,78 @@ type TaskView struct {
 	LeaseExpiry domain.Tick     `json:"lease_expiry,omitempty"`
 	Version     domain.Lamport  `json:"version"`
 	Deps        []domain.TaskID `json:"deps,omitempty"`
+	// BuildSpec is the Task's accumulated, ordered Build spec (TECHSPEC §4,
+	// ADR-0006): declarative geometry the renderer INTERPRETS, never executes.
+	// Absent ⇒ the renderer falls back to the deterministic `tierOf` primitive,
+	// so the field is purely additive. It is validated server-side
+	// (internal/harness/spec) before it rides a snapshot.
+	BuildSpec []BuildOp `json:"build_spec,omitempty"`
+}
+
+// --- Build spec (TECHSPEC §4) — forward-compatible declarative geometry ---
+//
+// A Build spec is an ordered list of BuildOps that describe the geometry a Rover
+// builds for a Task. It is DATA, never executed code (ADR-0006): the renderer
+// interprets box/cylinder/sphere ops into meshes today, and the schema reserves
+// the `model`/`map`/`model_ref` slots for future glTF + textures, which current
+// renderers treat as no-ops. The whole spec is a pure function of the snapshot,
+// so the scene can never claim geometry the World Model has not recorded.
+
+// BuildShape is the geometry primitive a BuildOp places. Only box/cylinder/
+// sphere are rendered today; "model" is a reserved forward-compatible slot for a
+// future glTF reference (model_ref) and is a renderer no-op for now.
+type BuildShape string
+
+// The shapes a BuildOp may place. box/cylinder/sphere render today; model is a
+// reserved forward-compatible glTF slot (renderer no-op for now).
+const (
+	ShapeBox      BuildShape = "box"
+	ShapeCylinder BuildShape = "cylinder"
+	ShapeSphere   BuildShape = "sphere"
+	ShapeModel    BuildShape = "model" // future glTF; not rendered yet
+)
+
+// BuildOpPlace is the only op kind today: place one primitive in the Task's
+// Build-envelope frame. Kept as a const (not an enum type) so the JSON value is
+// the literal string "place".
+const BuildOpPlace = "place"
+
+// Material is a BuildOp's procedural surface. Color/roughness/metalness drive a
+// standard PBR material today; Map (a texture reference) is a reserved
+// forward-compatible slot, ignored by current renderers.
+type Material struct {
+	Color     string   `json:"color"`               // CSS/hex color, e.g. "#cfcfd6"
+	Roughness *float64 `json:"roughness,omitempty"` // 0..1; nil ⇒ renderer default
+	Metalness *float64 `json:"metalness,omitempty"` // 0..1; nil ⇒ renderer default
+	Map       string   `json:"map,omitempty"`       // future texture reference; no-op today
+}
+
+// BuildOp is a single declarative build step. pos/rot/scale are expressed
+// relative to the Task's Build-envelope frame (TECHSPEC §4). ModelRef is the
+// future glTF reference, populated only when Shape is "model".
+type BuildOp struct {
+	Op       string      `json:"op"`    // always "place" today (BuildOpPlace)
+	Shape    BuildShape  `json:"shape"` // box | cylinder | sphere | model
+	Pos      domain.Vec3 `json:"pos"`
+	Rot      domain.Vec3 `json:"rot"`
+	Scale    domain.Vec3 `json:"scale"`
+	Material Material    `json:"material"`
+	ModelRef string      `json:"model_ref,omitempty"` // future glTF reference; only with shape "model"
+}
+
+// BuildOpMsg is one streamed build op a Rover emits on SubjBuildOp(task) as it
+// works (bh-02). Seq is the op's zero-based position in the Task's accumulating
+// Build spec: the coordinator appends an op only when Seq equals the current
+// spec length (the next expected slot), so duplicates and out-of-order
+// redeliveries are idempotent no-ops. Because the Rover's op stream is a pure
+// deterministic function of the Task (it stands in for the LLM), a replacement
+// Rover re-emitting from Seq 0 after a kill re-confirms the ops already appended
+// (deduped) and continues from where its predecessor stopped — so the final
+// op-set converges to the same sequence whether or not a kill interrupted it.
+type BuildOpMsg struct {
+	TaskID domain.TaskID `json:"task_id"`
+	Seq    int           `json:"seq"`
+	Op     BuildOp       `json:"op"`
 }
 
 // Choreography beat kinds (slice 06). Each is emitted by the coordinator from a
@@ -217,11 +308,28 @@ type EarthUplink struct {
 // the kill→heal money shot replays. It works in both the in-proc compose mode and
 // the external (k8s pod-per-rover) mode. Consumed ONLY by the coordinator.
 //
+// "placeBlueprint" is the game-like authoring command (bh-05): the dashboard
+// drags a pre-authored Blueprint from the palette into the world and confirms an
+// origin + rotation. The gateway relays it generically onto control.command; the
+// coordinator VALIDATES placement (world bounds, terrain, no-overlap with
+// existing structures) on its single writer and, on success, injects the
+// Blueprint's pre-baked task DAG (translated to the origin and rotated) so the
+// Auction picks the new tasks up exactly as it does the startup blueprint.
+// Multiple blueprints may be placed — each is just another DAG the Auction feeds
+// on. Invalid placement is rejected (logged for the UI) and injects nothing.
+// BlueprintID names a catalog entry (internal/blueprint); Origin is the worksite
+// anchor the DAG is translated onto; Rotation is radians about the origin.
+//
 // Robot carries the target rover for both "kill" and "killContainer".
 type Control struct {
-	Cmd   string         `json:"cmd"`             // "kill" | "killContainer" | "setLatency" | "setFailureProb" | "reloadDemo"
+	Cmd   string         `json:"cmd"`             // "kill" | "killContainer" | "setLatency" | "setFailureProb" | "reloadDemo" | "placeBlueprint"
 	Robot domain.RobotID `json:"robot,omitempty"` // target rover for "kill" / "killContainer"
 	Value float64        `json:"value,omitempty"` // slider value for latency/failure
+
+	// placeBlueprint fields (bh-05). Empty/zero for every other command.
+	BlueprintID string      `json:"blueprint_id,omitempty"` // catalog Blueprint to place
+	Origin      domain.Vec2 `json:"origin,omitzero"`        // worksite anchor for the injected DAG
+	Rotation    float64     `json:"rotation,omitempty"`     // radians, about the origin
 }
 
 // SubjControl is the bus subject the gateway relays browser Control messages onto.
