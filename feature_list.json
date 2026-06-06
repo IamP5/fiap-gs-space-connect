@@ -1,0 +1,250 @@
+{
+  "project": "SwarmBuild",
+  "last_updated": "2026-06-05",
+  "description": "Machine-readable source of truth for feature status. The scheduler picks the lowest-priority feature that is not 'passing'; the verifier gates the transition to 'passing'. See docs/harness/README.md.",
+  "rules": {
+    "single_active_feature": true,
+    "passing_requires_evidence": true,
+    "do_not_skip_verification": true,
+    "do_not_edit_status_to_hide_unfinished_work": true,
+    "respect_depends_on_order": true
+  },
+  "status_legend": {
+    "not_started": "Work has not begun.",
+    "in_progress": "The single active feature.",
+    "blocked": "Cannot continue until a documented blocker is resolved (see notes).",
+    "passing": "Required verification has run and evidence is recorded. Irreversible without a documented regression."
+  },
+  "baselines": {
+    "backend": "go build ./... && make check  (go vet + golangci-lint + go test -race -shuffle=on ./...)",
+    "web": "cd web && npm run build && npm test",
+    "end_to_end": "./deploy/smoke.sh  (stack up; assert gateway healthy, scripted kill triggers self-heal, dome closes; tear down)",
+    "startup": "./init.sh"
+  },
+  "features": [
+    {
+      "id": "mvp-01",
+      "priority": 1,
+      "area": "mvp",
+      "title": "Walking skeleton — one task auctioned & completed end-to-end",
+      "user_visible_behavior": "A single task flows core -> NATS -> state -> gateway -> screen: it is auctioned, awarded as a lease, and completed, visible on the dashboard.",
+      "status": "passing",
+      "depends_on": [],
+      "verification": [
+        "make check (backend suite green)",
+        "./deploy/smoke.sh reaches a connected gateway and the stack runs end-to-end"
+      ],
+      "evidence": ["make check green @ fedd919 (vet ok, golangci-lint 0 issues, go test -race ./... all ok, go1.25.5)"],
+      "notes": "Built and merged. E2E path is asserted by deploy/smoke.sh."
+    },
+    {
+      "id": "mvp-02",
+      "priority": 2,
+      "area": "mvp",
+      "title": "Rovers move & drain battery; cost function",
+      "user_visible_behavior": "Rovers move toward awarded tasks, drain battery, and bid using a distance/battery/capability/load cost function.",
+      "status": "passing",
+      "depends_on": ["mvp-01"],
+      "verification": ["go test -race ./internal/agent/... ./internal/core/allocation/..."],
+      "evidence": ["make check green @ fedd919 (internal/agent, internal/core/allocation tests ok)"],
+      "notes": ""
+    },
+    {
+      "id": "mvp-03",
+      "priority": 3,
+      "area": "mvp",
+      "title": "Self-heal core — heartbeat, expiry, re-auction",
+      "user_visible_behavior": "A silent rover's lease expires exactly once and its task returns to UNCLAIMED for re-auction, with no supervisory logic and no Earth intervention.",
+      "status": "passing",
+      "depends_on": ["mvp-02"],
+      "verification": ["go test -race ./internal/core/lease/... ./internal/coordinator/...", "smoke.sh asserts 'msg=expiry task=wall-1 ... returned to UNCLAIMED'"],
+      "evidence": ["make check green @ fedd919 (internal/core/lease, internal/coordinator tests ok)"],
+      "notes": "The entire product pitch. Self-heal = expiry + re-auction."
+    },
+    {
+      "id": "mvp-04",
+      "priority": 4,
+      "area": "mvp",
+      "title": "Kill control — live headline",
+      "user_visible_behavior": "An operator kills a rover mid-task from the dashboard and the worksite reorganises live.",
+      "status": "passing",
+      "depends_on": ["mvp-03"],
+      "verification": ["go test -race ./internal/killer/... ./internal/agent/..."],
+      "evidence": ["make check green @ fedd919 (internal/killer, internal/agent tests ok); KILL modelled as recoverable in-place outage (4a990fa, 3c18a39)"],
+      "notes": ""
+    },
+    {
+      "id": "mvp-05",
+      "priority": 5,
+      "area": "mvp",
+      "title": "Habitat dome blueprint + 5-6 rover swarm",
+      "user_visible_behavior": "A dome blueprint decomposes into foundation/wall/cap tasks with dependencies; a 5-6 rover swarm builds it and the dome closes (dome-cap DONE).",
+      "status": "passing",
+      "depends_on": ["mvp-04"],
+      "verification": ["go test -race ./internal/core/planner/... ./internal/core/world/...", "smoke.sh asserts 'msg=complete task=dome-cap'"],
+      "evidence": ["make check green @ fedd919 (internal/core/planner, internal/core/world tests ok)"],
+      "notes": ""
+    },
+    {
+      "id": "mvp-06",
+      "priority": 6,
+      "area": "mvp",
+      "title": "Choreography / demo-pacing",
+      "user_visible_behavior": "The demo paces self-heal beats (lease draining, re-auction, replacement driving over) so an evaluator can see them; every beat derives from a real worksite event.",
+      "status": "passing",
+      "depends_on": ["mvp-05"],
+      "verification": ["go test -race ./internal/demo/...", "manual: run make demo and watch the beats land in order"],
+      "evidence": ["make check green @ fedd919 (internal/demo tests ok)"],
+      "notes": "HITL/visual slice — backend logic unit-tested; pacing confirmed manually in the dashboard."
+    },
+    {
+      "id": "mvp-07",
+      "priority": 7,
+      "area": "mvp",
+      "title": "react-three-fiber 3D scene",
+      "user_visible_behavior": "The dashboard renders the worksite in 3D as a pure re-render of the server snapshot (ADR-0004).",
+      "status": "passing",
+      "depends_on": ["mvp-06"],
+      "verification": ["cd web && npm run build && npm test", "manual: 3D scene renders and re-renders cleanly on snapshot updates"],
+      "evidence": ["WEB=1 ./init.sh green @ fedd919 (vite build TS-clean, vitest 7 files / 60 tests pass); 3D renderer code-split into a lazy chunk (c980b64); demand-driven re-render-free scene (cdf8246)"],
+      "notes": "HITL/visual slice. Re-run web baseline (WEB=1 ./init.sh) when touching web/."
+    },
+    {
+      "id": "mvp-08",
+      "priority": 8,
+      "area": "mvp",
+      "title": "Failure-probability slider",
+      "user_visible_behavior": "A slider sets per-rover failure probability so the swarm self-heals under sustained, random failure.",
+      "status": "passing",
+      "depends_on": ["mvp-03"],
+      "verification": ["go test -race ./internal/... ; manual: drive the slider and observe sustained self-heal"],
+      "evidence": ["failure + latency sliders and Earth telemetry panel (d5e5d87); make check green @ fedd919"],
+      "notes": ""
+    },
+    {
+      "id": "mvp-09",
+      "priority": 9,
+      "area": "mvp",
+      "title": "Latency slider + Earth-uplink shim",
+      "user_visible_behavior": "A slider injects Earth-link latency, showing tactical decisions never wait for Earth.",
+      "status": "passing",
+      "depends_on": ["mvp-03"],
+      "verification": ["go test -race ./internal/... ; manual: raise latency and confirm the tactical loop is unaffected"],
+      "evidence": ["failure + latency sliders and Earth telemetry panel (d5e5d87); make check green @ fedd919"],
+      "notes": ""
+    },
+    {
+      "id": "mvp-10",
+      "priority": 10,
+      "area": "mvp",
+      "title": "CRDT partition narrative (stretch)",
+      "user_visible_behavior": "A partition splits the swarm; rovers keep working their local World Model slice and reconcile conflict-free when the link returns.",
+      "status": "passing",
+      "depends_on": ["mvp-05"],
+      "verification": ["go test -race ./internal/... ; manual: trigger a partition in the lab and watch reconciliation"],
+      "evidence": ["container encore + CRDT partition narrative (7303ca6); partition lab redesign (12d2fad)"],
+      "notes": "Stretch. CRDT is a tested module on the side of the single-writer live path (ADR-0003)."
+    },
+    {
+      "id": "mvp-11",
+      "priority": 11,
+      "area": "mvp",
+      "title": "Container encore (stretch)",
+      "user_visible_behavior": "A rover runs as a genuinely separate system (pod-per-rover); a real kubectl delete kills it and the swarm heals over the bus.",
+      "status": "passing",
+      "depends_on": ["mvp-05"],
+      "verification": ["manual: pod-per-rover k8s mode, kubectl-delete a rover, observe heal; ./deploy/smoke.sh for the compose path"],
+      "evidence": ["pod-per-rover Kubernetes mode with real kubectl-delete kills (e3cc5e3); in-dashboard reload + auto port-forward (ca0ff34)"],
+      "notes": "Stretch (ADR-0001 encore)."
+    },
+
+    {
+      "id": "bh-01",
+      "priority": 12,
+      "area": "build-harness",
+      "title": "Build-spec seam + renderer interpreter + fallback (no LLM)",
+      "user_visible_behavior": "A Build spec (declarative build operations) is carried in the Task snapshot and the renderer interprets it into geometry; a deterministic fallback spec exists so the scene renders with no LLM in the loop.",
+      "status": "not_started",
+      "depends_on": ["mvp-07"],
+      "verification": [
+        "go test -race ./... (new build-spec module green)",
+        "cd web && npm run build && npm test (renderer interprets a spec, falls back when none)",
+        "./deploy/smoke.sh still passes — invariant: no harness call on the award/lease/expiry path; worst failure is 'looks like today', never 'demo breaks'"
+      ],
+      "evidence": [],
+      "notes": "First active slice of the build-harness roadmap. Must respect ADR-0005..0007 and ADR-0001..0004. Build spec is declarative DATA, never executed code (ADR-0006)."
+    },
+    {
+      "id": "bh-02",
+      "priority": 13,
+      "area": "build-harness",
+      "title": "Streamed, durable, resumable build ops (no LLM)",
+      "user_visible_behavior": "Build ops stream into the snapshot and are durable + resumable across a rover outage (ADR-0007), still with no LLM.",
+      "status": "not_started",
+      "depends_on": ["bh-01"],
+      "verification": ["go test -race ./... ; ./deploy/smoke.sh still passes; manual: interrupt mid-build and confirm resume from durable ops"],
+      "evidence": [],
+      "notes": ""
+    },
+    {
+      "id": "bh-03",
+      "priority": 14,
+      "area": "build-harness",
+      "title": "Model seam + one provider; bake one spec",
+      "user_visible_behavior": "Behind the Model seam, one LLM provider generates a single Build spec offline ('bake'); swapping the provider is a config change, not a harness change.",
+      "status": "not_started",
+      "depends_on": ["bh-02"],
+      "verification": ["go test -race ./... (model seam unit-tested with a fake provider); manual: bake one spec and render it"],
+      "evidence": [],
+      "notes": "HITL. The vendor SDK lives behind a single narrow interface (Model seam)."
+    },
+    {
+      "id": "bh-04",
+      "priority": 15,
+      "area": "build-harness",
+      "title": "Generator <-> Evaluator loop + analytic gate; bake all",
+      "user_visible_behavior": "A Build harness runs a generate->evaluate loop against an analytic gate until a contract's 'done' is met, baking specs for all tasks.",
+      "status": "not_started",
+      "depends_on": ["bh-03"],
+      "verification": ["go test -race ./... (generator/evaluator loop + analytic gate); manual: bake-all produces a coherent dome"],
+      "evidence": [],
+      "notes": "Topology (B): Generator+Evaluator in one harness now; sub-agents (C) later (see .agents/skills memory)."
+    },
+    {
+      "id": "bh-05",
+      "priority": 16,
+      "area": "build-harness",
+      "title": "Drag-to-place + Architect contracts + palette",
+      "user_visible_behavior": "An operator drags items from a palette; the Architect authors Build contracts (intent + 'done') per task, within a Build envelope.",
+      "status": "not_started",
+      "depends_on": ["bh-02"],
+      "verification": ["cd web && npm run build && npm test ; go test -race ./... ; manual: drag-to-place produces composable, non-overlapping geometry"],
+      "evidence": [],
+      "notes": "Parallel branch off bh-02. Architect authors intent; the Auction still owns who/when (untouched)."
+    },
+    {
+      "id": "bh-06",
+      "priority": 17,
+      "area": "build-harness",
+      "title": "Vision evaluator pass + provider-swap proof",
+      "user_visible_behavior": "A vision-based evaluator judges rendered output, and a second provider is swapped in to prove the Model seam holds.",
+      "status": "not_started",
+      "depends_on": ["bh-04"],
+      "verification": ["go test -race ./... ; manual: run the same bake under two providers via config only"],
+      "evidence": [],
+      "notes": "HITL."
+    },
+    {
+      "id": "bh-07",
+      "priority": 18,
+      "area": "build-harness",
+      "title": "Stretch — live lab mode, sub-agents (C), glTF + textures",
+      "user_visible_behavior": "A live lab mode runs the deep generation loop with sub-agents and richer assets (glTF models + textures) without changing the seam.",
+      "status": "not_started",
+      "depends_on": ["bh-06"],
+      "verification": ["go test -race ./... ; cd web && npm run build && npm test ; manual: lab-mode generation renders custom models/textures"],
+      "evidence": [],
+      "notes": "Stretch. Deep loop lives in the generation/lab path; the headline replays a cached spec (see memory: build-harness-agent-topology)."
+    }
+  ]
+}

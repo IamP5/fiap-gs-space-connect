@@ -22,6 +22,23 @@ Engineering substance = four pure, unit-tested Go **deep modules** (`allocation`
 [docs/adr/](./docs/mvp/adr/). The optional container encore (`docker kill` a real Rover that
 heals over the bus) is documented in [docs/encore.md](./docs/mvp/encore.md).
 
+## Session lifecycle (start here)
+
+**At startup — do this first:**
+1. `pwd` to confirm the repo root, then read [`PROGRESS.md`](./PROGRESS.md) (current verified
+   state + next step) and [`feature_list.json`](./feature_list.json) (per-feature status).
+2. `git log --oneline -5` for recent context.
+3. Run `./init.sh` (sync deps + baseline gate). **If the baseline is already red, fixing it
+   is your first task** — never stack new work on a broken base.
+4. Pick the **one** highest-priority feature that isn't `passing`. Work only on it.
+
+**Work rules:** one active feature at a time (WIP = 1); finish *and verify* before starting
+the next; no "while I'm here" refactors or parallel features. The repo is the system of
+record — durable artifacts (`feature_list.json`, `PROGRESS.md`, ADRs) over chat history.
+
+The full harness (state, verification, scope, lifecycle, quality) is documented in
+[`docs/harness/`](./docs/harness/).
+
 ## Layout
 
 ```
@@ -64,19 +81,33 @@ docker compose -f deploy/docker-compose.yml up --build   # dashboard at :5173
   lives in `lib/` with co-located `*.test.ts`; **no barrel files**; the dashboard stays a
   pure re-render of the server snapshot (ADR-0004). See `vercel-react-best-practices`,
   `web-design-guidelines`, and `r3f-*` (for the future 3D renderer).
-## After each implementation
+## Definition of Done
 
-Run this gate after every change, then commit — never leave the tree red:
+A feature is done only when these pass **in order** (don't proceed to a level if the prior
+one fails):
 
 ```sh
-make lint                      # golangci-lint — must report 0 issues
-go build ./...                 # must compile clean
-go test -race ./...            # all backend tests must pass
+go build ./...                 # 1. compiles clean
+make lint                      # 1. golangci-lint — 0 issues
+go test -race ./...            # 2. unit + integration tests pass
 # web changes also: (cd web && npm run build && npm test)
+./deploy/smoke.sh              # 3. end-to-end — REQUIRED when the change crosses components
 ```
 
-Only once lint, build, and tests all pass, commit the change (Conventional Commits,
-below). One focused commit per logical change.
+…and then: the behavior is implemented, the verification **actually ran**, and the evidence
+(commit + result) is recorded in `feature_list.json`. "Code is written" is not done —
+unit tests alone can't catch interface/state/error-propagation defects across the
+core → bus → gateway → screen seam. Only a passed verification flips a feature to `passing`.
+
+## End of session
+
+Never leave the tree red. Run the [clean-state checklist](./docs/harness/clean-state-checklist.md),
+then commit (Conventional Commits, below) — one focused commit per logical change:
+
+1. Build + lint + tests green (`./init.sh`).
+2. Update `PROGRESS.md` and `feature_list.json`; record any blocker.
+3. Remove debug cruft; ensure `./init.sh` runs clean from a fresh checkout.
+4. For a larger handoff, fill [`session-handoff.md`](./docs/harness/session-handoff.md).
 
 ## Commits — Conventional Commits
 

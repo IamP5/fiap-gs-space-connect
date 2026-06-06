@@ -12,6 +12,7 @@ re-auction and another rover finish the wall; the dome still closes.
 - Technical spec: [docs/TECHSPEC.md](./docs/mvp/TECHSPEC.md)
 - Load-bearing decisions: [docs/adr/](./docs/mvp/adr/)
 - Build backlog (vertical slices): [docs/issues/](./docs/mvp/issues/)
+- Working in this repo (the agent harness): [AGENTS.md](./AGENTS.md) · [feature_list.json](./feature_list.json) · [docs/harness/](./docs/harness/)
 
 ## Architecture
 
