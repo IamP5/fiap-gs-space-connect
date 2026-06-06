@@ -46,8 +46,12 @@ the load-bearing domain language.
 
 - The self-heal pitch is strengthened, not threatened: the LLM is additive muscle on a
   skeleton that already works without it.
-- There is now a hard invariant to protect in code and review: **no harness call may sit on
-  the path of an award, a lease renewal, or an expiry.** Generation is async and its result
-  is optional Task state.
+- There is now a hard invariant to protect: **no Model-seam call may sit on the path of an
+  award, a lease renewal, or an expiry.** Generation is async and its result is optional Task
+  state. This is enforced **mechanically**, not just by review: a Go import-graph test asserts
+  that `internal/harness/model` is not in the import closure of the hot-path packages
+  (allocation/auction, lease/heartbeat, expiry, single-writer tick), so a model call wired
+  into the hot loop fails CI. The coordinator may still touch the harness to **append
+  pre-computed ops** to a Task's spec — that is data movement, not a Model-seam call.
 - The current hard-coded renderer geometry is promoted to a load-bearing **fallback**, so it
   must stay correct, not be deleted when the harness lands.

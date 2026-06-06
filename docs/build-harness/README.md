@@ -24,6 +24,18 @@ there). Then [TECHSPEC.md](./TECHSPEC.md).
 - [ADR-0007](./adr/0007-hybrid-generation-with-durable-resumable-build-specs.md) — **hybrid
   timing**: the headline replays cached, evaluator-approved specs; live generation lives in
   a "lab" path. Specs are **durable and resumable** across a Rover kill.
+- [ADR-0008](./adr/0008-lab-loop-observability-and-layered-evaluator.md) — **lab-loop
+  observability**: each bake writes a **trace sidecar**, and the Evaluator emits a layered
+  verdict — a **hard gate** (boolean, blocking safety invariants) plus a **soft rubric**
+  (0–2 quality scores + evidence) that flags but never blocks. The `quality_flag: low`
+  population is the inspectable trigger for the (B)→(C) topology move.
+
+> **A note on "harness."** This document uses *Build harness* in the **product** sense
+> (CONTEXT.md): the in-product LLM Generator↔Evaluator loop a Rover runs to emit geometry.
+> That is distinct from the **coding-agent harness** — the repo scaffolding
+> (`AGENTS.md`, feature state, `init.sh`, clean-state handoff) that makes the *agent
+> implementing this plan* reliable. The two are unrelated concerns; when this folder says
+> "harness" unqualified, it means the product Build harness.
 
 ## The one-paragraph mental model
 

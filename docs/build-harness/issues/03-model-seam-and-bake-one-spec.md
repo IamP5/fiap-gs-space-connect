@@ -26,7 +26,8 @@ never by the browser; API keys stay server-side.
 - [ ] A contract test with a fake `Model` (no network) proves validate-and-repair and the fallback-on-exhaustion path
 - [ ] A `bake` command generates one Task's Build spec via a GPT-class model and writes it to the cache (keyed as above)
 - [ ] The headline replays the cached spec deterministically; a forced cache miss yields the primitive fallback, Task still DONE
-- [ ] No API key reaches the browser; the harness sits off the award/lease/expiry path (verified)
+- [ ] No API key reaches the browser
+- [ ] A Go **import-graph architecture test** asserts `internal/harness/model` is not in the import closure of the hot-path packages (allocation/auction, lease/heartbeat, expiry, single-writer tick); it fails CI if a Model-seam call is wired into the hot loop (ADR-0005, promotes the TECHSPEC §8 grep)
 - [ ] `go test -race ./...` green (live model calls are excluded from unit tests)
 
 ## Blocked by

@@ -72,6 +72,11 @@ structure its replacement finishes — self-heal made *more* impressive, not les
   output against the Build-spec JSON schema.
 - **Spec cache + fallback** (`internal/harness`) — keyed `{blueprintId, taskId, contract-hash,
   model}`. Hit → replay; miss → primitive fallback (headline) or live generation (lab).
+- **Lab-loop trace** (`internal/harness`, lab/bake only) — each bake writes a
+  `<spec-key>.trace.json` beside the cached spec: the Build contract, every Generator
+  iteration, every Evaluator verdict, and the outcome (`accepted`|`fallback`, `quality_flag`,
+  reason). Declarative data, no headline-path consumer; it is what makes "observed trace gaps"
+  inspectable ([ADR-0008](./adr/0008-lab-loop-observability-and-layered-evaluator.md)).
 - **Renderer spec-interpreter** (`web/src/components/Scene3D.tsx` + `lib/`) — interprets a
   Task's accumulated Build spec ops into meshes; falls back to today's `tierOf` geometry when
   absent. Stays a pure function of the snapshot.
@@ -119,6 +124,26 @@ type Model interface {
 // local → localhost:11434/v1 . Strict response_format json_schema + own validation pass.
 ```
 
+### Evaluator verdict + lab-loop trace (lab/bake only) — [ADR-0008](./adr/0008-lab-loop-observability-and-layered-evaluator.md)
+```
+Verdict {
+  hard_gate: { envelope: bool, collision: bool, done: bool },   // blocking safety invariants
+  rubric: {                                                      // advisory quality, 0–2 + evidence
+    done_coverage: { score:0..2, evidence:string },
+    silhouette:    { score:0..2, evidence:string },             // from the vision pass (issue 06)
+    coherence:     { score:0..2, evidence:string }
+  }
+}
+Trace {                                  // <spec-key>.trace.json beside the cached spec
+  contract:    BuildContract,
+  iterations:  [ { gen_ops:[BuildOp], verdict:Verdict } ],
+  outcome:     { result:"accepted"|"fallback", cached:bool,
+                 quality_flag:"ok"|"low", reason:string }
+}
+# hard_gate=false on any field ⇒ refine or fall back. hard_gate all true ⇒ cacheable, always.
+# soft score below threshold ⇒ quality_flag:"low" (never blocks); operator review lists it.
+```
+
 ### New NATS subjects
 ```
 build.op.<task_id>      a single appended Build spec op (Rover → coordinator)
@@ -145,9 +170,14 @@ TaskView {  ...existing... ,
 
 **Generation / "lab" path** (slow, agentic, off the critical path): Architect authors
 contracts; per Task, the Build harness runs the Generator↔Evaluator loop until the contract's
-done-criteria pass; the analytic gate (envelope + collision + done-criteria) runs every
-iteration, an optional **vision pass** (headless render of the real `Scene3D`, screenshot to
-a vision model) runs once before freezing; the approved spec is cached.
+done-criteria pass. The Evaluator emits a **layered verdict** ([ADR-0008](./adr/0008-lab-loop-observability-and-layered-evaluator.md)):
+a **hard gate** (envelope + collision + done-criteria — boolean, blocking) every iteration,
+plus a **soft rubric** (done-coverage / silhouette / coherence, 0–2 + evidence) that scores
+quality without blocking. An optional **vision pass** (headless render of the real `Scene3D`,
+screenshot to a vision model) runs once before freezing and supplies the `silhouette` score.
+A spec that passes the hard gate is cached; if its soft score is low the cache entry is
+**flagged** (`quality_flag: low`) for operator review, never withheld. Every bake writes a
+**trace** beside the cached spec.
 
 **Headline path** (fast, deterministic): drag a Blueprint in → tasks go live → Auction awards
 → the winning Rover **replays the cached spec**, streaming ops at choreographed pace → the
@@ -194,12 +224,21 @@ to richer-primitive or fewer Blueprints, never to "broken").
   not unit.
 - **Best-effort invariant — test**: with the `Model` forced to error, the Auction/lease/
   self-heal flow and Task completion are byte-for-byte the pre-harness behaviour.
+- **Hot-path invariant — architecture test** (mechanical, in `go test -race ./...`): asserts
+  `internal/harness/model` is not in the import closure of the hot-path packages
+  (allocation/auction, lease/heartbeat, expiry, single-writer tick). Promotes the §8 grep to
+  an executable check that fails CI the moment a Model-seam call is wired into the hot loop
+  ([ADR-0005](./adr/0005-llm-build-harness-augments-deterministic-swarm.md)).
+- **Evaluator verdict + trace — unit tests** (lab/bake): the hard gate stays boolean and
+  blocking; a hard-gate failure forces refine/fallback; a passing-but-low-scoring spec is
+  cached with `quality_flag: low`; the trace round-trips and lists every iteration's verdict.
 - **Pre-demo bake + smoke**: regenerate/validate every demo Blueprint's specs to cache; assert
   cache hits for the headline before presenting.
 
 ## 8. Live-robustness checklist
 
-- [ ] No harness call on the award / heartbeat / expiry path (grep the hot loop).
+- [ ] No Model-seam call on the award / heartbeat / expiry path — enforced by the import-graph
+      architecture test in `go test -race ./...`, not a manual grep (ADR-0005).
 - [ ] Headline runs entirely from **cache**; cache-hit asserted in pre-demo smoke.
 - [ ] `Model` failure / timeout ⇒ primitive fallback; Task still flips DONE; dependents unblock.
 - [ ] Resume-on-kill verified on the actual laptop; partial wall continues, never restarts.
@@ -222,7 +261,7 @@ ensembles; persistence of specs beyond the cache + NATS KV.
 | Decision | Current call | Revisit when |
 |---|---|---|
 | First provider/model | GPT-class via openai-go/v3 + base_url swap | If Gemini fidelity needed → native `genai` SDK behind the seam |
-| Evaluator depth | (B) Generator+Evaluator, 1–3 iters | (C) specialized sub-agents when traces show "passes analytic, looks wrong" |
+| Evaluator depth | (B) Generator+Evaluator, layered verdict (hard gate + soft rubric), 1–3 iters | (C) specialized sub-agents when the `quality_flag: low` set in the bake traces is non-trivial and concentrated (ADR-0008) |
 | Vision pass | Bake/lab only | If analytic-only specs read as low quality on stage |
 | Ollama strict json_schema | Treat as unverified; prefer native `format` | If a local-model demo is wanted |
 
@@ -236,5 +275,6 @@ ensembles; persistence of specs beyond the cache + NATS KV.
 /internal/coordinator      Go — (extend) append ops to Task spec; placeBlueprint injection
 /web/src/components         (extend) Scene3D spec-interpreter; blueprint palette + drag-to-place
 /web/src/lib                (extend) build-spec → mesh mapping; agent console panel
-/bake                      Go — offline spec generation → cache (pre-demo, like smoke.sh)
+/bake                      Go — offline spec generation → cache + per-spec trace.json (pre-demo,
+                                like smoke.sh); emits the operator review (fell-back ∪ low-quality)
 ```

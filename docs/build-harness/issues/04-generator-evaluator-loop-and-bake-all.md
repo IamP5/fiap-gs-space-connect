@@ -13,11 +13,20 @@ Turn the single generation into the agentic loop, still on the bake/lab path. In
 cap) — the Generator/Evaluator split is the quality lever (an agent grading its own work
 praises it).
 
-The Evaluator's **analytic gate** runs every iteration: ops stay within the Task's **Build
+The Evaluator emits a **layered verdict** ([ADR-0008](../adr/0008-lab-loop-observability-and-layered-evaluator.md)).
+The **hard gate** runs every iteration and blocks: ops stay within the Task's **Build
 envelope**, no collisions with neighbour tasks' accumulated ops, and the contract's
-done-criteria are met. On exhaustion without passing, accept the **primitive fallback** and
-flag it for the operator. Generation runs in **dependency order** so each worker sees a
-coherent world (foundations before walls before the dome-cap).
+done-criteria are met. Alongside it, a **soft rubric** scores quality without blocking —
+done-coverage / coherence (and silhouette once the vision pass lands, issue 06), each 0–2
+with an evidence string. On exhaustion without passing the hard gate, accept the **primitive
+fallback** and flag it for the operator. A spec that passes the hard gate is always cached;
+if its soft score is below threshold the cache entry is flagged `quality_flag: low` rather
+than withheld. Generation runs in **dependency order** so each worker sees a coherent world
+(foundations before walls before the dome-cap).
+
+Each bake writes a **trace** (`<spec-key>.trace.json`) beside the cached spec — contract,
+per-iteration ops + verdict, and outcome — the inspectable artifact behind the (B)→(C)
+topology decision.
 
 Bake **all** demo Blueprints to the cache so the entire dome replays deterministically.
 
@@ -27,11 +36,13 @@ gated on observed trace gaps.
 ## Acceptance criteria
 
 - [ ] The Build harness runs a Generator sub-agent + an Evaluator sub-agent in a bounded refine loop (hard iteration cap)
-- [ ] The analytic gate rejects out-of-envelope ops, neighbour collisions, and unmet done-criteria — with unit tests on each
+- [ ] The **hard gate** (boolean, blocking) rejects out-of-envelope ops, neighbour collisions, and unmet done-criteria — with unit tests on each
+- [ ] The Evaluator also emits a **soft rubric** (done-coverage, coherence; 0–2 + evidence) that scores quality without blocking; a hard-gate-passing but low-scoring spec is cached with `quality_flag: low`, not withheld
+- [ ] Each bake writes a `<spec-key>.trace.json` (contract, per-iteration ops + verdict, outcome) beside the cached spec; the trace round-trips in a unit test
 - [ ] Generation proceeds in dependency/topological order; a worker's snapshot includes neighbour ops within its envelope
 - [ ] On loop exhaustion the Task takes the primitive fallback and is flagged; it still completes
 - [ ] Every demo Blueprint is baked to cache; the full dome replays deterministically in the headline
-- [ ] Operator can review which Tasks fell back vs. generated
+- [ ] Operator can review the quality surface: which Tasks fell back **and** which were cached `quality_flag: low`
 
 ## Blocked by
 
