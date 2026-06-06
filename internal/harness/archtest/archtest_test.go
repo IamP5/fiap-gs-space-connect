@@ -30,7 +30,16 @@ var labModelPkgs = []string{
 	"swarmbuild/internal/harness/loop",   // Generator↔Evaluator refine loop
 	"swarmbuild/internal/harness/bake",   // offline bake / bake-all (drives the loop)
 	"swarmbuild/internal/harness/vision", // bh-06 bake-time vision pass (model + headless Chrome)
+	"swarmbuild/internal/harness/lab",    // bh-07a in-app LIVE lab (drives the loop on a live model call)
 }
+
+// labPkg is the bh-07a in-app live lab: it runs the real Generator↔Evaluator loop
+// on a LIVE model call and streams it to the dashboard. It reaches the Model seam,
+// so it MUST stay off the hot path (the labModelPkgs check enforces it, and
+// TestLabSeamIsReal below confirms the boundary is real). The gateway reaches it
+// only through an injected interface, so the gateway package itself never imports
+// it — keeping the gateway off the model's import graph too.
+const labPkg = "swarmbuild/internal/harness/lab"
 
 // visionPkg is the bake-time vision pass (bh-06). It reaches the Model seam (a
 // vision-capable model call) AND drives headless Chrome (chromedp), so a live
@@ -144,6 +153,56 @@ func TestVisionSeamIsReal(t *testing.T) {
 	}
 	if !foundChrome {
 		t.Fatalf("expected the vision pass %s to import chromedp (so it is a real headless-browser boundary)", visionPkg)
+	}
+}
+
+// TestLabSeamIsReal is the bh-07a meta-guard: it confirms the in-app live lab
+// package genuinely pulls in the Model seam AND the refine loop, so the "lab off
+// the hot path" assertion in TestModelSeamOffHotPath (via labModelPkgs) guards a
+// real, network-capable boundary rather than a vacuous one.
+func TestLabSeamIsReal(t *testing.T) {
+	if !goAvailable() {
+		t.Skip("go toolchain not on PATH; skipping lab arch self-check")
+	}
+	var foundModel, foundLoop bool
+	for _, dep := range deps(t, labPkg) {
+		if dep == modelPkg {
+			foundModel = true
+		}
+		if dep == "swarmbuild/internal/harness/loop" {
+			foundLoop = true
+		}
+	}
+	if !foundModel {
+		t.Fatalf("expected the lab %s to import the Model seam %s (so it is a real model boundary)", labPkg, modelPkg)
+	}
+	if !foundLoop {
+		t.Fatalf("expected the lab %s to import the refine loop (so it drives real generation)", labPkg)
+	}
+}
+
+// TestGatewayDoesNotImportModelOrLab is the bh-07a boundary guard: the gateway
+// hosts the live-lab SSE endpoint, but reaches the lab ONLY through an injected
+// interface (gateway.LabRunner). So the gateway PACKAGE itself must NOT import the
+// Model seam or the lab/loop — keeping the HTTP fan-out off the model's import
+// graph and the live model call confined to the cmd/gateway composition root. A
+// refactor that imports the lab directly into the gateway package fails here.
+func TestGatewayDoesNotImportModelOrLab(t *testing.T) {
+	if !goAvailable() {
+		t.Skip("go toolchain not on PATH; skipping gateway-model arch test")
+	}
+	const gatewayPkg = "swarmbuild/internal/gateway"
+	forbidden := append([]string{modelPkg, labPkg}, labModelPkgs...)
+	closure := make(map[string]bool)
+	for _, dep := range deps(t, gatewayPkg) {
+		closure[dep] = true
+	}
+	for _, bad := range forbidden {
+		if closure[bad] {
+			t.Fatalf("ARCH VIOLATION: gateway package %s imports %s — it must reach the live lab "+
+				"ONLY through the injected gateway.LabRunner interface (bh-07a), keeping the gateway "+
+				"off the model's import graph.", gatewayPkg, bad)
+		}
 	}
 }
 

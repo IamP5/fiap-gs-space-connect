@@ -86,6 +86,23 @@ type Request struct {
 	// against the right intent (foundation | wall | dome-cap). Unused when Vision is
 	// nil.
 	TaskType string
+
+	// Observer is an OPTIONAL live hook (bh-07a, the in-app lab): when non-nil it is
+	// called once per refine pass with the ops the Generator emitted and the
+	// Evaluator's verdict on them, AS THEY HAPPEN, so a lab UI can stream the
+	// "watch it think" surface. It is purely observational — it never affects the
+	// loop's decision or the cached result, runs on the loop's own goroutine, and
+	// is nil on every bake/headline path (so behaviour there is byte-identical).
+	Observer Observer
+}
+
+// Observer receives a copy of each refine pass's Generator output and Evaluator
+// verdict as the loop runs (bh-07a). Iter is the 1-based pass number. It must not
+// block for long (it runs inline on the loop goroutine); a streaming sink should
+// hand off to a channel/SSE writer and return promptly. Implementations get a
+// defensive copy of ops, so they may retain it.
+type Observer interface {
+	OnIteration(iter int, ops []wire.BuildOp, v evaluator.Verdict)
 }
 
 // Outcome is the loop's result for one Task: the accepted ops (nil on fallback),
@@ -123,9 +140,11 @@ func Run(ctx context.Context, gen Generator, eval *evaluator.Evaluator, req Requ
 		bestVision  bool // whether the best spec's silhouette was vision-scored
 		bestPass    bool
 		lastErr     error
+		iter        int
 	)
 
 	for range MaxIterations {
+		iter++
 		ops, err := gen.Generate(ctx, convo)
 		if err != nil {
 			lastErr = err
@@ -141,6 +160,10 @@ func Run(ctx context.Context, gen Generator, eval *evaluator.Evaluator, req Requ
 		// BEFORE the trace records the iteration. A vision failure is non-fatal (the soft
 		// rubric never blocks); see scoreVision.
 		visionScored := scoreVision(ctx, req, ops, &v)
+
+		// LAB OBSERVER (bh-07a): stream this pass's ops + verdict live, before the trace
+		// records it. Purely observational — nil on the bake/headline path.
+		notifyObserver(req.Observer, iter, ops, v)
 
 		// Record a defensive copy of the ops so later mutation of the slice cannot
 		// rewrite the trace history.
@@ -217,6 +240,17 @@ const (
 	maxSoftPoints           = 4
 	maxSoftPointsWithVision = 6
 )
+
+// notifyObserver streams one refine pass's ops + verdict to the optional lab
+// Observer (bh-07a), handing it a defensive copy of the ops so it may retain them.
+// A nil observer (every bake/headline run) is a no-op, keeping Run's behaviour
+// there byte-identical.
+func notifyObserver(o Observer, iter int, ops []wire.BuildOp, v evaluator.Verdict) {
+	if o == nil {
+		return
+	}
+	o.OnIteration(iter, cloneOps(ops), v)
+}
 
 // scoreVision runs the optional bake-time vision pass on a hard-gate-passing spec
 // and folds the silhouette score into v's rubric (so the trace carries it and the
