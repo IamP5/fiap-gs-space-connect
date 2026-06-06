@@ -68,10 +68,16 @@ func KVSpecKey(task domain.TaskID) string { return "spec/" + string(task) }
 // Announce auctions a ready task. Pos is the task's worksite location so rovers
 // can score distance.
 type Announce struct {
-	TaskID  domain.TaskID   `json:"task_id"`
-	Type    domain.TaskType `json:"type"`
-	Pos     domain.Vec2     `json:"pos"`
-	Version domain.Lamport  `json:"version"`
+	TaskID domain.TaskID   `json:"task_id"`
+	Type   domain.TaskType `json:"type"`
+	Pos    domain.Vec2     `json:"pos"`
+	// Mode is the Task's build mode tag (bh-08c): "live" ⇒ the winning Rover runs
+	// the Build harness inline; empty/"replay" ⇒ the deterministic replay/primitive
+	// stream (the default). Carried on the Announce so a bidder could surface it,
+	// though the binding decision rides the Award. A plain string, never the
+	// agent.Mode type, so wire stays model-free. Omitted when empty (back-compat).
+	Mode    string         `json:"mode,omitempty"`
+	Version domain.Lamport `json:"version"`
 }
 
 // Bid is a rover's cost to perform an announced task. Lower wins; ties break by
@@ -91,10 +97,31 @@ type Award struct {
 	// Type is the task's kind, carried so the winning Rover knows which
 	// deterministic build-op stream to emit while working it (bh-02) without
 	// having to remember the prior Announce.
-	Type     domain.TaskType `json:"type,omitempty"`
-	Pos      domain.Vec2     `json:"pos"`
-	LeaseTTL domain.Tick     `json:"lease_ttl"`
-	Version  domain.Lamport  `json:"version"`
+	Type domain.TaskType `json:"type,omitempty"`
+	// Mode is the Task's build mode tag (bh-08c), threaded from the placeBlueprint
+	// control onto the Task and carried here so the WINNING Rover honours the
+	// PER-TASK mode at award time: "live" ⇒ run the Build harness inline via the
+	// injected LiveBuilder seam; empty/"replay" ⇒ the deterministic replay/primitive
+	// stream. The Rover falls back to its own Config.Mode when this is empty, so
+	// `cmd/agent --build-mode=live` still works and existing awards are unchanged.
+	// A plain string, never the agent.Mode type, so wire stays model-free.
+	Mode     string         `json:"mode,omitempty"`
+	Pos      domain.Vec2    `json:"pos"`
+	LeaseTTL domain.Tick    `json:"lease_ttl"`
+	Version  domain.Lamport `json:"version"`
+
+	// PriorOps is the Task's already-accumulated, durable patch log at award time
+	// (bh-08e, resume-live on kill). It is EMPTY for a fresh Task and NON-EMPTY when
+	// a predecessor Rover streamed ops before it was killed/expired and the Task
+	// returned to UNCLAIMED with its patch log intact (the bh-02 durable partial
+	// state). The replacement Rover, on a non-empty PriorOps in live mode, FOLDS it
+	// to the current geometry and continues the live harness loop from there —
+	// extending the half-built structure rather than restarting from scratch — and
+	// resumes Seq numbering AFTER the prior ops so the stream stays monotonic and the
+	// renderer fold stays correct. Carried on the Award so the winner needs no extra
+	// round-trip to learn the partial state. Absent ⇒ a clean start, byte-identical
+	// to the pre-08e award.
+	PriorOps []BuildOp `json:"prior_ops,omitempty"`
 }
 
 // Complete reports that a rover finished its leased task.
@@ -109,11 +136,27 @@ type Complete struct {
 // waiting for the TTL to expire, so the task re-auctions immediately (slice 03,
 // the cooperative counterpart to silent death by heartbeat timeout). Reason is
 // a short human-readable cause for the audit log; it does not affect handling.
+//
+// One Reason IS load-bearing: ReasonBuilderDied (bh-08g). A live-mode rover that
+// crosses its model-failure threshold (bh-08f) publishes a Failed with this exact
+// reason BEFORE going silent, so the coordinator can count builder deaths PER TASK
+// precisely (distinct from an ordinary expiry/kill) and, past a threshold, trip the
+// circuit breaker that finishes the Task with the deterministic primitive op-source.
+// Any other Reason value (or none) is an ordinary cooperative release and never
+// counts toward the breaker.
 type Failed struct {
 	TaskID domain.TaskID  `json:"task_id"`
 	Robot  domain.RobotID `json:"robot_id"`
 	Reason string         `json:"reason,omitempty"`
 }
+
+// ReasonBuilderDied is the Failed.Reason a live-mode rover stamps when it abandons
+// a Task because its MODEL failed past the per-Rover death threshold (bh-08f/08g):
+// the distinguishable, inspectable signal the coordinator counts per Task to trip
+// the live-mode circuit breaker (≈3 builder deaths ⇒ finish via primitive). It is a
+// stable wire string, so the dying rover and the coordinator agree without sharing
+// the agent's death-path internals.
+const ReasonBuilderDied = "builder-died"
 
 // Heartbeat renews a rover's lease on a task.
 type Heartbeat struct {
@@ -188,10 +231,18 @@ const (
 	ShapeModel    BuildShape = "model" // future glTF; not rendered yet
 )
 
-// BuildOpPlace is the only op kind today: place one primitive in the Task's
-// Build-envelope frame. Kept as a const (not an enum type) so the JSON value is
-// the literal string "place".
-const BuildOpPlace = "place"
+// Build op kinds (bh-08a). The Build spec is an append-only PATCH LOG that the
+// renderer FOLDS into current geometry: a `place` adds a piece keyed by its Id;
+// a `move` updates the pos/rot/scale of an existing Id; a `delete` removes an
+// Id. Folding applies the ops in order, last-write-wins per Id. A place-only log
+// (today's cache + primitive op stream) is a degenerate patch log that folds to
+// itself, so existing replay renders pixel-identically. Kept as consts (not an
+// enum type) so the JSON value is the literal string.
+const (
+	BuildOpPlace  = "place"  // add a piece keyed by Id
+	BuildOpMove   = "move"   // update an existing Id's pos/rot/scale
+	BuildOpDelete = "delete" // remove an existing Id
+)
 
 // Material is a BuildOp's procedural surface. Color/roughness/metalness drive a
 // standard PBR material today; Map (a texture reference) is a reserved
@@ -203,12 +254,18 @@ type Material struct {
 	Map       string   `json:"map,omitempty"`       // future texture reference; no-op today
 }
 
-// BuildOp is a single declarative build step. pos/rot/scale are expressed
-// relative to the Task's Build-envelope frame (TECHSPEC §4). ModelRef is the
-// future glTF reference, populated only when Shape is "model".
+// BuildOp is a single declarative build step in the append-only patch log
+// (bh-08a). pos/rot/scale are expressed relative to the Task's Build-envelope
+// frame (TECHSPEC §4). ModelRef is the future glTF reference, populated only
+// when Shape is "model".
+//
+// Id is the stable key the renderer folds on: a `place` introduces an Id; a
+// later `move`/`delete` targets that earlier Id. A place-only log gives every
+// op a distinct Id, so it folds to itself (pixel-identical replay, ADR-0006).
 type BuildOp struct {
-	Op       string      `json:"op"`    // always "place" today (BuildOpPlace)
-	Shape    BuildShape  `json:"shape"` // box | cylinder | sphere | model
+	Op       string      `json:"op"`    // place | move | delete (BuildOpPlace/Move/Delete)
+	ID       string      `json:"id"`    // stable piece key; move/delete target an earlier place's ID
+	Shape    BuildShape  `json:"shape"` // box | cylinder | sphere | model (place only)
 	Pos      domain.Vec3 `json:"pos"`
 	Rot      domain.Vec3 `json:"rot"`
 	Scale    domain.Vec3 `json:"scale"`
@@ -330,6 +387,11 @@ type Control struct {
 	BlueprintID string      `json:"blueprint_id,omitempty"` // catalog Blueprint to place
 	Origin      domain.Vec2 `json:"origin,omitzero"`        // worksite anchor for the injected DAG
 	Rotation    float64     `json:"rotation,omitempty"`     // radians, about the origin
+	// Mode picks the build mode for THIS placement (bh-08c): "live" ⇒ the injected
+	// DAG's Tasks are tagged live and a winning Rover runs the Build harness inline;
+	// "replay" or empty ⇒ the deterministic replay (the default, back-compat). The
+	// coordinator stamps it onto every injected Task. Ignored by every other command.
+	Mode string `json:"mode,omitempty"`
 }
 
 // SubjControl is the bus subject the gateway relays browser Control messages onto.

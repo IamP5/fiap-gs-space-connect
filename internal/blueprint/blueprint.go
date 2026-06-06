@@ -103,7 +103,13 @@ type PlacedTask struct {
 // tasks are UNCLAIMED at version 0 — the coordinator stamps the injection version
 // when it admits them, like the startup blueprint. instance must be non-empty and
 // unique per placement (the coordinator derives it from a monotonic counter).
-func (b Blueprint) Place(instance string, origin domain.Vec2, rotation float64) []PlacedTask {
+//
+// mode tags every instantiated Task's build mode (bh-08c): "live" ⇒ a winning
+// Rover runs the Build harness inline; empty/"replay" ⇒ the deterministic replay
+// stream. It is a plain string carried on domain.Task.Mode, so the blueprint
+// package stays model-free. An empty mode leaves every Task at the replay default,
+// so existing callers that pass "" are byte-for-byte unchanged.
+func (b Blueprint) Place(instance string, origin domain.Vec2, rotation float64, mode string) []PlacedTask {
 	sin, cos := math.Sin(rotation), math.Cos(rotation)
 	prefix := func(id domain.TaskID) domain.TaskID {
 		return domain.TaskID(instance + "/" + string(id))
@@ -130,6 +136,7 @@ func (b Blueprint) Place(instance string, origin domain.Vec2, rotation float64) 
 				Type:   t.Type,
 				Deps:   deps,
 				Status: domain.Unclaimed,
+				Mode:   mode, // per-placement build mode tag (bh-08c); "" ⇒ replay default
 			},
 			Pos:      abs,
 			Envelope: t.Envelope,

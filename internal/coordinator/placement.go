@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"log/slog"
+	"swarmbuild/internal/agent"
 	"swarmbuild/internal/blueprint"
 	"swarmbuild/internal/core/domain"
 	"swarmbuild/internal/core/planner"
@@ -38,7 +39,11 @@ func (st *state) onPlaceBlueprint(ctx context.Context, ctl wire.Control) {
 	// Unique instance prefix per placement so repeated copies never share task ids.
 	st.placeSeq++
 	instance := fmt.Sprintf("bp%d", st.placeSeq)
-	placed := bp.Place(instance, ctl.Origin, ctl.Rotation)
+	// Per-placement build mode (bh-08c): tag every injected Task with the operator's
+	// chosen mode so a winning Rover honours it per-Task. normalizeMode collapses an
+	// empty/unknown value to the replay default, so an omitted mode = replay
+	// (back-compat) and a replay dome and a live dome coexist in one world.
+	placed := bp.Place(instance, ctl.Origin, ctl.Rotation, normalizeMode(ctl.Mode))
 
 	if reason, ok := st.validatePlacement(placed); !ok {
 		// Roll the counter back so a rejected attempt does not burn an instance id
@@ -179,6 +184,20 @@ func (st *state) allTasks() []domain.Task {
 		}
 	}
 	return out
+}
+
+// normalizeMode collapses an operator-supplied placeBlueprint mode to the canonical
+// per-Task tag (bh-08c). Only the explicit live mode is honoured; an empty, unknown,
+// or "replay" value falls back to the replay default, so an omitted mode = replay
+// (back-compat) and a malformed mode can never silently opt a placement into live
+// model calls. It uses the agent's Mode string values as the single source of truth
+// WITHOUT importing the Model seam — the coordinator stays model-free (ADR-0005,
+// archtest): agent.Mode is a plain string the coordinator already depends on.
+func normalizeMode(mode string) string {
+	if mode == string(agent.ModeLive) {
+		return string(agent.ModeLive)
+	}
+	return string(agent.ModeReplay)
 }
 
 // onValidTerrain reports whether a worksite position sits on buildable terrain.

@@ -124,15 +124,71 @@ export function opToMesh(op: BuildOp): MeshDesc | null {
   return primitiveDesc(op, geometry);
 }
 
-// interpretBuildSpec maps a Task's ordered Build spec into renderable mesh
-// descriptors, preserving op order and dropping non-renderable ops. A Task with
-// no build_spec (or an empty one) yields an EMPTY list — the signal Scene3D uses
-// to fall through to the deterministic `tierOf` primitive (fallback unchanged).
+// fold applies the append-only patch log in order and returns the current
+// geometry as the surviving `place` ops (bh-08a, ADR-0006). It MIRRORS the Go
+// spec.Fold exactly and is a PURE function (no input mutation) so it is
+// unit-testable in isolation:
+//
+//   - place:  introduces a piece keyed by id (a re-placed id overwrites it).
+//   - move:   updates the pos/rot/scale of an existing id (last-write-wins).
+//   - delete: removes an existing id.
+//
+// Survivors keep first-seen order, so a place-only log (today's cache + primitive
+// stream, with OR without ids) folds to itself — pixel-identical replay. A
+// move/delete targeting an unknown id is a defensive no-op (the server already
+// rejects it; a stray frame must never crash the pure render). An empty id is an
+// ANONYMOUS place that always survives and can't be targeted, matching Go.
+export function fold(ops: readonly BuildOp[]): BuildOp[] {
+  const order: string[] = [];
+  const byId = new Map<string, BuildOp>();
+  ops.forEach((op, i) => {
+    switch (op.op) {
+      case "place": {
+        const key = op.id === "" || op.id == null ? `\u0000anon-${i}` : op.id;
+        if (!byId.has(key)) order.push(key);
+        byId.set(key, op);
+        break;
+      }
+      case "move": {
+        const cur = byId.get(op.id);
+        if (cur) byId.set(op.id, { ...cur, pos: op.pos, rot: op.rot, scale: op.scale });
+        break; // unknown id ⇒ defensive no-op
+      }
+      case "delete": {
+        byId.delete(op.id);
+        break; // unknown id ⇒ defensive no-op
+      }
+    }
+  });
+  // Emit each surviving id ONCE, at its first surviving order position. A
+  // place → delete → re-place sequence pushes the key to `order` twice (the
+  // delete drops it from byId, the re-place re-pushes), so without this dedupe
+  // the survivor would render twice. Mirrors Go spec.Fold exactly; reachable
+  // across the bh-08e kill→resume handoff (a slot deleted then re-placed).
+  const out: BuildOp[] = [];
+  const emitted = new Set<string>();
+  for (const key of order) {
+    if (emitted.has(key)) continue;
+    const op = byId.get(key);
+    if (op) {
+      out.push(op);
+      emitted.add(key);
+    }
+  }
+  return out;
+}
+
+// interpretBuildSpec FOLDS a Task's patch log into current geometry, then maps
+// the surviving ops into renderable mesh descriptors (preserving fold order,
+// dropping non-renderable survivors). A Task with no build_spec (or an empty one)
+// yields an EMPTY list — the signal Scene3D uses to fall through to the
+// deterministic `tierOf` primitive (fallback unchanged). A place-only spec folds
+// to itself, so this is byte-identical to today for existing replay.
 export function interpretBuildSpec(task: Pick<TaskView, "build_spec">): MeshDesc[] {
   const ops = task.build_spec;
   if (!ops || ops.length === 0) return [];
   const out: MeshDesc[] = [];
-  for (const op of ops) {
+  for (const op of fold(ops)) {
     const mesh = opToMesh(op);
     if (mesh) out.push(mesh);
   }

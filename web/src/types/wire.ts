@@ -14,13 +14,14 @@ export type Vec3 = { X: number; Y: number; Z: number };
 
 export type TaskStatus = "UNCLAIMED" | "LEASED" | "DONE";
 
-// --- Build spec (TECHSPEC §4, ADR-0006) — forward-compatible geometry-as-data.
+// --- Build spec (TECHSPEC §4, ADR-0006, bh-08a) — forward-compatible
+// geometry-as-data.
 //
-// An ordered list of declarative BuildOps the renderer INTERPRETS into meshes,
-// never executes. Mirrors wire.go's BuildOp/Material exactly (snake_case JSON
-// field names) so the two round-trip. box|cylinder|sphere render today; "model"
-// (with model_ref) and material `map` are reserved future glTF/texture slots the
-// current renderer treats as no-ops.
+// An append-only PATCH LOG of declarative BuildOps the renderer FOLDS into
+// current geometry, never executes. Mirrors wire.go's BuildOp/Material exactly
+// (snake_case JSON field names) so the two round-trip. box|cylinder|sphere render
+// today; "model" (with model_ref) and material `map` are reserved future
+// glTF/texture slots the current renderer treats as no-ops.
 export type BuildShape = "box" | "cylinder" | "sphere" | "model";
 
 export type Material = {
@@ -30,8 +31,14 @@ export type Material = {
   map?: string; // future texture reference; no-op today
 };
 
+// A single patch-log op. `op` is the kind; `id` is the stable piece key the
+// renderer folds on — a `place` introduces an id, a later `move`/`delete` targets
+// it. A place-only log gives every op a distinct id and folds to itself (today's
+// cache + primitive stream, pixel-identical replay). move/delete carry only the
+// fields the fold needs (id, and pos/rot/scale for move).
 export type BuildOp = {
-  op: "place";
+  op: "place" | "move" | "delete";
+  id: string;
   shape: BuildShape;
   pos: Vec3;
   rot: Vec3;
@@ -110,11 +117,12 @@ export type EarthUplink = {
 //                                worksite); cmd-only, no robot/value
 //   · setFailureProb  (value) — 0..1 per-rover induced failure rate (issue 08)
 //   · setLatency      (value) — ms of delay on the earth.uplink feed (issue 09)
-//   · placeBlueprint  (blueprint_id, origin, rotation) — drag a pre-authored
+//   · placeBlueprint  (blueprint_id, origin, rotation, mode) — drag a pre-authored
 //                       Blueprint into the world; the coordinator validates
 //                       bounds/terrain/no-overlap then injects its task DAG, which
-//                       the Auction builds exactly as today (bh-05). The fields
-//                       are snake_case to mirror wire.go's Control JSON tags.
+//                       the Auction builds exactly as today (bh-05). `mode` picks
+//                       replay (the default) or live PER PLACEMENT (bh-08c). The
+//                       fields are snake_case to mirror wire.go's Control JSON tags.
 export type Control = {
   cmd: string;
   robot?: string;
@@ -122,7 +130,13 @@ export type Control = {
   blueprint_id?: string; // placeBlueprint: catalog Blueprint id
   origin?: Vec2; // placeBlueprint: worksite anchor for the injected DAG
   rotation?: number; // placeBlueprint: radians about the origin
+  mode?: BuildMode; // placeBlueprint: "replay" (default) | "live" build mode (bh-08c)
 };
+
+// BuildMode is the per-placement build mode the operator chooses before dropping a
+// Blueprint (bh-08c): "replay" replays the deterministic cache/primitive stream
+// (the default), "live" runs the Build harness inline. Mirrors agent.Mode in Go.
+export type BuildMode = "replay" | "live";
 
 // Narrow an arbitrary parsed JSON value to a Snapshot. Defensive: a malformed
 // frame must never crash the pure render.

@@ -23,10 +23,23 @@ type FakeModel struct {
 	// treat as immediate fallback.
 	Err error
 
+	// FailFirst, if > 0, makes the first FailFirst Generate calls return
+	// ErrTransient (a TRANSIENT provider error) before the fake reverts to serving
+	// Responses. It models a blip that a bounded per-call retry should ride out
+	// (bh-08f): a test can stage "fail twice, then succeed" and assert the retry
+	// recovered. It composes with Responses (the post-blip calls pop them in order);
+	// it is ignored when Err is set (Err fails EVERY call unconditionally).
+	FailFirst int
+
 	// calls counts Generate invocations so a test can assert exactly how many times
 	// the seam was hit (e.g. that a repairable failure re-asks exactly once).
 	calls int
 }
+
+// ErrTransient is the canned TRANSIENT provider error the fake returns for the first
+// FailFirst calls — a blip the harness's bounded per-call retry (bh-08f) should ride
+// out, distinct from the unconditional, every-call Err.
+var ErrTransient = errors.New("fakemodel: transient provider error")
 
 // ErrNoMoreResponses is returned when Generate is called more times than the
 // FakeModel has scripted responses — a test-author error (the orchestration asked
@@ -41,7 +54,12 @@ func (f *FakeModel) Generate(_ context.Context, _ Request) (json.RawMessage, err
 	if f.Err != nil {
 		return nil, f.Err
 	}
-	idx := f.calls - 1
+	if f.calls <= f.FailFirst {
+		return nil, ErrTransient // a transient blip a bounded retry should ride out (bh-08f)
+	}
+	// Pop the next scripted response, indexed PAST the transient-failure prefix so the
+	// first real response is served on the first non-failing call.
+	idx := f.calls - 1 - f.FailFirst
 	if idx >= len(f.Responses) {
 		return nil, ErrNoMoreResponses
 	}

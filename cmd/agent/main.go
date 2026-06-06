@@ -15,6 +15,8 @@ import (
 	"swarmbuild/internal/agent"
 	"swarmbuild/internal/bus"
 	"swarmbuild/internal/core/domain"
+	"swarmbuild/internal/harness/live"
+	"swarmbuild/internal/harness/model"
 	"syscall"
 	"time"
 )
@@ -44,6 +46,7 @@ func run() error {
 		recoverMS = flag.Int("recover-ms", 6000, "recoverable-outage window: ms a killed rover stays down before reviving in place")
 		settleMS  = flag.Int("settle-ms", 2500, "post-revival settle window: ms a revived rover holds station before bidding again")
 		natsURL   = flag.String("nats-url", "", "NATS URL (overrides NATS_URL env)")
+		buildMode = flag.String("build-mode", "replay", "rover Build mode: replay (cache/primitive, no model call) | live (run the harness inline via the Model seam)")
 	)
 	flag.Parse()
 
@@ -65,6 +68,20 @@ func run() error {
 		SettleAfterRevive: time.Duration(*settleMS) * time.Millisecond,
 	}
 
+	// Live Build Mode (bh-08): opt-in inline generation. The composition root reads
+	// the API key SERVER-SIDE (env-sourced via model.Config.APIKey) and constructs
+	// the model-backed LiveBuilder; the agent package never imports the Model seam.
+	// Replay (the default) is byte-for-byte the pre-08 path with ZERO model calls.
+	if strings.EqualFold(*buildMode, string(agent.ModeLive)) {
+		builder, err := buildLive()
+		if err != nil {
+			return err
+		}
+		cfg.Mode = agent.ModeLive
+		cfg.LiveBuilder = builder
+		slog.Info("rover build mode: live", "rover", cfg.ID)
+	}
+
 	ctx, stop := signal.NotifyContext(context.Background(), syscall.SIGINT, syscall.SIGTERM)
 	defer stop()
 
@@ -83,6 +100,57 @@ func run() error {
 	}
 	slog.Info("agent shut down", "rover", cfg.ID)
 	return nil
+}
+
+// buildLive constructs the live Build harness seam from the environment. The API
+// key is read SERVER-SIDE ONLY (env-sourced via model.Config.APIKey) and never
+// logged or shipped to the browser (ADR-0005 / bh-08). It mirrors cmd/{bake,
+// gateway}'s provider swap: LAB_PROVIDER / LAB_MODEL select the provider + model,
+// and the matching *_API_KEY authenticates it. A missing key is a hard error
+// here (live mode was explicitly requested), unlike the gateway where the lab is
+// optional.
+func buildLive() (*live.Builder, error) {
+	provider := strings.ToLower(getenv("LAB_PROVIDER", "openai"))
+	modelID := getenv("LAB_MODEL", "gpt-4o-2024-08-06")
+	apiKey, baseURL := keyAndBaseURL(provider)
+
+	m, err := model.NewOpenAI(model.Config{
+		Provider: provider,
+		BaseURL:  baseURL,
+		Model:    modelID,
+		APIKey:   apiKey, // server-side only; never reaches the browser
+	})
+	if err != nil {
+		return nil, err
+	}
+	return live.NewBuilder(m, provider, modelID), nil
+}
+
+// keyAndBaseURL resolves the API key + OpenAI-compatible base_url for a provider
+// from the environment, mirroring cmd/{bake,gateway}'s provider swap.
+func keyAndBaseURL(provider string) (apiKey, baseURL string) {
+	switch provider {
+	case "gemini":
+		return os.Getenv("GEMINI_API_KEY"), model.BaseURLGemini
+	case "local":
+		// Ollama needs no real key; accept a placeholder so the adapter's non-empty
+		// check passes.
+		k := os.Getenv("OPENAI_API_KEY")
+		if k == "" {
+			k = "ollama"
+		}
+		return k, model.BaseURLLocal
+	default:
+		return os.Getenv("OPENAI_API_KEY"), model.BaseURLOpenAI
+	}
+}
+
+// getenv returns the environment value for key, or def when it is unset/empty.
+func getenv(key, def string) string {
+	if v := os.Getenv(key); v != "" {
+		return v
+	}
+	return def
 }
 
 func parseCapabilities(s string) []domain.Capability {
