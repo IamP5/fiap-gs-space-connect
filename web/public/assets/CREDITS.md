@@ -182,3 +182,26 @@ for educational/informational purposes; the NASA insignia/logo and flags are
 excluded and are NOT used here. See
 https://www.nasa.gov/nasa-brand-center/images-and-media/ and
 https://github.com/nasa/NASA-3D-Resources.
+
+## Rover model (NASA-PD)
+
+Used by `<Rover3D>` (issue #54) as the realistic worker-entity render — every
+rover swaps its primitive box body for this one configured glTF. It is NOT a
+Build-spec catalog Asset; the model is fixed for all rovers. A missing/failed
+load falls back FOREVER to the primitive rover (box body + sensor mast + 4
+wheels), so the scene never blanks (ADR-0004). Self-hosted, conditioned +
+Draco-compressed by `scripts/condition-asset.mjs` (recentered, fit-to-unit);
+fitted + ground-seated at load. The loaded tree is raycast-suppressed so the
+rover's invisible hit-proxy sphere stays the SOLE pickable surface.
+
+| File | Source asset | Author | Source URL | License |
+|------|--------------|--------|-----------|---------|
+| `models/rassor_rover.glb` | "Regolith Advanced Surface Systems Operations Robot (RASSOR)" — NASA's lunar regolith excavation/construction robot. Draco-decompressed, decimated (~2.1M → render-light), conditioned (Y-up, recentered, fit-to-unit), then Draco-recompressed (6.3 MB → 2.0 MB). | NASA | https://github.com/nasa/NASA-3D-Resources/tree/master/3D%20Models/Regolith%20Advanced%20Surface%20Systems%20Operations%20Robot%20(RASSOR) | NASA-PD |
+
+NASA's 3D Resources are released into the public domain (NASA-PD); see
+https://github.com/nasa/NASA-3D-Resources (Usage Guidelines). No NASA insignia
+("meatball"/worm logo) is included — `condition-asset.mjs` strips insignia/decal
+nodes. This use does not imply NASA endorsement.
+
+Original download (Draco-compressed source; conditioned, not committed as-is):
+`https://raw.githubusercontent.com/nasa/NASA-3D-Resources/master/3D%20Models/Regolith%20Advanced%20Surface%20Systems%20Operations%20Robot%20%28RASSOR%29/Regolith%20Advanced%20Surface%20Systems%20Operations%20Robot%20%28RASSOR%29.glb`
