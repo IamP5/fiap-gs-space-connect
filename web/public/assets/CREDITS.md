@@ -57,6 +57,27 @@ Poly Haven publishes all of its assets under CC0 1.0
 (https://polyhaven.com/license); the asset's authors are confirmed via the Poly
 Haven API (`https://api.polyhaven.com/info/rock_boulder_dry`).
 
+## Habitat & base models (NASA-PD)
+
+Habitat/base Assets vendored for the realism Asset catalog (issue #55). These are
+US-government public-domain works from NASA's 3D Resources repository. Credited as
+`NASA / <author>` as a courtesy; this project is **not** affiliated with or
+endorsed by NASA, and the NASA insignia is **not** used. Each file was verified to
+be a real glTF binary (starts with the ASCII magic `glTF`) and contains no
+insignia. Downloaded: 2026-06-06.
+
+| File | Source asset | Author | Source URL | License |
+|------|--------------|--------|-----------|---------|
+| `models/radome.glb` | NASA 3D Resources → `3D Models/Radome/Radome.glb` | NASA / NASA 3D Resources | https://github.com/nasa/NASA-3D-Resources/blob/master/3D%20Models/Radome/Radome.glb | NASA / US-gov public domain |
+| `models/habitat-demo-unit-1.glb` | NASA 3D Resources → `3D Models/Habitat Demonstration Unit/Habitat Demonstration Unit (part 1).glb` | NASA / NASA 3D Resources | https://github.com/nasa/NASA-3D-Resources/blob/master/3D%20Models/Habitat%20Demonstration%20Unit/Habitat%20Demonstration%20Unit%20%28part%201%29.glb | NASA / US-gov public domain |
+| `models/habitat-demo-unit-2.glb` | NASA 3D Resources → `3D Models/Habitat Demonstration Unit/Habitat Demonstration Unit (part 2).glb` | NASA / NASA 3D Resources | https://github.com/nasa/NASA-3D-Resources/blob/master/3D%20Models/Habitat%20Demonstration%20Unit/Habitat%20Demonstration%20Unit%20%28part%202%29.glb | NASA / US-gov public domain |
+
+NASA 3D Resources content is in the public domain
+(https://nasa3d.arc.nasa.gov/detail/nasa-3d-resources); see also NASA's media
+usage guidelines (https://www.nasa.gov/nasa-brand-center/images-and-media/). The
+`.glb` files above are vendored verbatim from the repository's `master` branch,
+unmodified.
+
 ## Launch scenery (NASA-PD)
 
 Static, non-diegetic launch-infrastructure set-pieces rendered as decorative

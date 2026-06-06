@@ -7,6 +7,17 @@ import (
 	"testing"
 )
 
+// Task-type literals reused across cases (kept as constants so the table-driven
+// tests don't trip goconst on repeated string literals).
+const (
+	ttWall     domain.TaskType = "wall"
+	ttDomeCap  domain.TaskType = "dome-cap"
+	ttFndation domain.TaskType = "foundation"
+
+	// keyRadome is the radome habitat key, reused across the default-catalog cases.
+	keyRadome = "habitat-radome"
+)
+
 // unit is a well-formed procedural place op reused as a base across cases.
 func unit() wire.BuildOp {
 	return wire.BuildOp{
@@ -39,10 +50,10 @@ func TestResolve(t *testing.T) {
 	}{
 		{"hit in custom catalog", custom, "rover", "/assets/rover.glb", true},
 		{"miss in custom catalog", custom, "ghost", "", false},
-		{"hit in default/global catalog", DefaultCatalog(), "habitat-dome", "/assets/habitat-dome.glb", true},
+		{"hit in default/global catalog", DefaultCatalog(), keyRadome, "/assets/models/radome.glb", true},
 		{"miss in default catalog", DefaultCatalog(), "nope", "", false},
 		{"empty key never resolves", DefaultCatalog(), "", "", false},
-		{"nil catalog resolves nothing", nil, "habitat-dome", "", false},
+		{"nil catalog resolves nothing", nil, keyRadome, "", false},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
@@ -144,7 +155,7 @@ func TestResolveOpPassthrough(t *testing.T) {
 		for _, kind := range []string{wire.BuildOpMove, wire.BuildOpDelete} {
 			op := unit()
 			op.Op = kind
-			op.AssetKey = "habitat-dome" // a real key, but on the wrong op kind
+			op.AssetKey = keyRadome // a real key, but on the wrong op kind
 			got, ok := dc.ResolveOp(op)
 			if ok {
 				t.Fatalf("%s op must not resolve an Asset key", kind)
@@ -206,16 +217,80 @@ func TestResolveSpecNilEmpty(t *testing.T) {
 // (no declared types) entry.
 func TestSuitsType(t *testing.T) {
 	t.Parallel()
-	restricted := NewEntry("k", "/a.glb", []domain.TaskType{"wall", "panel"}, Identity())
-	if !restricted.SuitsType("wall") {
+	restricted := NewEntry("k", "/a.glb", []domain.TaskType{ttWall, "panel"}, Identity())
+	if !restricted.SuitsType(ttWall) {
 		t.Fatal("want wall suited")
 	}
-	if restricted.SuitsType("dome-cap") {
+	if restricted.SuitsType(ttDomeCap) {
 		t.Fatal("want dome-cap NOT suited")
 	}
 	unrestricted := NewEntry("u", "/u.glb", nil, Identity())
 	if !unrestricted.SuitsType("anything") {
 		t.Fatal("an entry with no task types must suit every type")
+	}
+}
+
+// TestHabitatEntries pins the real, vendored habitat/base Assets (#55, NASA-PD):
+// each habitat key resolves to its self-hosted, vendored glb model_ref and suits
+// the intended dome/wall/foundation task type. Mirrors TestResolve/TestSuitsType.
+func TestHabitatEntries(t *testing.T) {
+	t.Parallel()
+	c := DefaultCatalog()
+
+	cases := []struct {
+		key      string
+		wantRef  string
+		suits    domain.TaskType // the task type the Asset must suit
+		notSuits domain.TaskType // a task type it must NOT suit
+	}{
+		{keyRadome, "/assets/models/radome.glb", ttDomeCap, ttFndation},
+		{"habitat-demo-unit-1", "/assets/models/habitat-demo-unit-1.glb", ttFndation, ttDomeCap},
+		{"habitat-demo-unit-2", "/assets/models/habitat-demo-unit-2.glb", ttWall, ttDomeCap},
+	}
+	for _, tc := range cases {
+		t.Run(tc.key, func(t *testing.T) {
+			t.Parallel()
+			ref, _, ok := c.Resolve(tc.key)
+			if !ok {
+				t.Fatalf("Resolve(%q): want hit", tc.key)
+			}
+			if ref != tc.wantRef {
+				t.Fatalf("Resolve(%q) ref = %q, want %q", tc.key, ref, tc.wantRef)
+			}
+			e, ok := c.Get(tc.key)
+			if !ok {
+				t.Fatalf("Get(%q): want hit", tc.key)
+			}
+			if !e.SuitsType(tc.suits) {
+				t.Fatalf("%q must suit %q", tc.key, tc.suits)
+			}
+			if e.SuitsType(tc.notSuits) {
+				t.Fatalf("%q must NOT suit %q", tc.key, tc.notSuits)
+			}
+			// A vendored, self-hosted glb under the curated /assets/ mount.
+			if e.ModelRef[:len("/assets/")] != "/assets/" {
+				t.Fatalf("%q model_ref %q is not self-hosted under /assets/", tc.key, e.ModelRef)
+			}
+		})
+	}
+}
+
+// TestHabitatTaskTypeCoverage proves the dome/wall/foundation task vocabulary each
+// maps to at least one suited habitat Asset key (acceptance criterion #55).
+func TestHabitatTaskTypeCoverage(t *testing.T) {
+	t.Parallel()
+	c := DefaultCatalog()
+	for _, tt := range []domain.TaskType{ttDomeCap, ttWall, ttFndation} {
+		found := false
+		for _, e := range c.All() {
+			if e.SuitsType(tt) && len(e.TaskTypes) > 0 {
+				found = true
+				break
+			}
+		}
+		if !found {
+			t.Fatalf("no catalog Asset suits task type %q", tt)
+		}
 	}
 }
 
