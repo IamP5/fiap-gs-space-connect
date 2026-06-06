@@ -13,6 +13,8 @@ const (
 	ttWall     domain.TaskType = "wall"
 	ttDomeCap  domain.TaskType = "dome-cap"
 	ttFndation domain.TaskType = "foundation"
+	ttPanel    domain.TaskType = "panel"
+	ttMast     domain.TaskType = "mast"
 
 	// keyRadome is the radome habitat key, reused across the default-catalog cases.
 	keyRadome = "habitat-radome"
@@ -230,23 +232,21 @@ func TestSuitsType(t *testing.T) {
 	}
 }
 
-// TestHabitatEntries pins the real, vendored habitat/base Assets (#55, NASA-PD):
-// each habitat key resolves to its self-hosted, vendored glb model_ref and suits
-// the intended dome/wall/foundation task type. Mirrors TestResolve/TestSuitsType.
-func TestHabitatEntries(t *testing.T) {
-	t.Parallel()
-	c := DefaultCatalog()
+// entryCase is one curated-Asset expectation: the key must resolve to wantRef,
+// suit `suits`, and NOT suit `notSuits`. Shared by the habitat (#55) and prop
+// (#57) entry tables so both assert identically with no duplicated loop body.
+type entryCase struct {
+	key      string
+	wantRef  string
+	suits    domain.TaskType // the task type the Asset must suit
+	notSuits domain.TaskType // a task type it must NOT suit
+}
 
-	cases := []struct {
-		key      string
-		wantRef  string
-		suits    domain.TaskType // the task type the Asset must suit
-		notSuits domain.TaskType // a task type it must NOT suit
-	}{
-		{keyRadome, "/assets/models/radome.glb", ttDomeCap, ttFndation},
-		{"habitat-demo-unit-1", "/assets/models/habitat-demo-unit-1.glb", ttFndation, ttDomeCap},
-		{"habitat-demo-unit-2", "/assets/models/habitat-demo-unit-2.glb", ttWall, ttDomeCap},
-	}
+// assertEntries runs the shared per-entry assertions over a table of cases:
+// Resolve(key) hits with the expected self-hosted model_ref, Get(key) hits, and
+// SuitsType is true for `suits` / false for `notSuits`.
+func assertEntries(t *testing.T, c *Catalog, cases []entryCase) {
+	t.Helper()
 	for _, tc := range cases {
 		t.Run(tc.key, func(t *testing.T) {
 			t.Parallel()
@@ -272,6 +272,49 @@ func TestHabitatEntries(t *testing.T) {
 				t.Fatalf("%q model_ref %q is not self-hosted under /assets/", tc.key, e.ModelRef)
 			}
 		})
+	}
+}
+
+// TestHabitatEntries pins the real, vendored habitat/base Assets (#55, NASA-PD):
+// each habitat key resolves to its self-hosted, vendored glb model_ref and suits
+// the intended dome/wall/foundation task type. Mirrors TestResolve/TestSuitsType.
+func TestHabitatEntries(t *testing.T) {
+	t.Parallel()
+	assertEntries(t, DefaultCatalog(), []entryCase{
+		{keyRadome, "/assets/models/radome.glb", ttDomeCap, ttFndation},
+		{"habitat-demo-unit-1", "/assets/models/habitat-demo-unit-1.glb", ttFndation, ttDomeCap},
+		{"habitat-demo-unit-2", "/assets/models/habitat-demo-unit-2.glb", ttWall, ttDomeCap},
+	})
+}
+
+// TestPropEntries pins the real, vendored construction-prop Assets (#57, NASA-PD):
+// each prop key resolves to its self-hosted, conditioned glb model_ref and suits
+// the intended panel/mast task type. Mirrors TestHabitatEntries.
+func TestPropEntries(t *testing.T) {
+	t.Parallel()
+	assertEntries(t, DefaultCatalog(), []entryCase{
+		{"solar-panel", "/assets/models/solar-panel.glb", ttPanel, ttMast},
+		{"comms-mast", "/assets/models/comms-mast.glb", ttMast, ttPanel},
+		{"comms-dish", "/assets/models/comms-dish.glb", ttMast, ttWall},
+	})
+}
+
+// TestPropTaskTypeCoverage proves the panel/mast task vocabulary each maps to at
+// least one suited construction-prop Asset key (acceptance criterion #57).
+func TestPropTaskTypeCoverage(t *testing.T) {
+	t.Parallel()
+	c := DefaultCatalog()
+	for _, tt := range []domain.TaskType{ttPanel, ttMast} {
+		found := false
+		for _, e := range c.All() {
+			if e.SuitsType(tt) && len(e.TaskTypes) > 0 {
+				found = true
+				break
+			}
+		}
+		if !found {
+			t.Fatalf("no catalog Asset suits task type %q", tt)
+		}
 	}
 }
 

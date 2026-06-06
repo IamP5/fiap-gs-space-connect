@@ -180,12 +180,25 @@ func DefaultCatalog() *Catalog {
 			[]domain.TaskType{"wall"},
 			Transform{Scale: domain.Vec3{X: 0.25, Y: 0.25, Z: 0.25}}),
 
-		// TODO(#57): solar-panel / comms-mast are placeholders pending their own
-		// vendored glbs; left intact so the catalog keeps resolving those keys.
-		NewEntry("solar-panel", "/assets/solar-panel.glb",
-			[]domain.TaskType{"panel"}, Identity()),
-		NewEntry("comms-mast", "/assets/comms-mast.glb",
-			[]domain.TaskType{"mast"}, Identity()),
+		// Construction props (#57), NASA-PD, conditioned + Draco-compressed and
+		// self-hosted under web/public/assets/models/ (see CREDITS.md). Each is
+		// keyed to its suited Build task type with a hand-tuned fit/orientation
+		// nudge so the raw model seats sensibly in its unit-ish envelope.
+
+		// Solar Sail Concept — a flat sun-facing array, the photovoltaic prop.
+		NewEntry("solar-panel", "/assets/models/solar-panel.glb",
+			[]domain.TaskType{"panel"},
+			Transform{Scale: domain.Vec3{X: 1.4, Y: 1.4, Z: 1.4}, Offset: domain.Vec3{Y: 0.5}}),
+
+		// Tether — a slender vertical strut, standing in for the comms mast.
+		NewEntry("comms-mast", "/assets/models/comms-mast.glb",
+			[]domain.TaskType{"mast"},
+			Transform{Scale: domain.Vec3{X: 0.6, Y: 1.6, Z: 0.6}, Offset: domain.Vec3{Y: 0.8}}),
+
+		// 70-meter Dish — a parabolic antenna, the comms dish prop.
+		NewEntry("comms-dish", "/assets/models/comms-dish.glb",
+			[]domain.TaskType{"mast", "panel"},
+			Transform{Scale: domain.Vec3{X: 0.8, Y: 0.8, Z: 0.8}, Offset: domain.Vec3{Y: 0.4}}),
 	)
 }
 
