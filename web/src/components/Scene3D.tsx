@@ -55,6 +55,8 @@ import {
   beatProgress,
 } from "../lib/choreography";
 import { type MeshDesc, interpretBuildSpec } from "../lib/buildspec";
+import { type Ghost, footprintOf } from "../lib/placement";
+import type { Vec2 } from "../types/wire";
 
 // Functional telemetry colors (DESIGN.md: live-data signals only — the brand
 // palette itself is black + white). Matched to the 2D canvas so the two
@@ -649,14 +651,119 @@ type Scene3DProps = {
   snapshot: Snapshot | null;
   selected: string | null;
   onPick: (id: string | null) => void;
+  // Drag-to-place (bh-05). `placing` arms the ground placement plane; `ghost` is
+  // the transient preview (null until the cursor hits the ground); `onPlaceMove`
+  // reports the world origin under the cursor; `onPlaceConfirm` drops it. All are
+  // optional so the 2D fallback / tests can omit them.
+  placing?: boolean;
+  ghost?: Ghost | null;
+  onPlaceMove?: (origin: Vec2) => void;
+  onPlaceConfirm?: () => void;
 };
+
+// GHOST_OK / GHOST_BAD tint the placement preview green when the spot is valid,
+// red when the client-side gate (bounds/no-overlap) rejects it — the UI feedback
+// for "invalid placement is rejected" before the control is even emitted.
+const GHOST_OK = "#38e1ff";
+const GHOST_BAD = "#e74c3c";
+
+// ---- drag-to-place ghost + placement plane (bh-05) -------------------------
+
+// BlueprintGhost draws the transient placement preview: each ghost Task's Build
+// envelope as a flat footprint quad on the ground, plus a thin upright box hinting
+// the envelope height. Tinted green when valid, red when the client gate rejects
+// the spot. It is CLIENT-ONLY transient state (never from the snapshot), so the
+// scene stays a pure function of the snapshot for everything authoritative — the
+// placed tasks themselves arrive via the next snapshot (ADR-0004).
+function BlueprintGhost({ ghost, map }: { ghost: Ghost; map: SceneMap }) {
+  const color = ghost.invalid ? GHOST_BAD : GHOST_OK;
+  return (
+    <group>
+      {ghost.tasks.map((t) => {
+        const f = footprintOf(t);
+        const center = map.at({ X: f.cx, Y: f.cy }, 0.06);
+        const w = f.halfX * 2 * map.scale;
+        const d = f.halfY * 2 * map.scale;
+        const h = Math.max(0.05, (t.envelope.size.Z * map.scale) / 2);
+        return (
+          <group key={t.id} position={[center.x, 0, center.z]}>
+            {/* Footprint quad flat on the ground. */}
+            <mesh position={[0, 0.06, 0]} rotation={[-Math.PI / 2, 0, 0]} raycast={() => null}>
+              <planeGeometry args={[w, d]} />
+              <meshBasicMaterial
+                color={color}
+                transparent
+                opacity={0.35}
+                side={THREE.DoubleSide}
+                depthWrite={false}
+              />
+            </mesh>
+            {/* A faint envelope box, so the ghost reads as a volume not just a pad. */}
+            <mesh position={[0, h, 0]} raycast={() => null}>
+              <boxGeometry args={[w, h * 2, d]} />
+              <meshBasicMaterial
+                color={color}
+                transparent
+                opacity={0.12}
+                depthWrite={false}
+              />
+            </mesh>
+          </group>
+        );
+      })}
+    </group>
+  );
+}
+
+// PlacementPlane is a large invisible ground plane, mounted ONLY while placing,
+// that captures the cursor: pointer-move raycasts a world origin (via the shared
+// sceneMap inverse, so the ghost can't drift from the rendered world) and reports
+// it; a click drops the Blueprint. It sits just above the terrain so it wins the
+// raycast over scene geometry during placement.
+function PlacementPlane({
+  map,
+  onMove,
+  onConfirm,
+}: {
+  map: SceneMap;
+  onMove: (origin: Vec2) => void;
+  onConfirm: () => void;
+}) {
+  return (
+    <mesh
+      position={[0, 0.02, 0]}
+      rotation={[-Math.PI / 2, 0, 0]}
+      onPointerMove={(e: ThreeEvent<PointerEvent>) => {
+        e.stopPropagation();
+        // e.point is the world-space (scene) hit; map its ground x/z back to the
+        // worksite origin via the inverse of the shared world→scene projection.
+        onMove(map.invert(e.point.x, e.point.z));
+      }}
+      onPointerDown={(e: ThreeEvent<PointerEvent>) => {
+        e.stopPropagation();
+        onConfirm();
+      }}
+    >
+      <planeGeometry args={[GROUND_SPAN * 4, GROUND_SPAN * 4]} />
+      <meshBasicMaterial transparent opacity={0} depthWrite={false} side={THREE.DoubleSide} />
+    </mesh>
+  );
+}
 
 // The actual scene contents (inside <Canvas>). The snapshot → meshes mapping is
 // a single pure pass that re-renders ONLY when a new snapshot arrives. Beats
 // animate via per-mesh useFrame ref-mutation (in Rover3D/TaskBlock), so the
 // React tree never re-renders per frame. This component's own useFrame just
 // prunes expired beats and keeps the demand loop alive while any beat is live.
-function SceneContents({ snapshot, selected, onPick }: Scene3DProps) {
+function SceneContents({
+  snapshot,
+  selected,
+  onPick,
+  placing,
+  ghost,
+  onPlaceMove,
+  onPlaceConfirm,
+}: Scene3DProps) {
   const lightRef = useRef<THREE.DirectionalLight>(null);
   const invalidate = useThree((s) => s.invalidate);
 
@@ -670,6 +777,14 @@ function SceneContents({ snapshot, selected, onPick }: Scene3DProps) {
   // useFrame; mutating it never triggers a React re-render.
   const beats = useRef<ActiveBeat[]>([]);
   const lastAt = useRef<number>(Number.NEGATIVE_INFINITY);
+
+  // Drag-to-place is transient client state, not a snapshot, so it does NOT ride
+  // the snapshot-driven invalidate above. Wake the demand loop whenever the ghost
+  // (cursor origin / rotation / validity) or the placing arm changes, so the ghost
+  // redraws as the user moves the cursor. Cheap: it draws one frame per change.
+  useEffect(() => {
+    invalidate();
+  }, [ghost, placing, invalidate]);
 
   // On each new snapshot, fold its events into the live beat list and wake the
   // demand loop so the new pulses (and the new mesh positions) get drawn.
@@ -758,6 +873,13 @@ function SceneContents({ snapshot, selected, onPick }: Scene3DProps) {
         />
       ))}
 
+      {/* Drag-to-place ghost + cursor plane (bh-05). The plane is mounted only
+          while placing; the ghost only once the cursor has hit the ground. */}
+      {ghost ? <BlueprintGhost ghost={ghost} map={map} /> : null}
+      {placing && onPlaceMove && onPlaceConfirm ? (
+        <PlacementPlane map={map} onMove={onPlaceMove} onConfirm={onPlaceConfirm} />
+      ) : null}
+
       {/* Selective bloom — halos ONLY (ADR-0004). Rendered last; reads lightRef. */}
       <HaloBloom lightRef={lightRef} />
     </group>
@@ -774,14 +896,24 @@ function SceneContents({ snapshot, selected, onPick }: Scene3DProps) {
 // a new snapshot, an animating beat, or orbit interaction (OrbitControls is
 // makeDefault, so drei invalidates on change + damping). dpr is capped at 1.5
 // so a retina projector doesn't pay for 4× the pixels.
-export function Scene3D({ snapshot, selected, onPick }: Scene3DProps) {
+export function Scene3D({
+  snapshot,
+  selected,
+  onPick,
+  placing,
+  ghost,
+  onPlaceMove,
+  onPlaceConfirm,
+}: Scene3DProps) {
   return (
     <Canvas
       className="world-canvas"
       frameloop="demand"
       dpr={[1, 1.5]}
       camera={{ position: [0, 14, 18], fov: 42, near: 0.1, far: 200 }}
-      onPointerMissed={() => onPick(null)} // click empty space → deselect
+      // While placing, a click on empty space confirms the drop; otherwise it
+      // deselects a rover (the existing behaviour).
+      onPointerMissed={() => (placing ? onPlaceConfirm?.() : onPick(null))}
       // antialias:false — the EffectComposer owns the framebuffers, so a
       // multisampled default backbuffer is redundant AND, on ANGLE/macOS, forces
       // a depth/stencil blitFramebuffer resolve that errors with "Read and write
@@ -791,10 +923,21 @@ export function Scene3D({ snapshot, selected, onPick }: Scene3DProps) {
       gl={{ antialias: false, powerPreference: "high-performance" }}
     >
       <color attach="background" args={["#000000"]} />
-      <SceneContents snapshot={snapshot} selected={selected} onPick={onPick} />
+      <SceneContents
+        snapshot={snapshot}
+        selected={selected}
+        onPick={onPick}
+        placing={placing}
+        ghost={ghost}
+        onPlaceMove={onPlaceMove}
+        onPlaceConfirm={onPlaceConfirm}
+      />
       <OrbitControls
         makeDefault
         enablePan={false}
+        // Disable orbit drag while placing so a placement-drag doesn't spin the
+        // camera; the placement plane owns the cursor then.
+        enableRotate={!placing}
         minDistance={10}
         maxDistance={34}
         // Clamp the vertical angle so the camera can't dip under the ground or

@@ -886,3 +886,137 @@
 .encore-cancel:hover {
   color: var(--on-primary-mute);
 }
+
+/* ---- blueprint palette (drag-to-place, bh-05) ----
+   Docks top-left, just right of the ledger, so it never covers the worksite or
+   the task list. Same flat dark chrome as the other panels. */
+.blueprint-palette {
+  position: absolute;
+  top: var(--s-xl);
+  left: calc(268px + var(--s-xl) * 2);
+  width: 248px;
+  max-height: calc(100% - var(--s-xl) * 2);
+  overflow-y: auto;
+  padding: var(--s-xl);
+  background: var(--canvas-night-soft);
+  border: 1px solid var(--hairline-on-dark);
+  border-radius: var(--r-xs);
+  z-index: 2;
+  display: flex;
+  flex-direction: column;
+  gap: var(--s-md);
+}
+
+.bp-list {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: var(--s-xs);
+}
+
+.bp-item {
+  width: 100%;
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  padding: var(--s-md);
+  text-align: left;
+  background: transparent;
+  border: 1px solid var(--hairline-on-dark);
+  border-radius: var(--r-xs);
+  cursor: pointer;
+  color: var(--on-primary);
+}
+
+.bp-item:hover {
+  border-color: var(--on-primary-mute);
+}
+
+.bp-item.is-active {
+  border-color: var(--signal-warn);
+}
+
+.bp-name {
+  font-family: var(--display);
+  font-size: 14px;
+  font-weight: 700;
+  letter-spacing: 0.6px;
+  text-transform: uppercase;
+}
+
+.bp-desc {
+  font-family: var(--ui);
+  font-size: 11px;
+  color: var(--ink-mute);
+}
+
+.bp-placing {
+  display: flex;
+  flex-direction: column;
+  gap: var(--s-md);
+  padding-top: var(--s-md);
+  border-top: 1px solid var(--hairline-on-dark);
+}
+
+.bp-hint {
+  margin: 0;
+  font-family: var(--ui);
+  font-size: 12px;
+  color: var(--ink-mute);
+}
+
+.bp-valid {
+  margin: 0;
+  font-family: var(--ui);
+  font-size: 12px;
+  font-weight: 700;
+  color: var(--signal-ok, #2ecc71);
+}
+
+.bp-invalid {
+  margin: 0;
+  font-family: var(--ui);
+  font-size: 12px;
+  font-weight: 700;
+  color: var(--signal-down, #e74c3c);
+}
+
+.bp-actions {
+  display: flex;
+  gap: var(--s-md);
+}
+
+.bp-confirm {
+  flex: 1;
+  padding: var(--s-md);
+  font-family: var(--display);
+  font-weight: 700;
+  letter-spacing: 0.6px;
+  text-transform: uppercase;
+  color: var(--canvas-night, #0b0b0f);
+  background: var(--on-primary);
+  border: none;
+  border-radius: var(--r-xs);
+  cursor: pointer;
+}
+
+.bp-confirm:disabled {
+  opacity: 0.4;
+  cursor: not-allowed;
+}
+
+.bp-cancel {
+  padding: var(--s-md);
+  font-family: var(--ui);
+  color: var(--ink-mute);
+  background: transparent;
+  border: 1px solid var(--hairline-on-dark);
+  border-radius: var(--r-xs);
+  cursor: pointer;
+}
+
+.bp-cancel:hover {
+  color: var(--on-primary-mute);
+}
