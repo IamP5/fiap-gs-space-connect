@@ -10,22 +10,29 @@ stop. `feature_list.json` is the per-feature source of truth; this file is the n
 - **Repository root:** `/Users/tuba/Dev/projects/gs-fiap-space` (branch `docs/build-harness`)
 - **Standard startup path:** `./init.sh` (Go baseline; `WEB=1 ./init.sh` to include the dashboard)
 - **Standard verification path:** `make check` (vet + lint + race tests); `./deploy/smoke.sh` for end-to-end self-heal
-- **Backend baseline:** ✅ green @ `fedd919` — `go vet` ok, `golangci-lint` 0 issues, `go test -race -shuffle=on ./...` all pass (go1.25.5)
-- **Web baseline:** ✅ green @ `fedd919` — `tsc -b && vite build` TS-clean, `vitest` 7 files / 60 tests pass (`WEB=1 ./init.sh`)
-- **End-to-end (smoke.sh):** ✅ green this session — gateway connected, `wall-1` self-heal (expiry → re-auction) fired, `dome-cap` complete (dome closed end-to-end)
-- **MVP (issues 01–11):** implemented and merged — all `passing` in `feature_list.json`
-- **Build-harness (bh-01..bh-07):** implemented as 7 stacked PRs (#4,#5,#7,#8,#6,#9,#10) and integrated on `bh/integration` — all `passing` in `feature_list.json` with evidence
-- **Current highest-priority unfinished feature:** `bh-08` — Live build mode (the Rover runs the harness in the world). **Design complete, not yet implemented** (ADR-0009 + issue 08; grill-with-docs 2026-06-06). Topology C still deferred (no trace gap, ADR-0008).
-- **Current blocker:** none — awaiting the user's visual quality review of generated geometry (deferred per plan)
-- **Plan status:** build-harness plan fully implemented. `bh/integration` (off `bh/07` + merged `bh/05`) passes the full combined gate: `make check` (vet + golangci-lint 0 issues + `go test -race -shuffle=on ./...`), `cd web && npm run build && npm test` (100 tests), `./deploy/smoke.sh` PASS, and the import-graph arch test (Model/lab/vision off the hot path).
+- **Branch:** `main` (the whole build-harness milestone is merged — PR #12 @ `25ce08a`)
+- **Backend baseline:** ✅ green @ `25ce08a` — `go vet` ok, `golangci-lint` 0 issues, `go test -race -shuffle=on ./...` all pass incl. `internal/harness/live` + the rescoped archtest (go1.25.5)
+- **Web baseline:** ✅ green @ `25ce08a` — `tsc -b && vite build` TS-clean, `vitest` 10 files / 111 tests pass (`WEB=1 ./init.sh`)
+- **End-to-end:** ✅ verified this session — live compose stack up; coordinator logs assert `msg=expiry task=wall-1 … returned to UNCLAIMED` (self-heal) then `msg=complete task=dome-cap by=R1` (dome closed). The `deploy/smoke.sh` *wrapper* can't pass its host `/healthz` gate on this laptop: a stale `kubectl port-forward` (kind cluster, `swarmbuild-control-plane`) is holding `127.0.0.1:8080` and shadows the compose gateway — environment collision, not a regression. Kill that port-forward (or run smoke on a clean host) to get a green wrapper.
+- **MVP (issues 01–11):** all `passing` in `feature_list.json`; GitHub issues #13–#23 closed; milestone "SwarmBuild MVP" closed.
+- **Build-harness (bh-01..bh-08):** all `passing` in `feature_list.json` with evidence; GitHub issues #24–#38 closed; milestone "Build Harness" closed. **All 19 features now `passing` — no open work in the tracker.**
+- **Current blocker:** none — awaiting the user's visual quality review of generated geometry (deferred per plan). Topology-C sub-agents still deferred (no trace gap, ADR-0008).
 
 ## Next Steps
 
-1. **Visual review (user):** inspect generated/baked geometry quality on stage; flag any spec that "looks wrong" → it becomes the first documented trace gap that could justify topology (C) sub-agents (ADR-0008).
-2. **Land the stack:** merge the 7 stacked PRs in dependency order (#4 → #5 → {#7 → #8 → #9 → #10} and #6 off #5), or fast-track `bh/integration` as a single PR to `main` (already conflict-resolved + green).
-3. Keep the invariant sacred: no harness/Model-seam call on the award/lease/expiry path (mechanically enforced by the arch test). Re-run `./deploy/smoke.sh` before any demo.
+1. **Visual review (user):** inspect generated/baked + live geometry quality on stage; flag any spec that "looks wrong" → it becomes the first documented trace gap that could justify topology (C) sub-agents (ADR-0008).
+2. **Clean smoke on this host:** kill the leftover `kubectl port-forward` on `127.0.0.1:8080` (from the long-running kind cluster) before running `./deploy/smoke.sh`, or the wrapper hangs on its gateway gate (the swarm itself is fine). Also: run `golangci-lint cache clean` after pruning `.claude/worktrees/` or lint reports phantom issues from deleted files.
+3. Keep the invariant sacred: no harness/Model-seam call on the award/lease/expiry **self-heal core** (mechanically enforced by the rescoped arch test; live build path is the one deliberate scoped exception, ADR-0009). Re-run `./deploy/smoke.sh` before any demo.
 
 ## Session Log
+
+### Session 005 — 2026-06-06
+- **Goal:** Reconcile the tracker with reality — update `feature_list.json` and the GitHub issues to reflect that the build-harness milestone (incl. `bh-08` Live Build Mode) is merged to `main`.
+- **Completed:** Confirmed the full `bh-08` epic (08a–08g) plus follow-ups (panel/mast task types, live-capable rover pods, refine cap 30) landed on `main` via PR #12 (`25ce08a`). Verified the baseline before flipping status: `make check` exit 0 (after `golangci-lint cache clean` — a stale cache was reporting phantom issues from removed `.claude/worktrees/` copies), web build TS-clean + `vitest` 10 files / 111 tests, and live compose stack showing `wall-1` self-heal + `dome-cap` complete in the coordinator logs. Marked `bh-08` `passing` with evidence (all 19 features now passing). Closed GitHub issues #24–#38 with commit/PR mappings; added #31–#38 to the "Build Harness" milestone; closed both milestones ("SwarmBuild MVP", "Build Harness"). Pruned a stale git worktree ref under `.claude/worktrees/`.
+- **Verification run:** `make check` → exit 0 (vet ok, golangci-lint 0 issues, race tests all ok, go1.25.5); `cd web && npm run build && npm test` → TS-clean + 111 tests pass; live `docker compose up` → self-heal + dome-close asserted from coordinator logs. `feature_list.json` validates as JSON (19/19 passing).
+- **Files/artifacts updated:** `feature_list.json` (bh-08 → passing), `PROGRESS.md`; GitHub issues #24–#38 closed + milestones closed (no repo file change).
+- **Known risk / unresolved:** `deploy/smoke.sh`'s wrapper can't pass its host `/healthz` gate on this laptop — a leftover `kubectl port-forward` (kind cluster) holds `127.0.0.1:8080` and shadows the compose gateway. Environment collision, not a product regression; kill the port-forward for a green wrapper. Doc/tracker changes are **uncommitted** in the working tree (on `main`).
+- **Next best step:** visual quality review of live/baked geometry (user); otherwise the milestone backlog is empty.
 
 ### Session 001 — 2026-06-05
 - **Goal:** Evolve the repo harness and agentic workflows per the Harness Engineering course.

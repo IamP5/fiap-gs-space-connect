@@ -277,13 +277,18 @@
       "area": "build-harness",
       "title": "Live build mode — the Rover runs the harness in the world",
       "user_visible_behavior": "Dropping a Blueprint in 'live' mode makes the winning Rover run its LLM Build harness as it works: the structure rises and visibly self-corrects in the world step by step. Killing the Rover mid-build hands the half-built patch log to a replacement that continues live. The deterministic 'replay' dome stays the default and can stand beside a live one.",
-      "status": "not_started",
+      "status": "passing",
       "depends_on": ["bh-05", "bh-07"],
       "verification": [
         "go test -race ./... (rescoped archtest: harness/model absent from self-heal core; live-mode retry→die→resume + circuit-breaker integration test) ; cd web && npm run build && npm test (patch-op fold: place/move/delete) ; manual: place a live Blueprint, watch it self-correct, kill mid-build, confirm live resume"
       ],
-      "evidence": [],
-      "notes": "DESIGN COMPLETE (grill-with-docs, 2026-06-06): ADR-0009 + issues/08-live-build-mode.md + TECHSPEC §4/§5/§6/§7/§8/§9/§10/§11 + CONTEXT.md (Build mode, Build spec patch ops). Decisions: model wired into agent (live only); agent.Config.Mode{replay|live}; per-placement mode on placeBlueprint; per-refine-iteration streaming via append-only patch-op log (place/move/delete) the renderer folds; failure heals (retry→die→resume-live), primitive circuit breaker after ~3 builder deaths; archtest rescoped to the self-heal core. Deliberately scopes ADR-0005's runtime rule (live build path only). NOT YET IMPLEMENTED."
+      "evidence": [
+        "Epic 08a–08g implemented and merged to main via PR #12 @ 25ce08a: patch-op Build spec place/move/delete + renderer fold (08a 6676175); Live Build Mode core — Rover runs the harness inline, agent.Config.Mode{replay|live} + rescoped archtest (08b 83137a2); per-placement replay/live toggle on placeBlueprint (08c 2855d67); iteration-level live streaming, world self-corrects per refine pass (08d d3fc00b); resume-live on kill — replacement folds patch log + continues (08e da5f33a); failure heals — model failure routed through self-heal retry→die→re-auction (08f 296aa3b); live-mode circuit breaker — primitive finishes a Task after ≈3 builder deaths (08g 9b0e3f2)",
+        "make check green @ 25ce08a (go vet ok, golangci-lint 0 issues, go test -race -shuffle=on ./... all ok incl. internal/harness/live + rescoped archtest; go1.25.5). NB: clear stale golangci-lint cache after removing .claude/worktrees/ copies (golangci-lint cache clean) or it reports phantom issues from deleted files",
+        "web build TS-clean + vitest 10 files / 111 tests pass (buildspec.test.ts covers patch-op fold place/move/delete)",
+        "live compose stack up end-to-end: coordinator logs assert 'msg=expiry task=wall-1 … returned to UNCLAIMED' (self-heal) then 'msg=complete task=dome-cap by=R1' (dome closed) — the two deploy/smoke.sh gates, verified directly in the running stack. (smoke.sh's host /healthz probe on 127.0.0.1:8080 is shadowed in this env by a stale kubectl port-forward from the kind cluster — environment collision, not a regression.)"
+      ],
+      "notes": "IMPLEMENTED + integrated on main (PR #12, 25ce08a). Live Build Mode: model wired into agent (live only); agent.Config.Mode{replay|live}; per-placement mode on placeBlueprint; per-refine-iteration streaming via append-only patch-op log (place/move/delete) the renderer folds; failure heals (retry→die→resume-live), primitive circuit breaker after ~3 builder deaths; archtest rescoped to the self-heal core (deliberate scoped break of ADR-0005's runtime rule, live path only). Design: ADR-0009 + issues/08-live-build-mode.md + TECHSPEC §4–§11 + CONTEXT.md. Follow-ups landed on top: panel+mast task types so solar-array/comms-mast build (af0aeca), live-capable rover pods for the per-placement toggle (ca33eef), live refine cap raised to 30 (abc5544)."
     }
   ]
 }
