@@ -960,10 +960,25 @@ func workPhase(ctx context.Context, cfg Config, conn *bus.Conn, st *rover, heart
 		case liveModelDied:
 			// The rover crossed its model-failure threshold and killed itself: stop
 			// heartbeating and abandon the Task WITHOUT completing it, so the
-			// coordinator self-heals the lease by TTL expiry and re-auctions it to a
-			// healthy rover (bh-08f). No primitive fallback on this path.
+			// coordinator self-heals the lease and re-auctions it to a healthy rover
+			// (bh-08f). No primitive fallback on this path.
+			//
+			// Before going silent, publish a DISTINGUISHABLE wire.Failed stamped
+			// ReasonBuilderDied (bh-08g): this is the precise, inspectable signal the
+			// coordinator counts PER TASK to trip the live-mode circuit breaker — a
+			// builder death is NOT an ordinary expiry/kill, and past ≈3 of them the
+			// coordinator finishes the Task with the primitive op-source so dependents
+			// unblock. We have already kill()ed (lease released, heartbeats stopped), so
+			// this Failed also prompts the re-auction immediately rather than waiting out
+			// the TTL. Flush so the Failed lands even though the rover is now going dark.
+			_ = conn.PublishJSON(wire.SubjTaskFailed, wire.Failed{
+				TaskID: aw.TaskID,
+				Robot:  cfg.ID,
+				Reason: wire.ReasonBuilderDied,
+			})
+			_ = conn.Flush()
 			slog.Warn("live build: rover died past model-failure threshold; abandoning task for re-auction",
-				"rover", cfg.ID, "task", aw.TaskID)
+				"rover", cfg.ID, "task", aw.TaskID, "reason", wire.ReasonBuilderDied)
 			return phaseAbort
 		case liveDegrade:
 			// fall through: a non-model fall-back, degrade to replay/primitive.

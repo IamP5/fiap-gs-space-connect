@@ -79,6 +79,20 @@ type Config struct {
 	// task's envelope footprint must lie within [-WorldBounds, +WorldBounds] on
 	// both axes (placement validation). Zero ⇒ defaultWorldBounds.
 	WorldBounds float64
+	// BuilderDeathBreaker is the live-mode circuit-breaker threshold (bh-08g): the
+	// number of times a single Task may be re-auctioned BECAUSE its live builder
+	// DIED (the bh-08f model-failure death, signalled by a wire.Failed stamped
+	// wire.ReasonBuilderDied — distinct from an ordinary expiry/kill) before the
+	// coordinator trips the breaker and finishes the Task with the deterministic
+	// PRIMITIVE op-source as a last resort. This bounds a SYSTEMIC live-mode failure
+	// (bad key, provider outage, rate-limit) that would otherwise cascade — every
+	// rover retrying, dying, and depleting the swarm while the Task never completes
+	// and its dependents stay stuck forever. On trip the coordinator DOWNGRADES the
+	// Task to replay mode (clears its live tag) so the next rover builds it
+	// deterministically with ZERO model calls and the dome still closes; the
+	// coordinator never touches the Model seam (ADR-0005, archtest). Zero ⇒
+	// defaultBuilderDeathBreaker (≈3); a value < 1 is bumped to 1.
+	BuilderDeathBreaker int
 	// BuildSpecs is an OPTIONAL per-Task Build spec (TECHSPEC §4, ADR-0006):
 	// declarative geometry the renderer interprets instead of the primitive
 	// fallback. In bh-01 this carries a single hardcoded SAMPLE spec to prove the
@@ -111,6 +125,9 @@ func (cfg Config) withDefaults() Config {
 	if cfg.WorldBounds <= 0 {
 		cfg.WorldBounds = defaultWorldBounds
 	}
+	if cfg.BuilderDeathBreaker < 1 {
+		cfg.BuilderDeathBreaker = defaultBuilderDeathBreaker
+	}
 	return cfg
 }
 
@@ -141,6 +158,15 @@ const tickEvery = 50 * time.Millisecond
 // reaches ~20 beyond that, so 150 comfortably holds a placed dome plus a couple
 // of satellite structures without colliding off-board.
 const defaultWorldBounds = 150.0
+
+// defaultBuilderDeathBreaker is the live-mode circuit-breaker threshold when
+// Config.BuilderDeathBreaker is left zero (bh-08g): after this many builder deaths
+// re-auction the SAME Task (each a bh-08f model-failure death, distinct from an
+// ordinary expiry/kill), the coordinator stops re-auctioning it live and finishes it
+// with the deterministic primitive op-source so dependents unblock and the dome still
+// closes under a systemic model outage. Small so a genuinely-dead provider is shed
+// quickly, > 1 so a single unlucky death does not abandon live mode prematurely.
+const defaultBuilderDeathBreaker = 3
 
 // inbound events fed to the single-writer goroutine. Each is a closure-free
 // value type so the channel carries plain data; the writer interprets them.
@@ -230,6 +256,19 @@ type state struct {
 	// Only the single-writer goroutine touches it (TECHSPEC §8).
 	buildSpecs map[domain.TaskID][]wire.BuildOp
 
+	// builderDeaths counts, PER TASK, how many times the Task has been re-auctioned
+	// because its LIVE builder DIED (bh-08g): a bh-08f model-failure death, reported
+	// as a wire.Failed stamped wire.ReasonBuilderDied — distinct from an ordinary
+	// expiry/kill or a plain cooperative release, neither of which is counted. Once
+	// the count reaches breakerThreshold the coordinator trips the circuit breaker:
+	// it DOWNGRADES the Task to replay mode (clears its live tag) so the next rover
+	// finishes it with the deterministic primitive op-source — bounding a systemic
+	// live-mode outage instead of letting every rover die on it forever. Only the
+	// single-writer goroutine touches it (TECHSPEC §8). onReload clears it so a demo
+	// reload starts the breaker fresh.
+	builderDeaths    map[domain.TaskID]int
+	breakerThreshold int
+
 	conn   *bus.Conn
 	kv     *bus.KV
 	clk    domain.Clock
@@ -315,6 +354,11 @@ func Run(ctx context.Context, cfg Config) error {
 		buildSpecs: buildSpecs,
 		// Pristine seed copy for onReload to reset the accumulation to.
 		seedSpecs: cloneSpecs(buildSpecs),
+		// Per-Task builder-death counter + the live-mode circuit-breaker threshold
+		// (bh-08g): once a Task's live builder has died this many times it is finished
+		// with the primitive op-source instead of re-auctioned live again.
+		builderDeaths:    make(map[domain.TaskID]int),
+		breakerThreshold: cfg.BuilderDeathBreaker,
 	}
 
 	// Seed any static Build specs into KV so the durable spec key exists from the
@@ -704,9 +748,31 @@ func (st *state) onFailed(ctx context.Context, c wire.Failed) {
 	next.Assignee = ""
 	next.LeaseExpiry = 0
 	next.Version = cur.Version + 1
+
+	// Live-mode circuit breaker (bh-08g): a Failed stamped ReasonBuilderDied is a
+	// bh-08f model-failure DEATH (the rover crossed its threshold and went silent),
+	// NOT an ordinary cooperative release. Count it per Task; once the count reaches
+	// the breaker threshold, DOWNGRADE the Task to replay mode (clear its live tag)
+	// so the next rover finishes it with the deterministic primitive op-source — no
+	// model, coordinator stays model-free. This bounds a systemic live outage instead
+	// of re-auctioning the Task live to die on the same bad provider forever. A plain
+	// cooperative release (any other Reason) is untouched: it never counts and never
+	// downgrades, so replay mode and ordinary self-heal are unaffected.
+	if c.Reason == wire.ReasonBuilderDied && cur.Mode == string(agent.ModeLive) {
+		st.builderDeaths[c.TaskID]++
+		deaths := st.builderDeaths[c.TaskID]
+		if deaths >= st.breakerThreshold {
+			next.Mode = "" // downgrade to replay: the next award builds it primitively
+			slog.Warn("live circuit breaker tripped: downgrading task to primitive op-source",
+				"task", c.TaskID, "builder_deaths", deaths, "threshold", st.breakerThreshold)
+		} else {
+			slog.Info("builder death recorded", "task", c.TaskID, "by", c.Robot, "builder_deaths", deaths, "threshold", st.breakerThreshold)
+		}
+	}
+
 	if st.model.Apply(next) {
 		st.mirror(ctx, next)
-		slog.Info("failed", "task", c.TaskID, "by", c.Robot, "version", next.Version, "note", "released for re-auction")
+		slog.Info("failed", "task", c.TaskID, "by", c.Robot, "version", next.Version, "reason", c.Reason, "note", "released for re-auction")
 	}
 }
 
@@ -957,6 +1023,10 @@ func (st *state) onReload(ctx context.Context) {
 	st.auctions = make(map[domain.TaskID]*auction)
 	st.armedKills = nil
 	st.pendingEvents = nil
+	// Reset the per-Task builder-death counts so the live-mode circuit breaker (bh-08g)
+	// starts fresh on a reloaded board rather than carrying a tripped count into the
+	// rebuild.
+	st.builderDeaths = make(map[domain.TaskID]int)
 
 	// Re-arm the scripted kills from the pristine config copy (fired=false) so the
 	// kill→heal money shot replays in inproc mode. In external/k8s mode cfgKills is

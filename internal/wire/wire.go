@@ -136,11 +136,27 @@ type Complete struct {
 // waiting for the TTL to expire, so the task re-auctions immediately (slice 03,
 // the cooperative counterpart to silent death by heartbeat timeout). Reason is
 // a short human-readable cause for the audit log; it does not affect handling.
+//
+// One Reason IS load-bearing: ReasonBuilderDied (bh-08g). A live-mode rover that
+// crosses its model-failure threshold (bh-08f) publishes a Failed with this exact
+// reason BEFORE going silent, so the coordinator can count builder deaths PER TASK
+// precisely (distinct from an ordinary expiry/kill) and, past a threshold, trip the
+// circuit breaker that finishes the Task with the deterministic primitive op-source.
+// Any other Reason value (or none) is an ordinary cooperative release and never
+// counts toward the breaker.
 type Failed struct {
 	TaskID domain.TaskID  `json:"task_id"`
 	Robot  domain.RobotID `json:"robot_id"`
 	Reason string         `json:"reason,omitempty"`
 }
+
+// ReasonBuilderDied is the Failed.Reason a live-mode rover stamps when it abandons
+// a Task because its MODEL failed past the per-Rover death threshold (bh-08f/08g):
+// the distinguishable, inspectable signal the coordinator counts per Task to trip
+// the live-mode circuit breaker (≈3 builder deaths ⇒ finish via primitive). It is a
+// stable wire string, so the dying rover and the coordinator agree without sharing
+// the agent's death-path internals.
+const ReasonBuilderDied = "builder-died"
 
 // Heartbeat renews a rover's lease on a task.
 type Heartbeat struct {

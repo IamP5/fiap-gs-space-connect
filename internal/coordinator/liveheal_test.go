@@ -115,3 +115,99 @@ func TestLiveHeal_ModelFailureKillsRoverAndReauctions(t *testing.T) {
 		t.Fatalf("completed task-x must carry the replacement rover's build spec, got none")
 	}
 }
+
+// TestLiveBreaker_PrimitiveFinishesAfterRepeatedBuilderDeaths is the bh-08g
+// acceptance (#38): a SYSTEMIC live-mode failure — a model that fails for EVERY
+// rover (bad key / provider outage / rate-limit) — must not cascade forever. The
+// coordinator counts, PER TASK, how many times the Task has been re-auctioned
+// because its live builder DIED (the bh-08f death, signalled by a wire.Failed
+// stamped wire.ReasonBuilderDied — distinct from an ordinary expiry/kill). Once
+// that count crosses the configured breaker threshold the coordinator TRIPS the
+// circuit breaker: it downgrades the Task to replay mode so the next rover finishes
+// it with the deterministic PRIMITIVE op-source. The dome still closes (task DONE,
+// dependents unblock) under a total model outage, with NO model on the finishing
+// path — the coordinator stays model-free.
+//
+// The whole swarm runs LIVE with the always-failing model and a per-Rover death
+// threshold of 1 (one model failure kills), so EVERY award is a builder death. After
+// breakerThreshold deaths the Task flips to replay and the next award completes it
+// primitively — the builder's attempts counter proves the live seam was hit (and
+// the swarm did not just silently complete).
+func TestLiveBreaker_PrimitiveFinishesAfterRepeatedBuilderDeaths(t *testing.T) {
+	builder := &failingLiveBuilder{}
+
+	const breaker = 3
+	// A live-TAGGED single task: every winning rover runs the (always-failing) live
+	// builder and dies, so the coordinator counts builder deaths against task-x.
+	blueprint := []coordinator.BlueprintTask{
+		{Task: domain.Task{ID: taskX, Type: typeFoundation, Mode: string(agent.ModeLive)}, Pos: domain.Vec2{X: 30, Y: 0}},
+	}
+	// Two rovers, BOTH live with the same failing model and a 1-failure death budget,
+	// so each award is a builder death. They share the failing builder (the model
+	// outage is systemic — it fails for everyone), revive quickly, and keep re-winning
+	// until the breaker trips and the Task is downgraded to replay; whichever rover
+	// then wins finishes it with the primitive op-source (its Config.Mode is the replay
+	// default, so the cleared task tag resolves replay).
+	mkRover := func(id domain.RobotID, pos domain.Vec2, battery float64) agent.Config {
+		return agent.Config{
+			ID: id, Pos: pos, Battery: battery,
+			Capabilities: []domain.Capability{typeFoundation},
+			// Config.Mode is the REPLAY default deliberately: the PER-TASK live tag drives
+			// the live build (bh-08c effectiveMode — the task tag wins), so when the
+			// breaker downgrades the Task by clearing that tag, effectiveMode resolves
+			// replay and the rover finishes it primitively. A live Config.Mode would
+			// override the cleared tag and the breaker could never take effect.
+			LiveBuilder:          builder,
+			LiveFailureThreshold: 1,                      // one model failure kills, so each award is a builder death
+			RecoverAfter:         150 * time.Millisecond, // revive fast so deaths accrue inside the test budget
+			SettleAfterRevive:    50 * time.Millisecond,  // brief hold, then re-bid
+		}
+	}
+	rovers := []agent.Config{
+		mkRover("R1", domain.Vec2{X: 30, Y: 0}, 1.0),
+		mkRover("R2", domain.Vec2{X: 0, Y: 60}, 0.6),
+	}
+
+	cfg := coordinator.Config{
+		Blueprint:           blueprint,
+		Rovers:              rovers,
+		AuctionWindow:       100 * time.Millisecond,
+		HeartbeatEvery:      100 * time.Millisecond,
+		TTLFactor:           3,
+		SnapshotHz:          20,
+		BuilderDeathBreaker: breaker,
+	}
+
+	h := newSelfHealHarness(t, cfg, taskX)
+
+	// The breaker trips after `breaker` builder deaths and finishes the Task with the
+	// primitive op-source: task-x flips DONE end-to-end despite a total model outage,
+	// so dependents would unblock and the dome still closes.
+	h.poll("task-x DONE via primitive circuit breaker", func() bool {
+		x, ok := h.getTask(taskX)
+		return ok && x.Status == domain.Done
+	})
+
+	x, _ := h.getTask(taskX)
+	if x.Assignee != "" {
+		t.Fatalf("done task-x assignee = %q, want empty", x.Assignee)
+	}
+	// The breaker downgraded the Task to replay (its live tag was cleared) so the
+	// finishing rover built it primitively — the tag must be the replay default, never
+	// still "live".
+	if x.Mode == string(agent.ModeLive) {
+		t.Fatalf("done task-x still tagged live (%q); breaker should have downgraded it to replay", x.Mode)
+	}
+	// The live model seam WAS reached (and failed) repeatedly before the breaker
+	// tripped — proving the swarm went through the live death path, not a silent
+	// shortcut. At least `breaker` deaths, each at least one attempt.
+	if got := builder.attempts.Load(); got < int64(breaker) {
+		t.Fatalf("live builder attempts = %d, want ≥ %d (one per builder death before the breaker tripped)", got, breaker)
+	}
+	// The completed structure carries the PRIMITIVE foundation op-source — the live
+	// rovers emitted nothing (they died), so a non-empty spec is the breaker's
+	// deterministic last-resort geometry.
+	if spec := h.getSpec(taskX); len(spec) == 0 {
+		t.Fatalf("breaker-finished task-x must carry the primitive build spec, got none")
+	}
+}
