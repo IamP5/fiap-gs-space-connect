@@ -1,0 +1,302 @@
+{
+  "blueprint_id": "dome",
+  "task_id": "dome-cap",
+  "model": "gpt-4o-2024-08-06",
+  "contract": {
+    "blueprint_id": "dome",
+    "task_id": "dome-cap",
+    "type": "dome-cap",
+    "envelope": {
+      "center": {
+        "X": 0,
+        "Y": 0,
+        "Z": 0
+      },
+      "size": {
+        "X": 3.6,
+        "Y": 3.6,
+        "Z": 3.6
+      }
+    },
+    "done": {
+      "description": "a keystone ring topped by a cap, closing the dome",
+      "min_ops": 3,
+      "min_coverage": 0.015
+    },
+    "style": "moon-base habitat, pale prefab panels, brushed metal accents"
+  },
+  "iterations": [
+    {
+      "gen_ops": [
+        {
+          "op": "place",
+          "shape": "cylinder",
+          "pos": {
+            "X": 0,
+            "Y": -1.5,
+            "Z": 0
+          },
+          "rot": {
+            "X": 0,
+            "Y": 0,
+            "Z": 0
+          },
+          "scale": {
+            "X": 3.2,
+            "Y": 0.3,
+            "Z": 3.2
+          },
+          "material": {
+            "color": "#b0b0b0",
+            "roughness": 0.7,
+            "metalness": 0.5
+          }
+        },
+        {
+          "op": "place",
+          "shape": "cylinder",
+          "pos": {
+            "X": 0,
+            "Y": -1.2,
+            "Z": 0
+          },
+          "rot": {
+            "X": 0,
+            "Y": 0,
+            "Z": 0
+          },
+          "scale": {
+            "X": 3,
+            "Y": 0.4,
+            "Z": 3
+          },
+          "material": {
+            "color": "#c0c0c0",
+            "roughness": 0.6,
+            "metalness": 0.4
+          }
+        },
+        {
+          "op": "place",
+          "shape": "cylinder",
+          "pos": {
+            "X": 0,
+            "Y": -0.7,
+            "Z": 0
+          },
+          "rot": {
+            "X": 0,
+            "Y": 0,
+            "Z": 0
+          },
+          "scale": {
+            "X": 2,
+            "Y": 0.4,
+            "Z": 2
+          },
+          "material": {
+            "color": "#d0d0d0",
+            "roughness": 0.5,
+            "metalness": 0.3
+          }
+        },
+        {
+          "op": "place",
+          "shape": "sphere",
+          "pos": {
+            "X": 0,
+            "Y": -0.2,
+            "Z": 0
+          },
+          "rot": {
+            "X": 0,
+            "Y": 0,
+            "Z": 0
+          },
+          "scale": {
+            "X": 1,
+            "Y": 0.4,
+            "Z": 1
+          },
+          "material": {
+            "color": "#e0e0e0",
+            "roughness": 0.4,
+            "metalness": 0.2
+          }
+        }
+      ],
+      "verdict": {
+        "hard_gate": {
+          "envelope": true,
+          "collision": true,
+          "done": true
+        },
+        "rubric": {
+          "done_coverage": {
+            "score": 2,
+            "evidence": "envelope coverage ≈ 19% over 4 ops (target ≥ 2%)"
+          },
+          "silhouette": {
+            "score": 0,
+            "evidence": "The structure appears as a small, flat white dot against a dark background, lacking any recognizable dome or cap shape."
+          },
+          "coherence": {
+            "score": 2,
+            "evidence": "2 shape(s), 4 colour(s); grounded, varied"
+          }
+        }
+      }
+    },
+    {
+      "gen_ops": [
+        {
+          "op": "place",
+          "shape": "cylinder",
+          "pos": {
+            "X": 0,
+            "Y": -1.7,
+            "Z": 0
+          },
+          "rot": {
+            "X": 0,
+            "Y": 0,
+            "Z": 0
+          },
+          "scale": {
+            "X": 3.2,
+            "Y": 0.5,
+            "Z": 3.2
+          },
+          "material": {
+            "color": "#D3D3D3",
+            "roughness": 0.7,
+            "metalness": 0.1
+          }
+        },
+        {
+          "op": "place",
+          "shape": "cylinder",
+          "pos": {
+            "X": 0,
+            "Y": -1.2,
+            "Z": 0
+          },
+          "rot": {
+            "X": 0,
+            "Y": 0,
+            "Z": 0
+          },
+          "scale": {
+            "X": 2.8,
+            "Y": 0.5,
+            "Z": 2.8
+          },
+          "material": {
+            "color": "#C0C0C0",
+            "roughness": 0.5,
+            "metalness": 0.4
+          }
+        },
+        {
+          "op": "place",
+          "shape": "cylinder",
+          "pos": {
+            "X": 0,
+            "Y": -0.7,
+            "Z": 0
+          },
+          "rot": {
+            "X": 0,
+            "Y": 0,
+            "Z": 0
+          },
+          "scale": {
+            "X": 2.4,
+            "Y": 0.5,
+            "Z": 2.4
+          },
+          "material": {
+            "color": "#B0B0B0",
+            "roughness": 0.6,
+            "metalness": 0.2
+          }
+        },
+        {
+          "op": "place",
+          "shape": "cylinder",
+          "pos": {
+            "X": 0,
+            "Y": -0.2,
+            "Z": 0
+          },
+          "rot": {
+            "X": 0,
+            "Y": 0,
+            "Z": 0
+          },
+          "scale": {
+            "X": 2,
+            "Y": 0.5,
+            "Z": 2
+          },
+          "material": {
+            "color": "#A0A0A0",
+            "roughness": 0.5,
+            "metalness": 0.3
+          }
+        },
+        {
+          "op": "place",
+          "shape": "sphere",
+          "pos": {
+            "X": 0,
+            "Y": 0.5,
+            "Z": 0
+          },
+          "rot": {
+            "X": 0,
+            "Y": 0,
+            "Z": 0
+          },
+          "scale": {
+            "X": 1.8,
+            "Y": 1.2,
+            "Z": 1.8
+          },
+          "material": {
+            "color": "#708090",
+            "roughness": 0.4,
+            "metalness": 0.5
+          }
+        }
+      ],
+      "verdict": {
+        "hard_gate": {
+          "envelope": true,
+          "collision": true,
+          "done": true
+        },
+        "rubric": {
+          "done_coverage": {
+            "score": 2,
+            "evidence": "envelope coverage ≈ 38% over 5 ops (target ≥ 2%)"
+          },
+          "silhouette": {
+            "score": 2,
+            "evidence": "The structure's silhouette forms a clear dome shape with a slightly elevated cap on top, indicating the intended design."
+          },
+          "coherence": {
+            "score": 2,
+            "evidence": "2 shape(s), 5 colour(s); grounded, varied"
+          }
+        }
+      }
+    }
+  ],
+  "outcome": {
+    "result": "accepted",
+    "cached": true,
+    "quality_flag": "ok",
+    "reason": "hard gate passed; soft score 6/6"
+  }
+}

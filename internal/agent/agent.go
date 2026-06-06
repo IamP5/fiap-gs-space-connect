@@ -17,6 +17,7 @@ import (
 	"swarmbuild/internal/bus"
 	"swarmbuild/internal/core/allocation"
 	"swarmbuild/internal/core/domain"
+	"swarmbuild/internal/harness/cache"
 	"swarmbuild/internal/wire"
 	"sync"
 	"time"
@@ -55,24 +56,66 @@ type Config struct {
 	SettleAfterRevive time.Duration
 
 	// BuildOps OVERRIDES the deterministic per-task-type op stream (opsource.go)
-	// this rover emits while working a Task (bh-02). nil ⇒ use buildOpsFor(type),
-	// the normal path. A non-nil EMPTY slice forces the rover to emit ZERO ops,
+	// this rover emits while working a Task (bh-02). nil ⇒ use the cache-or-primitive
+	// path, the normal path. A non-nil EMPTY slice forces the rover to emit ZERO ops,
 	// which the invariant test uses to prove that with no Build spec the Task
 	// completion + self-heal behaviour is byte-for-byte the pre-harness path
 	// (the work phase falls back to the fixed work timer). Keyed by task type so
 	// one swarm config can drive a mixed blueprint deterministically.
 	BuildOps map[domain.TaskType][]wire.BuildOp
+
+	// BlueprintID names the blueprint this rover builds for, used to look up a
+	// baked Build spec in the replay cache (keyed {blueprintId, taskId}) before the
+	// rover falls back to the deterministic primitive stream (bh-03, ADR-0007). Empty
+	// ⇒ the rover never consults the cache and always uses the primitive stream, so
+	// the cache-replay path is purely additive and opt-in per swarm config.
+	BlueprintID string
+
+	// ReplaySpec, when set, OVERRIDES the embedded cache lookup with an explicit
+	// (blueprintId, taskId) → ops resolver. nil ⇒ the rover consults the committed
+	// embedded cache (cache.Embedded). This seam lets a test inject a deterministic
+	// cache (hit or forced miss) with no embedded-file dependency, and keeps the
+	// agent importing only declarative cache DATA — never the Model seam (ADR-0005).
+	ReplaySpec func(blueprintID, taskID domain.TaskID) ([]wire.BuildOp, bool)
 }
 
-// opsFor resolves the op stream this rover emits for a Task of type t: the
-// Config override when present (including a forced-empty slice), else the
-// deterministic standalone stream. A nil result means "no ops" — the work phase
-// then runs the fixed work timer exactly as the pre-harness rover did.
-func (c Config) opsFor(t domain.TaskType) []wire.BuildOp {
+// opsFor resolves the ordered op stream this rover emits while working task (of
+// type t), in strict precedence:
+//
+//  1. Config.BuildOps override (incl. a forced-empty slice) — tests/invariant path.
+//  2. A baked spec in the replay cache for (BlueprintID, task) — the HEADLINE
+//     deterministic replay (bh-03): a cache HIT replays the committed spec.
+//  3. buildOpsFor(t) — the deterministic primitive stream (the cache-MISS fallback,
+//     bh-02). An unknown type yields nil, so the work phase runs the fixed timer.
+//
+// A nil result means "no ops": the work phase runs the fixed work timer exactly as
+// the pre-harness rover did.
+func (c Config) opsFor(task domain.TaskID, t domain.TaskType) []wire.BuildOp {
 	if c.BuildOps != nil {
 		return c.BuildOps[t] // may be nil/empty: caller forced no ops for this type
 	}
-	return buildOpsFor(t)
+	if ops, ok := c.replayOps(task); ok {
+		return ops // cache hit: replay the committed baked spec deterministically
+	}
+	return buildOpsFor(t) // cache miss (or no blueprint): primitive fallback stream
+}
+
+// replayOps looks up a baked spec for (BlueprintID, task) via the configured
+// resolver (or the committed embedded cache by default). It returns ok=false —
+// the primitive fallback — when there is no blueprint, no resolver/cache, or no
+// baked entry for the task. It NEVER reaches the Model seam: replay is pure data.
+func (c Config) replayOps(task domain.TaskID) ([]wire.BuildOp, bool) {
+	if c.BlueprintID == "" {
+		return nil, false // not configured for cache replay: always primitive
+	}
+	if c.ReplaySpec != nil {
+		return c.ReplaySpec(domain.TaskID(c.BlueprintID), task)
+	}
+	ec, err := cache.Embedded()
+	if err != nil || ec == nil {
+		return nil, false // a bad/empty embedded cache degrades to primitive, never panics
+	}
+	return ec.Lookup(c.BlueprintID, string(task))
 }
 
 // Movement and work tuning. Movement is visual interpolation only — the rover
@@ -731,7 +774,7 @@ func drive(ctx context.Context, cfg Config, conn *bus.Conn, st *rover, heart, fa
 // rover goes silent, its partial ops stay durable, and the coordinator
 // self-heals the lease.
 func workPhase(ctx context.Context, cfg Config, conn *bus.Conn, st *rover, heart, fault *time.Ticker, down <-chan struct{}, aw wire.Award) phaseResult {
-	ops := cfg.opsFor(aw.Type)
+	ops := cfg.opsFor(aw.TaskID, aw.Type)
 	if len(ops) == 0 {
 		// No ops to stream: hold for the fixed work timer (pre-harness fallback) —
 		// the path the forced-empty-ops invariant test exercises.
