@@ -82,7 +82,7 @@ kubectl apply -k "${K8S_DIR}"
 # new reloadDemo control, or a web bundle missing the latest UI).
 if [[ ${CLUSTER_PREEXISTED} -eq 1 ]]; then
   echo "▶ cluster pre-existed → restarting deployments to pick up rebuilt images…"
-  kubectl -n "${NS}" rollout restart deployment --all
+  kubectl -n "${NS}" rollout restart deployment
 fi
 
 echo "▶ waiting for rollouts to be ready…"
