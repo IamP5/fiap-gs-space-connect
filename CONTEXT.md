@@ -107,3 +107,31 @@ _Avoid_: Stop, disable, crash, terminate.
 **Choreography**:
 The deliberate pacing of the demo so an evaluator can *see* the self-heal beats (lease draining, re-auction, the replacement driving over). Every beat is derived from a real worksite event, never fabricated.
 _Avoid_: Animation, scripting, demo mode, staging.
+
+### The build harness (AI construction layer)
+
+The agentic layer that sits **on top of** the deterministic swarm. It never decides *who* builds or *when* (the Auction owns that, untouched); it only produces *what a completed task looks like*. The swarm self-heals deterministically; the harness adds the visible construction.
+
+**Architect**:
+The single planning harness that turns a Blueprint into Build contracts — it authors *intent* ("what this wall should look like, and what done means"). Distinct from the **Planner** module, which deterministically computes the DAG and ready set; the Architect is the LLM layer that authors the per-task specs the Planner's tasks are built against.
+_Avoid_: Leader, orchestrator, master, delegator (it does not assign work — the Auction does); also avoid reusing "Planner" for it.
+
+**Build contract**:
+The per-task definition of what to construct and what "done" looks like, authored by the Architect and handed to whichever Rover wins the task at Auction. The construction analogue of the sprint contract: agreed before any geometry is generated.
+_Avoid_: Ticket, task spec, prompt, instructions.
+
+**Build harness**:
+The agentic loop a Rover runs to satisfy a Build contract — it generates a Build spec (declarative build operations), observing its own world snapshot, until the contract's "done" is met. One per working Rover.
+_Avoid_: Generator, codegen, agent loop, executor.
+
+**Build spec**:
+The declarative, engine-agnostic description of geometry a Build harness emits — an ordered list of build operations (primitives/models with transform + material) that the renderer **interprets, never executes**. It is durable Task state (carried in the snapshot), so the scene stays a pure re-render (ADR-0004). Designed to grow from primitives + procedural materials to custom models (glTF) and textures without changing the seam.
+_Avoid_: Three.js code, mesh, payload, script (it is data, not executable code).
+
+**Model seam**:
+The pluggable boundary between the Build harness and the LLM provider — a single narrow interface the harness depends on, with the vendor SDK behind it. Swapping the provider (GPT-class → Gemini → local) is a config change, never a harness change. The same "swap the seam, not the core" philosophy as the world Adapter, applied to the model.
+_Avoid_: LLM client, provider, model wrapper, SDK (name the boundary, not the thing behind it).
+
+**Build envelope**:
+The spatial bounds a Build harness must keep its geometry within for one Task. It is what lets independent workers' output **compose** into one Blueprint without overlap or misalignment: each worker generates inside its envelope, against a shared coordinate frame, seeing neighbours' accumulated build ops. Generation runs in dependency order so each envelope is filled against a coherent world.
+_Avoid_: Bounding box, region, zone, slot.
