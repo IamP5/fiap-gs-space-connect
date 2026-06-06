@@ -101,15 +101,18 @@ BuildContract {
 
 ### Build spec (Build harness → World Model → snapshot)  — forward-compatible
 ```
-BuildSpec = [ BuildOp ]               // ordered, append-only, durable Task state
+BuildSpec = [ BuildOp ]               // ordered, append-only, durable Task state; renderer FOLDS it
 BuildOp {
-  op:    "place",
-  shape: "box" | "cylinder" | "sphere" | "model",   // "model" = future glTF
+  op:    "place" | "move" | "delete", // "move"/"delete" = a harness revising earlier work (ADR-0009)
+  id:    string,                       // stable op identity; "move"/"delete" target an earlier "place".id
+  shape: "box" | "cylinder" | "sphere" | "model",   // "place" only; "model" = future glTF
   pos:   Vec3, rot: Vec3, scale: Vec3,              // relative to the Task envelope frame
   material: { color, roughness?, metalness?, map? },// "map" (texture) = future
   model_ref?: string                                // future glTF reference
 }
-# validated-and-repaired against JSON schema server-side before accepted (ADR-0006)
+# validated-and-repaired against JSON schema server-side before accepted (ADR-0006);
+# validation runs against the FOLDED result (envelope/collision), not single ops. A cached
+# replay spec is place-only — a degenerate patch log that folds to itself (no re-bake).
 ```
 
 ### Model seam (the swap boundary)
@@ -160,10 +163,12 @@ TaskView {  ...existing... ,
 
 ### New control command (`web` → gateway → `control.command`)
 ```
-{ cmd: "placeBlueprint", blueprintId, origin:Vec3, rotation }   // drag-to-place
+{ cmd: "placeBlueprint", blueprintId, origin:Vec3, rotation, mode?:"replay"|"live" } // drag-to-place
 # joins existing: kill | killContainer | setLatency | setFailureProb | reloadDemo
 # coordinator injects the pre-baked task DAG at origin; Auction proceeds as today.
 # multiple blueprints allowed — each is just another DAG the Auction feeds on.
+# mode defaults to "replay" (deterministic cache). "live" tags the DAG's Tasks so the winning
+# Rover runs its harness on the build path (agent.Config.Mode=live; ADR-0009). Both can coexist.
 ```
 
 ## 5. The two paths, and the self-heal interaction
@@ -188,6 +193,23 @@ UNCLAIMED **with its accumulated Build spec intact** → re-auction → the repl
 **resumes appending** from the partial structure against the same contract. The wall keeps
 rising where it stopped.
 
+**Live path** (opt-in, per placement — [ADR-0009](./adr/0009-live-build-mode-runs-the-harness-on-the-work-path.md)):
+drag a Blueprint in with `mode: "live"` → its Tasks are tagged `live` → the winning Rover runs
+its Build harness **in its work phase** (`agent.Config.Mode = live`), streaming each refine
+iteration as **patch ops** (`place`/`move`/`delete`) on `build.op.<task>`, so the structure
+**grows and visibly self-corrects** in the world step by step. This **deliberately runs the
+model on the build path** — the scoped break of ADR-0005 the live mode exists for. Failure
+**heals, it does not fall back**: the harness loop retries; past a per-Rover threshold the Rover
+**dies** through the normal expiry → re-auction path; the replacement **folds the durable patch
+log and continues the loop live**. A **circuit breaker** finishes a Task with the primitive
+op-source only after >≈3 builder deaths on it (bounds a systemic model outage), so dependents
+still unblock and the dome still closes. The **replay** path above stays the default and the
+bulletproof fallback; a `replay` dome and a `live` dome can stand in the same world.
+
+The hot-path invariant is **rescoped, not dropped**: the self-heal core (allocation/auction,
+lease/heartbeat, expiry, single-writer tick, World Model, Planner) still must not import the
+Model seam; only the Rover work phase may (see §7, §8).
+
 ## 6. Build sequence (robustness-first, cut-able tail)
 
 1. **Build-spec contract + renderer interpreter + fallback.** Add `build_spec` to the wire
@@ -207,9 +229,16 @@ rising where it stopped.
    model → quality gate before freezing a spec. Provider-swap to Gemini proven by config.
 7. **Stretch:** live "lab" mode in-app; specialized sub-agents (topology **C**); custom glTF
    + textures (gated on CC0 assets).
+8. **Live build mode** ([ADR-0009](./adr/0009-live-build-mode-runs-the-harness-on-the-work-path.md)).
+   Per-placement `mode:"live"`; the Rover runs the harness inline in its work phase, streaming
+   self-correcting **patch ops** per refine iteration; retry → die → resume-live failure path
+   with a primitive circuit breaker; **rescope** the import-graph archtest to the self-heal
+   core. The deliberate, scoped break of ADR-0005 — replay stays the default and the fallback.
 
 Each step is demoable; the headline survives stopping after any step (earlier steps fall back
-to richer-primitive or fewer Blueprints, never to "broken").
+to richer-primitive or fewer Blueprints, never to "broken"). Steps 1–7 keep the model off the
+build path entirely; step 8 is the one place that — opt-in, per placement — runs it on the
+build path, with the self-heal core still mechanically model-free.
 
 ## 7. Test strategy
 
@@ -225,10 +254,17 @@ to richer-primitive or fewer Blueprints, never to "broken").
 - **Best-effort invariant — test**: with the `Model` forced to error, the Auction/lease/
   self-heal flow and Task completion are byte-for-byte the pre-harness behaviour.
 - **Hot-path invariant — architecture test** (mechanical, in `go test -race ./...`): asserts
-  `internal/harness/model` is not in the import closure of the hot-path packages
-  (allocation/auction, lease/heartbeat, expiry, single-writer tick). Promotes the §8 grep to
-  an executable check that fails CI the moment a Model-seam call is wired into the hot loop
-  ([ADR-0005](./adr/0005-llm-build-harness-augments-deterministic-swarm.md)).
+  `internal/harness/model` is not in the import closure of the **self-heal core** packages
+  (allocation/auction, lease/heartbeat, expiry, single-writer tick, World Model, Planner).
+  Promotes the §8 grep to an executable check that fails CI the moment a Model-seam call is
+  wired into the self-heal loop ([ADR-0005](./adr/0005-llm-build-harness-augments-deterministic-swarm.md)).
+  **Rescoped by [ADR-0009](./adr/0009-live-build-mode-runs-the-harness-on-the-work-path.md):**
+  the Rover *work phase* (`internal/agent`, live mode) is allowed to import the Model seam; the
+  test asserts the core stays model-free, not the whole hot path.
+- **Live-mode failure/heal — integration test**: with the `Model` forced to fail in live mode,
+  the harness retries, the Rover dies past threshold, the Task re-auctions, and a replacement
+  folds the patch log and continues; after >≈3 builder deaths the circuit breaker finishes the
+  Task with primitive geometry and dependents unblock (the dome still closes).
 - **Evaluator verdict + trace — unit tests** (lab/bake): the hard gate stays boolean and
   blocking; a hard-gate failure forces refine/fallback; a passing-but-low-scoring spec is
   cached with `quality_flag: low`; the trace round-trips and lists every iteration's verdict.
@@ -237,9 +273,14 @@ to richer-primitive or fewer Blueprints, never to "broken").
 
 ## 8. Live-robustness checklist
 
-- [ ] No Model-seam call on the award / heartbeat / expiry path — enforced by the import-graph
-      architecture test in `go test -race ./...`, not a manual grep (ADR-0005).
-- [ ] Headline runs entirely from **cache**; cache-hit asserted in pre-demo smoke.
+- [ ] No Model-seam call in the **self-heal core** (allocation / lease / heartbeat / expiry /
+      tick / World Model / Planner) — enforced by the rescoped import-graph architecture test in
+      `go test -race ./...`, not a manual grep (ADR-0005, ADR-0009). Live mode may call the model
+      in the Rover work phase only.
+- [ ] **Replay** (default) headline runs entirely from **cache**; cache-hit asserted in pre-demo
+      smoke. Live mode is opt-in per placement and never the default.
+- [ ] Live mode: a stalling model heals (retry → die → resume-live) and never freezes a Task;
+      the circuit breaker guarantees completion after >≈3 builder deaths.
 - [ ] `Model` failure / timeout ⇒ primitive fallback; Task still flips DONE; dependents unblock.
 - [ ] Resume-on-kill verified on the actual laptop; partial wall continues, never restarts.
 - [ ] Build-spec validation rejects over-envelope / colliding ops before they reach the scene.
@@ -253,7 +294,8 @@ to richer-primitive or fewer Blueprints, never to "broken").
 Free-form blueprint authoring (Architect live decomposition stays a lab capability); custom
 glTF models + textures in the demo (schema-ready, gated on CC0 assets per ADR-0004);
 specialized evaluator sub-agents / parallel voting (topology **C**, gated on trace gaps);
-in-app live generation as the *headline* (lab path only); fine-tuning or training; multi-model
+live generation as the *default* headline (it is opt-in per placement — ADR-0009 — never the
+default; the deterministic replay stays the money shot); fine-tuning or training; multi-model
 ensembles; persistence of specs beyond the cache + NATS KV.
 
 ## 10. Open decisions (deliberately deferred)
@@ -264,6 +306,8 @@ ensembles; persistence of specs beyond the cache + NATS KV.
 | Evaluator depth | (B) Generator+Evaluator, layered verdict (hard gate + soft rubric), 1–3 iters | (C) specialized sub-agents when the `quality_flag: low` set in the bake traces is non-trivial and concentrated (ADR-0008) |
 | Vision pass | Bake/lab only | If analytic-only specs read as low quality on stage |
 | Ollama strict json_schema | Treat as unverified; prefer native `format` | If a local-model demo is wanted |
+| Live-mode retry / death thresholds | Per-Rover retry on each call; Rover dies after a small N of failures; circuit breaker after ≈3 builder deaths per Task (ADR-0009) | Tune once observed on the real laptop + provider latency |
+| Live-mode model | Same provider/model as bake (openai-go/v3 + base_url swap) | If a faster/cheaper model is needed for interactive latency |
 
 ## 11. Project layout (proposed additions)
 ```
@@ -271,7 +315,9 @@ ensembles; persistence of specs beyond the cache + NATS KV.
                                 validation + repair, fallback. Shared package; agent imports it.
 /internal/harness/model    Go — the Model seam (interface) + openai-go/v3 adapter (base_url swap)
 /internal/wire             Go — (extend) TaskView.build_spec; build.op / build.contract subjects
-/internal/agent            Go — (extend) work phase emits ops until contract done; resume-on-kill
+/internal/agent            Go — (extend) work phase emits ops until contract done; resume-on-kill.
+                                LIVE mode (ADR-0009): imports the Model seam, runs the harness
+                                loop inline, streams patch ops, retry→die→resume-live + breaker
 /internal/coordinator      Go — (extend) append ops to Task spec; placeBlueprint injection
 /web/src/components         (extend) Scene3D spec-interpreter; blueprint palette + drag-to-place
 /web/src/lib                (extend) build-spec → mesh mapping; agent console panel

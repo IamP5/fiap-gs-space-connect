@@ -29,6 +29,12 @@ there). Then [TECHSPEC.md](./TECHSPEC.md).
   verdict — a **hard gate** (boolean, blocking safety invariants) plus a **soft rubric**
   (0–2 quality scores + evidence) that flags but never blocks. The `quality_flag: low`
   population is the inspectable trigger for the (B)→(C) topology move.
+- [ADR-0009](./adr/0009-live-build-mode-runs-the-harness-on-the-work-path.md) — **live build
+  mode**: an opt-in, per-placement mode where a Rover runs its harness *on the build path* and
+  the structure self-corrects in the world step by step. **Deliberately scopes ADR-0005** (the
+  self-heal core stays model-free; replay stays the bulletproof default). Failure heals through
+  the existing expiry → re-auction path (retry → die → resume live), with a primitive
+  circuit-breaker as the last resort.
 
 > **A note on "harness."** This document uses *Build harness* in the **product** sense
 > (CONTEXT.md): the in-product LLM Generator↔Evaluator loop a Rover runs to emit geometry.

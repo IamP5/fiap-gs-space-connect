@@ -270,6 +270,20 @@
         "live: lab SSE streamed started→ops→verdict→done on real OpenAI; headless Chrome rendered the Kenney glTF dome + Poly Haven texture; make check + web 100 tests + smoke green; PR #10 (bh/07→bh/06)"
       ],
       "notes": "Stretch — scoped to live lab mode + CC0 glTF per user. Sub-agents (topology C) DEFERRED: no observed trace gap (bh-04 baked 0 fell-back / 0 low), ADR-0008. Landed in PR #10; integrated + verified green."
+    },
+    {
+      "id": "bh-08",
+      "priority": 19,
+      "area": "build-harness",
+      "title": "Live build mode — the Rover runs the harness in the world",
+      "user_visible_behavior": "Dropping a Blueprint in 'live' mode makes the winning Rover run its LLM Build harness as it works: the structure rises and visibly self-corrects in the world step by step. Killing the Rover mid-build hands the half-built patch log to a replacement that continues live. The deterministic 'replay' dome stays the default and can stand beside a live one.",
+      "status": "not_started",
+      "depends_on": ["bh-05", "bh-07"],
+      "verification": [
+        "go test -race ./... (rescoped archtest: harness/model absent from self-heal core; live-mode retry→die→resume + circuit-breaker integration test) ; cd web && npm run build && npm test (patch-op fold: place/move/delete) ; manual: place a live Blueprint, watch it self-correct, kill mid-build, confirm live resume"
+      ],
+      "evidence": [],
+      "notes": "DESIGN COMPLETE (grill-with-docs, 2026-06-06): ADR-0009 + issues/08-live-build-mode.md + TECHSPEC §4/§5/§6/§7/§8/§9/§10/§11 + CONTEXT.md (Build mode, Build spec patch ops). Decisions: model wired into agent (live only); agent.Config.Mode{replay|live}; per-placement mode on placeBlueprint; per-refine-iteration streaming via append-only patch-op log (place/move/delete) the renderer folds; failure heals (retry→die→resume-live), primitive circuit breaker after ~3 builder deaths; archtest rescoped to the self-heal core. Deliberately scopes ADR-0005's runtime rule (live build path only). NOT YET IMPLEMENTED."
     }
   ]
 }

@@ -125,8 +125,12 @@ The agentic loop a Rover runs to satisfy a Build contract — it generates a Bui
 _Avoid_: Generator, codegen, agent loop, executor.
 
 **Build spec**:
-The declarative, engine-agnostic description of geometry a Build harness emits — an ordered list of build operations (primitives/models with transform + material) that the renderer **interprets, never executes**. It is durable Task state (carried in the snapshot), so the scene stays a pure re-render (ADR-0004). Designed to grow from primitives + procedural materials to custom models (glTF) and textures without changing the seam.
+The declarative, engine-agnostic description of geometry a Build harness emits — an **append-only ordered log of build operations** the renderer **folds, then interprets, never executes**. An operation either *places* geometry (a primitive/model with transform + material) or, when a harness revises its own earlier work, *moves* or *deletes* an existing one; folding the log yields the Task's current geometry. It is durable Task state (carried in the snapshot), so the scene stays a pure re-render (ADR-0004). Designed to grow from primitives + procedural materials to custom models (glTF) and textures without changing the seam.
 _Avoid_: Three.js code, mesh, payload, script (it is data, not executable code).
+
+**Build mode**:
+How a Task's geometry is produced when a Rover works it: **replay** (the deterministic default — the Rover streams a frozen, pre-approved Build spec from cache, no model call, the bulletproof headline) or **live** (the Rover runs its Build harness *as it works*, so the structure is generated and visibly self-corrected in the world step by step). Live mode deliberately trades determinism for authenticity and is chosen per Blueprint placement; the two coexist, even side by side (ADR-0009).
+_Avoid_: Demo mode, dev mode, online/offline (name the choice, not an environment).
 
 **Model seam**:
 The pluggable boundary between the Build harness and the LLM provider — a single narrow interface the harness depends on, with the vendor SDK behind it. Swapping the provider (GPT-class → Gemini → local) is a config change, never a harness change. The same "swap the seam, not the core" philosophy as the world Adapter, applied to the model.
