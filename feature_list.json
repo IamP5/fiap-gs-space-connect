@@ -194,21 +194,21 @@
       "user_visible_behavior": "Behind the Model seam, one LLM provider generates a single Build spec offline ('bake'); swapping the provider is a config change, not a harness change.",
       "status": "not_started",
       "depends_on": ["bh-02"],
-      "verification": ["go test -race ./... (model seam unit-tested with a fake provider); manual: bake one spec and render it"],
+      "verification": ["go test -race ./... (model seam unit-tested with a fake provider; validate-and-repair + fallback-on-exhaustion)", "go test -race ./... includes an import-graph architecture test asserting internal/harness/model is NOT in the import closure of the hot-path packages (allocation/auction, lease/heartbeat, expiry, tick) — ADR-0005", "manual: bake one spec and render it; confirm no API key reaches the browser"],
       "evidence": [],
-      "notes": "HITL. The vendor SDK lives behind a single narrow interface (Model seam)."
+      "notes": "HITL. The vendor SDK lives behind a single narrow interface (Model seam). The import-graph test mechanically enforces the hot-path invariant (promotes the TECHSPEC §8 grep)."
     },
     {
       "id": "bh-04",
       "priority": 15,
       "area": "build-harness",
-      "title": "Generator <-> Evaluator loop + analytic gate; bake all",
-      "user_visible_behavior": "A Build harness runs a generate->evaluate loop against an analytic gate until a contract's 'done' is met, baking specs for all tasks.",
+      "title": "Generator <-> Evaluator loop + layered verdict (hard gate + soft rubric) + trace; bake all",
+      "user_visible_behavior": "A Build harness runs a generate->evaluate loop until a contract's 'done' is met, baking specs for all tasks. The Evaluator emits a hard gate (envelope/collision/done — boolean, blocking) plus a soft rubric (done-coverage/coherence, 0-2 + evidence); each bake writes a trace sidecar.",
       "status": "not_started",
       "depends_on": ["bh-03"],
-      "verification": ["go test -race ./... (generator/evaluator loop + analytic gate); manual: bake-all produces a coherent dome"],
+      "verification": ["go test -race ./... (generator/evaluator loop; hard gate rejects out-of-envelope/collision/unmet-done with a unit test on each)", "go test -race ./... (a hard-gate-passing but low-scoring spec is cached with quality_flag:low, not withheld; the <spec-key>.trace.json round-trips)", "manual: bake-all produces a coherent dome; operator review lists fell-back UNION quality_flag:low Tasks"],
       "evidence": [],
-      "notes": "Topology (B): Generator+Evaluator in one harness now; sub-agents (C) later (see .agents/skills memory)."
+      "notes": "Topology (B): Generator+Evaluator in one harness now. Layered verdict + trace per ADR-0008; the quality_flag:low population is the inspectable trigger for sub-agents (C) later (see memory: build-harness-agent-topology)."
     },
     {
       "id": "bh-05",
@@ -227,12 +227,12 @@
       "priority": 17,
       "area": "build-harness",
       "title": "Vision evaluator pass + provider-swap proof",
-      "user_visible_behavior": "A vision-based evaluator judges rendered output, and a second provider is swapped in to prove the Model seam holds.",
+      "user_visible_behavior": "A vision-based evaluator judges rendered output (headless Chrome on the real Scene3D) and a second provider is swapped in to prove the Model seam holds.",
       "status": "not_started",
       "depends_on": ["bh-04"],
-      "verification": ["go test -race ./... ; manual: run the same bake under two providers via config only"],
+      "verification": ["go test -race ./... ; manual: vision score populates the silhouette soft-rubric dimension (0-2 + evidence) and lands in the trace; a low score refines within budget but on exhaustion the spec still caches flagged quality_flag:low (never withheld — ADR-0008)", "manual: run the same bake under two providers (GPT-class, Gemini OpenAI-compat) via config only; specs still validate (validate-and-repair retained)"],
       "evidence": [],
-      "notes": "HITL."
+      "notes": "HITL. The vision pass is the source of the silhouette rubric dimension (couples bh-06 to bh-04's Evaluator). Bake/lab only — zero vision calls on the headline path."
     },
     {
       "id": "bh-07",

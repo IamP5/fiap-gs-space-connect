@@ -24,7 +24,7 @@ heals over the bus) is documented in [docs/encore.md](./docs/mvp/encore.md).
 
 ## Session lifecycle (start here)
 
-**At startup — do this first:**
+**Startup workflow — at startup, do this first:**
 1. `pwd` to confirm the repo root, then read [`PROGRESS.md`](./PROGRESS.md) (current verified
    state + next step) and [`feature_list.json`](./feature_list.json) (per-feature status).
 2. `git log --oneline -5` for recent context.
@@ -32,7 +32,7 @@ heals over the bus) is documented in [docs/encore.md](./docs/mvp/encore.md).
    is your first task** — never stack new work on a broken base.
 4. Pick the **one** highest-priority feature that isn't `passing`. Work only on it.
 
-**Work rules:** one active feature at a time (WIP = 1); finish *and verify* before starting
+**Work rules:** one feature at a time (WIP = 1, exactly one active feature); finish *and verify* before starting
 the next; no "while I'm here" refactors or parallel features. The repo is the system of
 record — durable artifacts (`feature_list.json`, `PROGRESS.md`, ADRs) over chat history.
 
