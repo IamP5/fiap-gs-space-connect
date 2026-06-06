@@ -1,0 +1,35 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>SWARMBUILD · BAKE RENDER HARNESS</title>
+    <!--
+      Bake-only render harness (bh-06). Mounts the REAL Scene3D with a single
+      DONE task carrying an injected Build spec, at a deterministic camera
+      framing, so the bake's vision pass can drive headless Chrome, wait for the
+      canvas to settle, and screenshot it. This page is NEVER served on the
+      headline path — it exists only for cmd/bake's vision pass. No API key is
+      ever embedded here (keys are server-side only).
+    -->
+    <style>
+      html,
+      body,
+      #bake-root {
+        margin: 0;
+        padding: 0;
+        width: 100vw;
+        height: 100vh;
+        background: #000;
+        overflow: hidden;
+      }
+      canvas {
+        display: block;
+      }
+    </style>
+  </head>
+  <body>
+    <div id="bake-root"></div>
+    <script type="module" src="/src/bake/main.tsx"></script>
+  </body>
+</html>

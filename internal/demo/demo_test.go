@@ -1,10 +1,12 @@
 package demo
 
 import (
+	"encoding/json"
 	"reflect"
 	"strconv"
 	"swarmbuild/internal/core/domain"
 	"swarmbuild/internal/core/planner"
+	"swarmbuild/internal/harness/cache"
 	"testing"
 	"time"
 )
@@ -78,6 +80,49 @@ func assertCapDependsOnAllWalls(t *testing.T, capTask domain.Task) {
 	if len(capTask.Deps) != 8 {
 		t.Fatalf("dome-cap has %d deps, want exactly 8 (the walls)", len(capTask.Deps))
 	}
+}
+
+// TestEmbeddedCache_ReplaysFullDomeDeterministically is the bh-04 headline proof:
+// EVERY demo Blueprint Task has a committed baked spec, and the whole dome replays
+// from the embedded cache deterministically (two lookups byte-identical, no model
+// call). It is SKIPPED until the dome has been baked (the live bake-all), so the
+// suite stays green before and after — but once baked, it guards the load-bearing
+// "headline runs entirely from cache" invariant for the full structure, not just
+// one Task.
+func TestEmbeddedCache_ReplaysFullDomeDeterministically(t *testing.T) {
+	c, err := cache.Embedded()
+	if err != nil {
+		t.Fatalf("embedded cache failed to load: %v", err)
+	}
+
+	bp := DomeBlueprint()
+	missing := make([]domain.TaskID, 0, len(bp))
+	for _, bt := range bp {
+		if _, ok := c.Lookup(cache.DemoBlueprintID, string(bt.Task.ID)); !ok {
+			missing = append(missing, bt.Task.ID)
+		}
+	}
+	if len(missing) == len(bp) {
+		t.Skipf("no dome specs committed yet (run the live bake-all); %d tasks unbaked", len(bp))
+	}
+	if len(missing) != 0 {
+		t.Fatalf("the full dome must replay from cache, but %d task(s) have no baked spec: %v", len(missing), missing)
+	}
+
+	// Deterministic: each task's two lookups are byte-identical.
+	for _, bt := range bp {
+		a, _ := c.Lookup(cache.DemoBlueprintID, string(bt.Task.ID))
+		b, _ := c.Lookup(cache.DemoBlueprintID, string(bt.Task.ID))
+		if len(a) == 0 {
+			t.Fatalf("task %s replayed zero ops", bt.Task.ID)
+		}
+		aj, _ := json.Marshal(a)
+		bj, _ := json.Marshal(b)
+		if string(aj) != string(bj) {
+			t.Fatalf("task %s replay is not deterministic", bt.Task.ID)
+		}
+	}
+	t.Logf("full dome replays deterministically: %d/%d tasks from the embedded cache", len(bp), len(bp))
 }
 
 // TestDomeScenario_IsDeterministic asserts the scripted board reproduces

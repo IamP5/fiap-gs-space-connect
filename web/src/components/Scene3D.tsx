@@ -54,7 +54,13 @@ import {
   activeBeats,
   beatProgress,
 } from "../lib/choreography";
-import { type MeshDesc, interpretBuildSpec } from "../lib/buildspec";
+import { GLTFLoader } from "three/examples/jsm/loaders/GLTFLoader.js";
+import {
+  type MeshDesc,
+  type ModelDesc,
+  type PrimitiveDesc,
+  interpretBuildSpec,
+} from "../lib/buildspec";
 import { type Ghost, footprintOf } from "../lib/placement";
 import type { Vec2 } from "../types/wire";
 
@@ -428,6 +434,194 @@ function LeaseBeam({ from, to, map }: { from: RoverView; to: TaskView; map: Scen
   );
 }
 
+// ---- Build-spec mesh: primitive (optionally textured) or glTF model ---------
+//
+// bh-07b: the Build spec's forward-compatible slots become REAL. A primitive op
+// may carry a CC0 texture (material.map); a "model" op references a CC0 glTF
+// (model_ref). Both load asynchronously and FALL BACK to plain geometry on any
+// miss, so the scene is never broken by a gone/slow asset (ADR-0004 — the scene
+// stays a pure function of the snapshot, the renderer only INTERPRETS data).
+
+// One shared GLTFLoader + a tiny module-level cache, so N tasks referencing the
+// same .glb parse it ONCE (r3f-geometry "reuse"), and the parsed scene is cloned
+// per placement so transforms/materials never cross-contaminate.
+const gltfLoader = new GLTFLoader();
+const gltfCache = new Map<string, Promise<THREE.Group>>();
+
+function loadGLTF(url: string): Promise<THREE.Group> {
+  let p = gltfCache.get(url);
+  if (!p) {
+    p = new Promise<THREE.Group>((resolve, reject) => {
+      gltfLoader.load(
+        url,
+        (g) => resolve(g.scene),
+        undefined,
+        (err) => reject(err instanceof Error ? err : new Error(String(err))),
+      );
+    });
+    gltfCache.set(url, p);
+  }
+  return p;
+}
+
+// SpecPrimitive draws one primitive op. If the op declares a texture map
+// (bh-07b), it loads it via TextureLoader and applies it once ready; a load
+// failure simply leaves the flat color (the scene never breaks). The texture
+// loads on mount and is disposed on unmount.
+function SpecPrimitive({
+  desc,
+  geo,
+  color,
+  opacity,
+}: {
+  desc: PrimitiveDesc;
+  geo: SceneGeo;
+  color: string;
+  opacity: number;
+}) {
+  const matRef = useRef<THREE.MeshStandardMaterial>(null);
+  const invalidate = useThree((s) => s.invalidate);
+
+  useEffect(() => {
+    if (!desc.map) return;
+    let disposed = false;
+    let tex: THREE.Texture | null = null;
+    const loader = new THREE.TextureLoader();
+    loader.load(
+      desc.map,
+      (t) => {
+        if (disposed) {
+          t.dispose();
+          return;
+        }
+        t.colorSpace = THREE.SRGBColorSpace;
+        tex = t;
+        if (matRef.current) {
+          matRef.current.map = t;
+          matRef.current.needsUpdate = true;
+          invalidate(); // wake the demand loop so the texture shows
+        }
+      },
+      undefined,
+      () => {
+        // Missing/failed texture ⇒ keep the flat color (fallback, never crash).
+      },
+    );
+    return () => {
+      disposed = true;
+      tex?.dispose();
+    };
+  }, [desc.map, invalidate]);
+
+  const geometry =
+    desc.geometry === "box"
+      ? geo.specBox
+      : desc.geometry === "cylinder"
+        ? geo.specCylinder
+        : geo.specSphere;
+
+  return (
+    <mesh
+      geometry={geometry}
+      position={desc.position}
+      rotation={desc.rotation}
+      scale={desc.scale}
+      raycast={() => null}
+    >
+      <meshStandardMaterial
+        ref={matRef}
+        color={color}
+        roughness={desc.roughness}
+        metalness={desc.metalness}
+        transparent
+        opacity={opacity}
+        emissive="#000000"
+        emissiveIntensity={0}
+        toneMapped={false}
+      />
+    </mesh>
+  );
+}
+
+// SpecModel places a CC0 glTF model (model_ref, bh-07b). It loads the .glb on
+// mount; until it resolves — and FOREVER if it fails — it renders the descriptor's
+// box fallback, so the structure is always present and the scene stays a pure
+// function of the snapshot. The loaded scene is cloned so each placement is
+// independent; the clone is disposed on unmount.
+function SpecModel({
+  desc,
+  geo,
+  color,
+  opacity,
+}: {
+  desc: ModelDesc;
+  geo: SceneGeo;
+  color: string;
+  opacity: number;
+}) {
+  const [scene, setScene] = useState<THREE.Group | null>(null);
+  const invalidate = useThree((s) => s.invalidate);
+
+  useEffect(() => {
+    let disposed = false;
+    loadGLTF(desc.modelRef)
+      .then((g) => {
+        if (disposed) return;
+        // clone(true) SHARES the source geometry + materials with the cached glTF
+        // (Object3D.clone does not deep-copy them), so the clone owns nothing
+        // disposable — disposing its geometry/material would free the cached
+        // original and break every later placement of the same asset. The cached
+        // glTF lives for the session and is reclaimed on page unload; we only
+        // clone so each placement gets its own transform node.
+        setScene(g.clone(true));
+        invalidate();
+      })
+      .catch(() => {
+        // Missing/failed glTF ⇒ keep the box fallback below (never crash).
+      });
+    return () => {
+      disposed = true;
+    };
+  }, [desc.modelRef, invalidate]);
+
+  if (!scene) {
+    // Fallback primitive (a box at the op's transform) until/if the glTF loads.
+    return <SpecPrimitive desc={desc.fallback} geo={geo} color={color} opacity={opacity} />;
+  }
+
+  return (
+    <primitive
+      object={scene}
+      position={desc.position}
+      rotation={desc.rotation}
+      scale={desc.scale}
+    />
+  );
+}
+
+// SpecMesh dispatches one descriptor to the primitive or model renderer. Built
+// tasks show the op's own color; an unfinished interpreted task ghosts in the
+// shared status color (so it reads like the primitive ghost).
+function SpecMesh({
+  desc,
+  geo,
+  built,
+  ghostColor,
+  opacity,
+}: {
+  desc: MeshDesc;
+  geo: SceneGeo;
+  built: boolean;
+  ghostColor: string;
+  opacity: number;
+}) {
+  const color = built ? desc.color : ghostColor;
+  if (desc.kind === "model") {
+    return <SpecModel desc={desc} geo={geo} color={color} opacity={opacity} />;
+  }
+  return <SpecPrimitive desc={desc} geo={geo} color={color} opacity={opacity} />;
+}
+
 // ---- a task / dome block ----------------------------------------------------
 
 // Each task is a block in the rising habitat: foundations form the base, walls
@@ -510,39 +704,23 @@ function TaskBlock({
     }
   });
 
-  // INTERPRETED PATH — the richer structure. Each op's unit primitive is scaled
-  // per-op and placed in the Task's envelope frame (its group sits at the same
-  // ground point as the primitive). Built/ghost opacity is shared so an
-  // unfinished interpreted Task still reads as a ghost, like the primitive.
+  // INTERPRETED PATH — the richer structure. Each op is drawn by <SpecMesh>,
+  // which renders a primitive (optionally textured, bh-07b) or a glTF model
+  // (model_ref, bh-07b) with a primitive fallback. The group sits at the same
+  // ground point as the primitive; built/ghost opacity is shared so an unfinished
+  // interpreted Task still reads as a ghost, like the primitive.
   if (interpreted) {
     return (
       <group ref={groupRef} position={[p.x, 0, p.z]}>
         {specMeshes.map((m, i) => (
-          <mesh
+          <SpecMesh
             key={i}
-            geometry={
-              m.geometry === "box"
-                ? geo.specBox
-                : m.geometry === "cylinder"
-                  ? geo.specCylinder
-                  : geo.specSphere
-            }
-            position={m.position}
-            rotation={m.rotation}
-            scale={m.scale}
-            raycast={() => null}
-          >
-            <meshStandardMaterial
-              color={built ? m.color : color}
-              roughness={m.roughness}
-              metalness={m.metalness}
-              transparent
-              opacity={opacity}
-              emissive="#000000"
-              emissiveIntensity={0}
-              toneMapped={false}
-            />
-          </mesh>
+            desc={m}
+            geo={geo}
+            built={built}
+            ghostColor={color}
+            opacity={opacity}
+          />
         ))}
       </group>
     );

@@ -667,6 +667,132 @@
   gap: var(--s-md);
 }
 
+/* ---- in-app live lab (bh-07a) ----
+   A pick-a-Task + Generate-live control plus the agent console: the streamed
+   "watch it think" feed of the real Generator↔Evaluator loop. Off the headline. */
+.lab-caption {
+  margin: 0;
+  font-family: var(--ui);
+  font-size: 11px;
+  line-height: 1.45;
+  color: var(--ink-mute);
+}
+
+.lab-controls {
+  display: flex;
+  align-items: center;
+  gap: var(--s-sm);
+  flex-wrap: wrap;
+}
+
+.lab-control-label {
+  font-family: var(--ui);
+  font-size: 11px;
+  letter-spacing: 0.6px;
+  text-transform: uppercase;
+  color: var(--ink-mute);
+}
+
+.lab-select {
+  flex: 1 1 auto;
+  min-width: 120px;
+  background: var(--canvas-night);
+  color: var(--on-primary-mute);
+  border: 1px solid var(--hairline-on-dark);
+  border-radius: var(--r-xs);
+  padding: 5px 7px;
+  font-family: var(--ui);
+  font-size: 12px;
+}
+
+.lab-generate-btn {
+  flex: none;
+  background: var(--on-primary-mute);
+  color: var(--canvas-night);
+  border: none;
+  border-radius: var(--r-xs);
+  padding: 6px 11px;
+  font-family: var(--ui);
+  font-size: 12px;
+  font-weight: 600;
+  letter-spacing: 0.4px;
+  cursor: pointer;
+}
+
+.lab-generate-btn:disabled {
+  opacity: 0.55;
+  cursor: progress;
+}
+
+.lab-error {
+  margin: 0;
+  font-family: var(--ui);
+  font-size: 11px;
+  color: var(--signal-down, #e74c3c);
+}
+
+/* The agent console — a scrollable, monospace-ish log of streamed events. */
+.lab-console {
+  list-style: none;
+  margin: 0;
+  padding: var(--s-sm);
+  max-height: 220px;
+  overflow-y: auto;
+  background: var(--canvas-night);
+  border: 1px solid var(--hairline-on-dark);
+  border-radius: var(--r-xs);
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+
+.lab-line {
+  font-family: var(--mono, ui-monospace, "SF Mono", Menlo, monospace);
+  font-size: 11px;
+  line-height: 1.4;
+  color: var(--on-primary-mute);
+  word-break: break-word;
+}
+
+.lab-line-idle {
+  color: var(--ink-mute);
+  font-style: italic;
+}
+
+.lab-tag {
+  display: inline-block;
+  margin-right: 6px;
+  padding: 0 5px;
+  border-radius: 3px;
+  background: var(--canvas-night-soft);
+  border: 1px solid var(--hairline-on-dark);
+  font-size: 10px;
+  letter-spacing: 0.4px;
+  text-transform: uppercase;
+  color: var(--ink-mute);
+}
+
+.lab-line-verdict.is-pass,
+.lab-line-done.is-pass {
+  color: #2ecc71;
+}
+
+.lab-line-verdict.is-fail,
+.lab-line-done.is-fail,
+.lab-line-error {
+  color: #f5a623;
+}
+
+.lab-line-error {
+  color: #e74c3c;
+}
+
+.lab-evidence,
+.lab-reasons,
+.lab-ops-shapes {
+  color: var(--ink-mute);
+}
+
 /* ---- partition narrative (CRDT, issue 10) ----
    A self-contained, deterministic replay of the proven World Model merge: two
    divergent rover views of the same task, shown SIDE BY SIDE, reconcile to the

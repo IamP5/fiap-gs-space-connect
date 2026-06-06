@@ -22,6 +22,7 @@ import (
 	"swarmbuild/internal/agent"
 	"swarmbuild/internal/coordinator"
 	"swarmbuild/internal/core/domain"
+	"swarmbuild/internal/harness/cache"
 	"time"
 )
 
@@ -176,6 +177,12 @@ func DomeBlueprint() []coordinator.BlueprintTask {
 // DomeRovers is the fixed six-rover swarm parked below the worksite, each
 // capable of every task type so any standby can heal any wall. Fixed positions
 // and staggered batteries make every auction's winner deterministic.
+//
+// Every rover carries the demo BlueprintID, so while working a Task it consults
+// the embedded baked-spec cache (bh-03, ADR-0007): a HIT replays the committed,
+// generated spec deterministically (no model call); a MISS falls back to the
+// deterministic primitive op stream. The replay rides the exact same
+// build.op.<task> path as the primitive stream, so resume-on-kill is unchanged.
 func DomeRovers() []agent.Config {
 	caps := []domain.Capability{
 		domain.Capability(taskFoundation),
@@ -189,6 +196,7 @@ func DomeRovers() []agent.Config {
 			Pos:          domain.Vec2{X: float64(-50 + i*20), Y: -70},
 			Battery:      1.0 - float64(i)*0.05,
 			Capabilities: caps,
+			BlueprintID:  cache.DemoBlueprintID,
 		})
 	}
 	return rovers
