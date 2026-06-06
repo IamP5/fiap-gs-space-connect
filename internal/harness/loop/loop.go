@@ -126,6 +126,23 @@ type Request struct {
 	// loop's own goroutine, so a streaming sink must hand off promptly. It is nil on
 	// every bake/headline/lab path, keeping behaviour there byte-identical.
 	EmitAccepted func(iter int, ops []wire.BuildOp)
+
+	// MaxIterations OPTIONALLY overrides the package-default refine-pass cap
+	// (the MaxIterations const) for THIS request. Zero (the default) uses the const,
+	// so every bake/lab/headline caller is byte-for-byte unchanged; the live path
+	// (bh-08) raises it so a stubborn generation gets more attempts to land a
+	// hard-gate-passing spec before degrading to the primitive fallback. Values < 1
+	// fall back to the const.
+	MaxIterations int
+}
+
+// maxIters is the effective refine-pass cap for this request: the per-request
+// MaxIterations override when set (> 0), else the package-default const.
+func (r Request) maxIters() int {
+	if r.MaxIterations > 0 {
+		return r.MaxIterations
+	}
+	return MaxIterations
 }
 
 // Observer receives a copy of each refine pass's Generator output and Evaluator
@@ -191,7 +208,7 @@ func Run(ctx context.Context, gen Generator, eval *evaluator.Evaluator, req Requ
 		iter        int
 	)
 
-	for range MaxIterations {
+	for range req.maxIters() {
 		iter++
 		ops, err := generateWithRetry(ctx, gen, convo, req.RetriesPerCall)
 		if err != nil {

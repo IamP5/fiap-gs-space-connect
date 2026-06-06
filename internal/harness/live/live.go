@@ -53,6 +53,13 @@ import (
 // with no network. Kept as a field so the Builder constructs no provider itself.
 type Generator = loop.Generator
 
+// liveMaxIterations is the refine-pass cap for LIVE builds (bh-08): higher than the
+// headline/bake default (loop.MaxIterations) so a stubborn generation gets many more
+// attempts to land a hard-gate-passing spec — the world keeps visibly self-correcting
+// (08d) — before degrading to the primitive fallback. Costs up to this many model
+// calls per Task, so it is the live path only; bake/lab keep the lean default.
+const liveMaxIterations = 30
+
 // Builder is the model-backed agent.LiveBuilder: it runs the Build harness inline
 // for a Rover's Task. It is stateless beyond its generator + labels; one Builder
 // serves every Task a Rover works in live mode.
@@ -182,6 +189,7 @@ func (b *Builder) BuildLiveResult(ctx context.Context, task domain.TaskID, taskT
 		Neighbours:     world.Neighbours,
 		TaskType:       string(contract.Type),
 		RetriesPerCall: loop.DefaultRetriesPerCall, // bh-08f: a transient blip retries before counting as a fault
+		MaxIterations:  liveMaxIterations,          // bh-08: many refine attempts before the primitive fallback
 		EmitAccepted:   stream.onIteration,
 	})
 
