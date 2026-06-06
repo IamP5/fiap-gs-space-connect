@@ -20,8 +20,10 @@ export type MeshGeometry = "box" | "cylinder" | "sphere";
 
 // A renderer-ready description of one PRIMITIVE mesh, in the Task's Build-envelope
 // frame. Plain numbers/strings only (no three types) so it round-trips through
-// tests. `map` is an OPTIONAL texture URL (bh-07b, material.map): when present
-// Scene3D loads it via TextureLoader and falls back to the flat color on failure.
+// tests. `map`/`normalMap`/`roughnessMap`/`aoMap` are OPTIONAL PBR texture URLs
+// (issue #53, material.{map,normal_map,roughness_map,ao_map}): when present
+// Scene3D loads each via TextureLoader and falls back to the flat color on
+// failure, so any missing map never breaks the render (ADR-0004).
 export type PrimitiveDesc = {
   kind: "primitive";
   geometry: MeshGeometry;
@@ -31,7 +33,10 @@ export type PrimitiveDesc = {
   color: string;
   roughness: number;
   metalness: number;
-  map?: string; // optional CC0 texture URL (bh-07b); undefined ⇒ flat color
+  map?: string; // optional CC0 diffuse/albedo URL (sRGB); undefined ⇒ flat color
+  normalMap?: string; // optional tangent-space normal map (linear); best-effort
+  roughnessMap?: string; // optional roughness map (linear); best-effort
+  aoMap?: string; // optional ambient-occlusion map (linear; needs uv2); best-effort
 };
 
 // A renderer-ready description of one glTF MODEL placement (bh-07b, shape "model"
@@ -92,6 +97,9 @@ function primitiveDesc(op: BuildOp, geometry: MeshGeometry): PrimitiveDesc {
     roughness: op.material.roughness ?? DEFAULT_ROUGHNESS,
     metalness: op.material.metalness ?? DEFAULT_METALNESS,
     ...(op.material.map ? { map: op.material.map } : {}),
+    ...(op.material.normal_map ? { normalMap: op.material.normal_map } : {}),
+    ...(op.material.roughness_map ? { roughnessMap: op.material.roughness_map } : {}),
+    ...(op.material.ao_map ? { aoMap: op.material.ao_map } : {}),
   };
 }
 

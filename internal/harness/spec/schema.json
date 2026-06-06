@@ -23,7 +23,10 @@
         "color": { "type": "string", "minLength": 1 },
         "roughness": { "type": "number", "minimum": 0, "maximum": 1 },
         "metalness": { "type": "number", "minimum": 0, "maximum": 1 },
-        "map": { "type": "string" }
+        "map": { "type": "string" },
+        "normal_map": { "type": "string" },
+        "roughness_map": { "type": "string" },
+        "ao_map": { "type": "string" }
       },
       "required": ["color"],
       "additionalProperties": false

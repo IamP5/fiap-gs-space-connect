@@ -39,6 +39,7 @@
 import { memo, useEffect, useMemo, useRef, useState } from "react";
 import { Canvas, useFrame, useThree, type ThreeEvent } from "@react-three/fiber";
 import { Line, OrbitControls } from "@react-three/drei";
+import { SpaceEnvironment } from "./SpaceEnvironment";
 import { EffectComposer, SelectiveBloom } from "@react-three/postprocessing";
 import { KernelSize } from "postprocessing";
 import * as THREE from "three";
@@ -59,6 +60,8 @@ import {
   beatProgress,
 } from "../lib/choreography";
 import { GLTFLoader } from "three/examples/jsm/loaders/GLTFLoader.js";
+import { DRACOLoader } from "three/examples/jsm/loaders/DRACOLoader.js";
+import { MeshoptDecoder } from "three/examples/jsm/libs/meshopt_decoder.module.js";
 import {
   type MeshDesc,
   type ModelDesc,
@@ -66,6 +69,7 @@ import {
   interpretBuildSpec,
 } from "../lib/buildspec";
 import { type Ghost, footprintOf } from "../lib/placement";
+import { LaunchScenery } from "./LaunchScenery";
 
 // Functional telemetry colors (DESIGN.md: live-data signals only — the brand
 // palette itself is black + white). Matched to the 2D canvas so the two
@@ -107,6 +111,16 @@ type SceneGeo = {
   specSphere: THREE.SphereGeometry;
 };
 
+// withUV2 copies a geometry's primary uv set into uv2 so a material's aoMap (and
+// any second-channel map) is visible — three reads aoMap from uv2, which the
+// built-in primitive geometries do not provide by default (three 0.169). Returns
+// the same geometry for chaining. No-op if it has no uv attribute.
+function withUV2<T extends THREE.BufferGeometry>(g: T): T {
+  const uv = g.attributes.uv;
+  if (uv && !g.attributes.uv2) g.setAttribute("uv2", uv);
+  return g;
+}
+
 function makeSceneGeo(): SceneGeo {
   return {
     hit: new THREE.SphereGeometry(0.95, 16, 16),
@@ -121,9 +135,11 @@ function makeSceneGeo(): SceneGeo {
     wall: new THREE.BoxGeometry(0.9, 1.1, 0.9),
     dome: new THREE.SphereGeometry(1.0, 24, 16, 0, Math.PI * 2, 0, Math.PI / 2),
     // Unit primitives (edge/diameter 1) so a Build op's scale maps directly.
-    specBox: new THREE.BoxGeometry(1, 1, 1),
-    specCylinder: new THREE.CylinderGeometry(0.5, 0.5, 1, 20),
-    specSphere: new THREE.SphereGeometry(0.5, 20, 16),
+    // withUV2 gives each a uv2 channel so a Material.aoMap renders (three reads
+    // aoMap from uv2). uv2 == uv, so it is harmless when no aoMap is present.
+    specBox: withUV2(new THREE.BoxGeometry(1, 1, 1)),
+    specCylinder: withUV2(new THREE.CylinderGeometry(0.5, 0.5, 1, 20)),
+    specSphere: withUV2(new THREE.SphereGeometry(0.5, 20, 16)),
   };
 }
 
@@ -449,6 +465,15 @@ function LeaseBeam({ from, to, map }: { from: RoverView; to: TaskView; map: Scen
 // same .glb parse it ONCE (r3f-geometry "reuse"), and the parsed scene is cloned
 // per placement so transforms/materials never cross-contaminate.
 const gltfLoader = new GLTFLoader();
+// Self-hosted Draco + meshopt decoders so conditioned (compressed) .glb load
+// OFFLINE — no gstatic CDN fetch (the projector may have no network). The
+// decoder files live in web/public/draco/ and are served from the same origin;
+// '/draco/' is where DRACOLoader looks for draco_wasm_wrapper.js +
+// draco_decoder.wasm (the glTF decoder variant vendored from three's examples).
+const dracoLoader = new DRACOLoader();
+dracoLoader.setDecoderPath("/draco/");
+gltfLoader.setDRACOLoader(dracoLoader);
+gltfLoader.setMeshoptDecoder(MeshoptDecoder);
 const gltfCache = new Map<string, Promise<THREE.Group>>();
 
 function loadGLTF(url: string): Promise<THREE.Group> {
@@ -479,10 +504,14 @@ function loadGLTF(url: string): Promise<THREE.Group> {
   return p;
 }
 
-// SpecPrimitive draws one primitive op. If the op declares a texture map
-// (bh-07b), it loads it via TextureLoader and applies it once ready; a load
-// failure simply leaves the flat color (the scene never breaks). The texture
-// loads on mount and is disposed on unmount.
+// SpecPrimitive draws one primitive op. If the op declares any PBR texture maps
+// (issue #53: map / normalMap / roughnessMap / aoMap), it loads each via
+// TextureLoader and applies it once ready; a load failure simply leaves the flat
+// color for that channel (the scene never breaks). colorSpace is set per map:
+// the diffuse map is sRGB; normal/roughness/ao are linear (NoColorSpace) — drei
+// does NOT auto-set this on three 0.169, so getting it wrong skews lighting.
+// aoMap relies on the spec geometries carrying a uv2 channel (see withUV2). All
+// textures load on mount and are disposed on unmount.
 function SpecPrimitive({
   desc,
   geo,
@@ -498,35 +527,68 @@ function SpecPrimitive({
   const invalidate = useThree((s) => s.invalidate);
 
   useEffect(() => {
-    if (!desc.map) return;
+    // The PBR channels to load, paired with the material slot and the correct
+    // colorSpace: diffuse is sRGB, the data maps (normal/roughness/ao) are linear.
+    const slots: {
+      url: string | undefined;
+      key: "map" | "normalMap" | "roughnessMap" | "aoMap";
+      colorSpace: THREE.ColorSpace;
+    }[] = [
+      { url: desc.map, key: "map", colorSpace: THREE.SRGBColorSpace },
+      { url: desc.normalMap, key: "normalMap", colorSpace: THREE.NoColorSpace },
+      { url: desc.roughnessMap, key: "roughnessMap", colorSpace: THREE.NoColorSpace },
+      { url: desc.aoMap, key: "aoMap", colorSpace: THREE.NoColorSpace },
+    ];
     let disposed = false;
-    let tex: THREE.Texture | null = null;
+    const loaded: THREE.Texture[] = [];
     const loader = new THREE.TextureLoader();
-    loader.load(
-      desc.map,
-      (t) => {
-        if (disposed) {
-          t.dispose();
-          return;
-        }
-        t.colorSpace = THREE.SRGBColorSpace;
-        tex = t;
-        if (matRef.current) {
-          matRef.current.map = t;
+    for (const slot of slots) {
+      // A slot with no URL is explicitly cleared so a re-render that DROPS a map
+      // (this mesh's index now folds a different op) doesn't keep a stale texture.
+      if (!slot.url) {
+        if (matRef.current && matRef.current[slot.key]) {
+          matRef.current[slot.key] = null;
           matRef.current.needsUpdate = true;
-          invalidate(); // wake the demand loop so the texture shows
         }
-      },
-      undefined,
-      () => {
-        // Missing/failed texture ⇒ keep the flat color (fallback, never crash).
-      },
-    );
+        continue;
+      }
+      loader.load(
+        slot.url,
+        (t) => {
+          if (disposed) {
+            t.dispose();
+            return;
+          }
+          t.colorSpace = slot.colorSpace;
+          loaded.push(t);
+          if (matRef.current) {
+            matRef.current[slot.key] = t;
+            matRef.current.needsUpdate = true;
+            invalidate(); // wake the demand loop so the texture shows
+          }
+        },
+        undefined,
+        () => {
+          // Missing/failed texture ⇒ keep the flat color for this channel
+          // (fallback, never crash).
+        },
+      );
+    }
+    const mat = matRef.current;
     return () => {
       disposed = true;
-      tex?.dispose();
+      // Detach our textures from the material BEFORE disposing them, so a
+      // re-render never leaves a freed texture referenced on the slot.
+      for (const t of loaded) {
+        if (mat) {
+          for (const slot of slots) {
+            if (mat[slot.key] === t) mat[slot.key] = null;
+          }
+        }
+        t.dispose();
+      }
     };
-  }, [desc.map, invalidate]);
+  }, [desc.map, desc.normalMap, desc.roughnessMap, desc.aoMap, invalidate]);
 
   const geometry =
     desc.geometry === "box"
@@ -766,11 +828,42 @@ function TaskBlock({
 
 // ---- lunar terrain ----------------------------------------------------------
 
+// The CC0 regolith PBR set (Poly Haven "Moon 01", 512 jpg) tiled over the ground.
+// Self-hosted under web/public so it works offline; see public/assets/CREDITS.md.
+const REGOLITH_MAPS: {
+  url: string;
+  key: "map" | "normalMap" | "roughnessMap" | "aoMap";
+  colorSpace: THREE.ColorSpace;
+}[] = [
+  { url: "/assets/textures/regolith_diff_512.jpg", key: "map", colorSpace: THREE.SRGBColorSpace },
+  {
+    url: "/assets/textures/regolith_nor_gl_512.jpg",
+    key: "normalMap",
+    colorSpace: THREE.NoColorSpace,
+  },
+  {
+    url: "/assets/textures/regolith_rough_512.jpg",
+    key: "roughnessMap",
+    colorSpace: THREE.NoColorSpace,
+  },
+  { url: "/assets/textures/regolith_ao_512.jpg", key: "aoMap", colorSpace: THREE.NoColorSpace },
+];
+
+// Tile count across the ground span. ~12 repeats over GROUND_SPAN*1.6 keeps each
+// tile small enough to read as regolith grain without obvious seams (Moon 01 is
+// authored to tile). Tune here if the grain reads too large/small.
+const REGOLITH_REPEAT = 12;
+
 // Low-poly lunar ground: a single displaced plane primitive (ADR-0004 allows a
 // "simple ground plane / displaced primitive"). Static — built once, not driven
 // by the snapshot. Subtle deterministic vertex displacement gives a regolith
-// feel without any hand-modelled art.
+// feel, and a tiling CC0 regolith PBR set (issue #53) clothes it. A missing/
+// failed texture leaves the flat fallback color, so the scene never breaks.
 function LunarTerrain() {
+  const matRef = useRef<THREE.MeshStandardMaterial>(null);
+  const gl = useThree((s) => s.gl);
+  const invalidate = useThree((s) => s.invalidate);
+
   const geom = useMemo(() => {
     const g = new THREE.PlaneGeometry(GROUND_SPAN * 1.6, GROUND_SPAN * 1.6, 48, 48);
     const pos = g.attributes.position as THREE.BufferAttribute;
@@ -782,13 +875,56 @@ function LunarTerrain() {
       pos.setZ(i, z);
     }
     g.computeVertexNormals();
+    // aoMap reads from uv2; PlaneGeometry's uv works directly as the second set.
+    if (g.attributes.uv && !g.attributes.uv2) g.setAttribute("uv2", g.attributes.uv);
     return g;
   }, []);
   useEffect(() => () => geom.dispose(), [geom]);
+
+  useEffect(() => {
+    let disposed = false;
+    const loaded: THREE.Texture[] = [];
+    const maxAniso = gl.capabilities.getMaxAnisotropy();
+    const loader = new THREE.TextureLoader();
+    for (const m of REGOLITH_MAPS) {
+      loader.load(
+        m.url,
+        (t) => {
+          if (disposed) {
+            t.dispose();
+            return;
+          }
+          // Each map is loaded fresh here (no shared cache), so we own it and may
+          // mutate wrap/repeat directly before disposing it on unmount.
+          t.colorSpace = m.colorSpace;
+          t.wrapS = THREE.RepeatWrapping;
+          t.wrapT = THREE.RepeatWrapping;
+          t.repeat.set(REGOLITH_REPEAT, REGOLITH_REPEAT);
+          t.anisotropy = maxAniso;
+          loaded.push(t);
+          if (matRef.current) {
+            matRef.current[m.key] = t;
+            matRef.current.needsUpdate = true;
+            invalidate(); // wake the demand loop so the texture shows
+          }
+        },
+        undefined,
+        () => {
+          // Missing/failed map ⇒ keep the flat fallback for this channel.
+        },
+      );
+    }
+    return () => {
+      disposed = true;
+      for (const t of loaded) t.dispose();
+    };
+  }, [gl, invalidate]);
+
   return (
     <mesh rotation={[-Math.PI / 2, 0, 0]} raycast={() => null}>
       <primitive object={geom} attach="geometry" />
-      <meshStandardMaterial color="#3a3a40" roughness={1} metalness={0} flatShading />
+      {/* Flat #3a3a40 is the fallback until/if the regolith maps load. */}
+      <meshStandardMaterial ref={matRef} color="#8a8a8e" roughness={1} metalness={0} />
     </mesh>
   );
 }
@@ -1072,6 +1208,7 @@ function SceneContents({
       <>
         <ambientLight intensity={0.4} />
         <LunarTerrain />
+        <SpaceEnvironment />
       </>
     );
   }
@@ -1085,6 +1222,13 @@ function SceneContents({
       <directionalLight ref={lightRef} position={[6, 10, 6]} intensity={1.4} />
 
       <LunarTerrain />
+
+      {/* Static, snapshot-independent backdrop: hand-rolled starfield + self-
+          hosted HDR skybox/IBL (issue #50). Encodes no world state — sits
+          OUTSIDE the snapshot-derived meshes; gives metallic glTFs real
+          reflections. The directional key light + halo bloom path below are
+          unaffected. */}
+      <SpaceEnvironment />
 
       {/* Tasks / rising dome. */}
       {snapshot.tasks.map((t) => (
@@ -1111,6 +1255,10 @@ function SceneContents({
           onPick={onPick}
         />
       ))}
+
+      {/* Launch infrastructure set-pieces (#56) — static NASA-PD Scenery at the
+          worksite edge. Snapshot-INDEPENDENT decoration, raycast-suppressed. */}
+      <LaunchScenery />
 
       {/* Drag-to-place ghost + cursor plane (bh-05). The plane is mounted only
           while placing; the ghost only once the cursor has hit the ground. */}
@@ -1216,6 +1364,10 @@ export function Scene3D({
       // plus soft halo bloom reads fine without canvas-level AA.
       gl={{ antialias: false, powerPreference: "high-performance" }}
     >
+      {/* Black background as the GRACEFUL FALLBACK (issue #50): the HDR
+          Environment in <SpaceEnvironment> overrides scene.background once it
+          loads, but if the .hdr is missing/fails this black backdrop remains so
+          the scene never goes blank (ADR-0004 mandatory fallback). */}
       <color attach="background" args={["#000000"]} />
       <SceneContents
         snapshot={snapshot}
