@@ -44,3 +44,21 @@ Original 1K download (resized down to 512 for bundle size; otherwise unmodified)
 Poly Haven publishes all of its assets under CC0 1.0
 (https://polyhaven.com/license); the asset's authors are confirmed via the Poly
 Haven API (`https://api.polyhaven.com/info/rock_boulder_dry`).
+
+## HDR environments
+
+Used by `<SpaceEnvironment>` (issue #50) as the self-hosted skybox + image-based
+lighting (IBL) source — it provides both the backdrop and the PBR reflections on
+metallic glTFs. Loaded via `files=` (self-hosted in `/public`), never a CDN
+`preset=`. A failed load falls back to the Canvas's black background.
+
+| File | Source asset | Author | Source URL | License |
+|------|--------------|--------|-----------|---------|
+| `hdr/moonless_golf_2k.hdr` | "Moonless Golf" — 2K HDRI (neutral night sky, suits a space scene) | Greg Zaal | https://polyhaven.com/a/moonless_golf | CC0 1.0 |
+
+2K download (unmodified):
+`https://dl.polyhaven.org/file/ph-assets/HDRIs/hdr/2k/moonless_golf_2k.hdr`
+
+Poly Haven publishes all of its assets under CC0 1.0
+(https://polyhaven.com/license); the asset's author is confirmed via the Poly
+Haven API (`https://api.polyhaven.com/info/moonless_golf`).
