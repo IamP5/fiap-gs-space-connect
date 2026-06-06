@@ -1,9 +1,22 @@
 // Package archtest holds the import-graph architecture test that PROMOTES
 // TECHSPEC §8's manual grep into an executable check (ADR-0005): it asserts the
 // Model seam (internal/harness/model) is NOT in the import closure of the
-// deterministic hot-path packages. A live model call wired onto an award, a
-// heartbeat, or an expiry would pull the model package into one of those closures
-// and fail this test in `go test` / CI.
+// deterministic SELF-HEAL CORE. A live model call wired onto an award, a
+// heartbeat, an expiry, or the single-writer tick would pull the model package
+// into one of those closures and fail this test in `go test` / CI.
+//
+// SCOPE (bh-08, ADR-0005 scoped break): the protected boundary is the self-heal
+// core — allocation/auction, lease/heartbeat, expiry, the single-writer tick
+// (core/world, core/planner, core/allocation, core/lease) AND the coordinator hot
+// path. Those MUST stay model-free. Live Build Mode (bh-08) deliberately runs the
+// Model seam in the ROVER's work phase (internal/agent, live mode) — so the agent
+// is NO LONGER held to "absent from the import closure". The agent reaches the
+// Model seam only through an INJECTED seam (agent.LiveBuilder, implemented by
+// internal/harness/live and wired by cmd/agent), so the agent PACKAGE still does
+// not statically import the model — which is exactly what keeps the coordinator
+// (which imports agent) model-free. TestAgentReachesModelOnlyViaInjectedSeam
+// guards that, and TestLiveSeamIsReal proves the live adapter is a real model
+// boundary.
 //
 // It is dependency-free: it shells out to `go list -deps` and inspects the
 // package list, skipping gracefully if the go toolchain is unavailable (so the
@@ -31,6 +44,7 @@ var labModelPkgs = []string{
 	"swarmbuild/internal/harness/bake",   // offline bake / bake-all (drives the loop)
 	"swarmbuild/internal/harness/vision", // bh-06 bake-time vision pass (model + headless Chrome)
 	"swarmbuild/internal/harness/lab",    // bh-07a in-app LIVE lab (drives the loop on a live model call)
+	"swarmbuild/internal/harness/live",   // bh-08 Live Build Mode adapter (drives the loop on a live model call)
 }
 
 // labPkg is the bh-07a in-app live lab: it runs the real Generator↔Evaluator loop
@@ -48,9 +62,29 @@ const labPkg = "swarmbuild/internal/harness/lab"
 // TestVisionSeamIsReal below confirms the boundary is real.
 const visionPkg = "swarmbuild/internal/harness/vision"
 
-// hotPathPkgs are the deterministic core packages on the live path of an award,
-// a lease renewal/heartbeat, an expiry, and the single-writer tick (TECHSPEC §8,
-// ADR-0005). None of them may import the Model seam, directly or transitively.
+// livePkg is the bh-08 Live Build Mode adapter: the model-backed implementation of
+// agent.LiveBuilder. It drives the refine loop on a LIVE model call in the Rover's
+// work phase, so it reaches the Model seam and MUST stay off the self-heal core's
+// import closure (the labModelPkgs check enforces it; TestLiveSeamIsReal confirms
+// the boundary is real). The Rover reaches it only through the injected
+// agent.LiveBuilder seam, so the agent package never imports it.
+const livePkg = "swarmbuild/internal/harness/live"
+
+// agentPkg is the Robot Agent (the Rover). In Live Build Mode (bh-08) its work
+// phase runs the Model seam — but ONLY through the injected agent.LiveBuilder
+// interface, NOT a static import. So the agent package itself must still NOT import
+// the Model seam (or any model-wiring package): that is what keeps the coordinator,
+// which imports the agent, off the model's import graph. The break is scoped to the
+// injected call, not the static dependency graph.
+const agentPkg = "swarmbuild/internal/agent"
+
+// hotPathPkgs are the deterministic SELF-HEAL CORE packages on the live path of an
+// award, a lease renewal/heartbeat, an expiry, and the single-writer tick
+// (TECHSPEC §8, ADR-0005). None of them may import the Model seam, directly or
+// transitively. The Rover's work phase (internal/agent, live mode) is NO LONGER on
+// this list — bh-08 deliberately runs the model there — but the coordinator stays,
+// so the agent must keep the Model seam behind its injected LiveBuilder seam (see
+// TestAgentReachesModelOnlyViaInjectedSeam).
 var hotPathPkgs = []string{
 	"swarmbuild/internal/core/allocation", // auction / cost function
 	"swarmbuild/internal/core/lease",      // lease + heartbeat + expiry
@@ -178,6 +212,58 @@ func TestLabSeamIsReal(t *testing.T) {
 	}
 	if !foundLoop {
 		t.Fatalf("expected the lab %s to import the refine loop (so it drives real generation)", labPkg)
+	}
+}
+
+// TestLiveSeamIsReal is the bh-08 meta-guard: it confirms the Live Build Mode
+// adapter genuinely pulls in the Model seam AND the refine loop, so the "live off
+// the self-heal core" assertion in TestModelSeamOffHotPath (via labModelPkgs)
+// guards a real, network-capable boundary rather than a vacuous one.
+func TestLiveSeamIsReal(t *testing.T) {
+	if !goAvailable() {
+		t.Skip("go toolchain not on PATH; skipping live arch self-check")
+	}
+	var foundModel, foundLoop bool
+	for _, dep := range deps(t, livePkg) {
+		if dep == modelPkg {
+			foundModel = true
+		}
+		if dep == "swarmbuild/internal/harness/loop" {
+			foundLoop = true
+		}
+	}
+	if !foundModel {
+		t.Fatalf("expected the live adapter %s to import the Model seam %s (so it is a real model boundary)", livePkg, modelPkg)
+	}
+	if !foundLoop {
+		t.Fatalf("expected the live adapter %s to import the refine loop (so it drives real generation)", livePkg)
+	}
+}
+
+// TestAgentReachesModelOnlyViaInjectedSeam is the bh-08 boundary guard and the
+// load-bearing half of the ADR-0005 rescope: Live Build Mode runs the Model seam in
+// the Rover's work phase, but ONLY through the injected agent.LiveBuilder interface.
+// So the agent PACKAGE itself must still NOT import the Model seam, the refine loop,
+// or any model-wiring package (loop/bake/vision/lab/live) — that static cleanliness
+// is precisely what keeps the coordinator (which imports the agent) off the model's
+// import graph (TestModelSeamOffHotPath). A refactor that imports the model or the
+// live adapter directly into the agent package fails here AND would cascade into the
+// coordinator's hot-path check.
+func TestAgentReachesModelOnlyViaInjectedSeam(t *testing.T) {
+	if !goAvailable() {
+		t.Skip("go toolchain not on PATH; skipping agent-model arch test")
+	}
+	forbidden := append([]string{modelPkg, livePkg}, labModelPkgs...)
+	closure := make(map[string]bool)
+	for _, dep := range deps(t, agentPkg) {
+		closure[dep] = true
+	}
+	for _, bad := range forbidden {
+		if closure[bad] {
+			t.Fatalf("ARCH VIOLATION: agent package %s imports %s — Live Build Mode (bh-08) must reach "+
+				"the Model seam ONLY through the injected agent.LiveBuilder interface, keeping the agent "+
+				"(and the coordinator that imports it) off the model's static import graph.", agentPkg, bad)
+		}
 	}
 }
 

@@ -23,6 +23,42 @@ import (
 	"time"
 )
 
+// Mode selects how a rover sources the Build-op stream it emits while working a
+// Task (bh-08). ModeReplay (the default) is byte-for-byte the pre-08 behaviour:
+// the cache/primitive op stream with ZERO model calls. ModeLive opts the rover
+// into running the Build harness (the Generator↔Evaluator loop) inline on the
+// Model seam during its work phase — the deliberate, scoped break of ADR-0005,
+// LIVE MODE ONLY.
+type Mode string
+
+const (
+	// ModeReplay is the deterministic default: the rover replays the committed
+	// cache or the primitive op stream and never reaches the Model seam.
+	ModeReplay Mode = "replay"
+	// ModeLive opts the rover into inline generation: in its work phase it runs
+	// the Build harness via the injected LiveBuilder seam (a live model call) and
+	// streams the accepted spec on build.op.<task>. On exhaustion/error it degrades
+	// to the replay/primitive stream (failure-heal is a later slice 08f), so a
+	// model fault never crashes the swarm.
+	ModeLive Mode = "live"
+)
+
+// LiveBuilder is the agent's INJECTED seam onto the Build harness (bh-08, live
+// mode). BuildLive runs the Generator↔Evaluator refine loop for one Task via the
+// Model seam and returns the accepted op stream, or ok=false on exhaustion/error
+// so the rover degrades to its deterministic replay/primitive stream (the Task
+// still completes).
+//
+// It is an INTERFACE held on Config — the agent package never imports
+// internal/harness/{model,loop} itself, so the coordinator (which imports agent)
+// keeps the Model seam OUT of its hot-path import closure (ADR-0005, enforced by
+// the archtest). The composition root (cmd/agent) constructs the model-backed
+// implementation and injects it here, exactly as the gateway injects its
+// LabRunner. A nil LiveBuilder in live mode degrades to the replay stream.
+type LiveBuilder interface {
+	BuildLive(ctx context.Context, task domain.TaskID, taskType domain.TaskType) (ops []wire.BuildOp, ok bool)
+}
+
 // Config is the static identity and starting state of one rover. HeartbeatEvery
 // is how often the rover renews a lease it holds (and is the cadence the
 // coordinator's TTL is sized against, TTL ≥ 3× this).
@@ -32,6 +68,19 @@ type Config struct {
 	Battery        float64
 	Capabilities   []domain.Capability
 	HeartbeatEvery time.Duration // e.g. 500ms
+
+	// Mode selects how the work phase sources its Build-op stream (bh-08). Empty or
+	// ModeReplay ⇒ the deterministic cache/primitive stream with ZERO model calls
+	// (the untouched default). ModeLive ⇒ the rover runs the Build harness inline
+	// via LiveBuilder during its work phase (the scoped ADR-0005 break, live only).
+	Mode Mode
+
+	// LiveBuilder is the injected Build-harness seam used ONLY in ModeLive: the
+	// work phase calls it to generate the Task's ops via the Model seam. nil (or
+	// any non-live Mode) ⇒ the rover never reaches it and uses the replay/primitive
+	// stream. Injected by the composition root so the agent package itself never
+	// imports the Model seam (ADR-0005 / archtest).
+	LiveBuilder LiveBuilder
 
 	// FailTask, if non-empty, makes this rover abandon that task instead of
 	// completing it: on award it drives to the task, then reports execution
@@ -77,6 +126,36 @@ type Config struct {
 	// cache (hit or forced miss) with no embedded-file dependency, and keeps the
 	// agent importing only declarative cache DATA — never the Model seam (ADR-0005).
 	ReplaySpec func(blueprintID, taskID domain.TaskID) ([]wire.BuildOp, bool)
+}
+
+// workOps resolves the ordered op stream this rover emits while working task (of
+// type t), branching on Config.Mode (bh-08):
+//
+//   - ModeLive: run the Build harness inline via the injected LiveBuilder (a live
+//     model call, the scoped ADR-0005 break). On a hard-gate-passing spec, emit
+//     the generated ops. On exhaustion/error (ok=false) — or no LiveBuilder wired
+//     — fall through to the deterministic replay/primitive stream, so a model
+//     fault never crashes the swarm and the Task still completes (failure-heal is
+//     a later slice, 08f).
+//   - ModeReplay (the default): the cache/primitive stream with ZERO model calls,
+//     byte-for-byte the pre-08 behaviour. opsFor never reaches the Model seam.
+//
+// An explicit Config.BuildOps override (incl. a forced-empty slice) still wins in
+// BOTH modes — it is the tests/invariant path — so the invariant suite stays
+// model-free regardless of Mode.
+func (c Config) workOps(ctx context.Context, task domain.TaskID, t domain.TaskType) []wire.BuildOp {
+	if c.BuildOps != nil {
+		return c.BuildOps[t] // explicit override (incl. forced-empty) beats every source, both modes
+	}
+	if c.Mode == ModeLive && c.LiveBuilder != nil {
+		if ops, ok := c.LiveBuilder.BuildLive(ctx, task, t); ok {
+			slog.Info("live build", "task", task, "type", t, "ops", len(ops))
+			return ops // accepted live spec: emit the generated ops
+		}
+		slog.Warn("live build fell back to replay/primitive", "task", task, "type", t)
+		// fall through: exhaustion/error degrades to the deterministic stream
+	}
+	return c.opsFor(task, t)
 }
 
 // opsFor resolves the ordered op stream this rover emits while working task (of
@@ -774,13 +853,66 @@ func drive(ctx context.Context, cfg Config, conn *bus.Conn, st *rover, heart, fa
 // rover goes silent, its partial ops stay durable, and the coordinator
 // self-heals the lease.
 func workPhase(ctx context.Context, cfg Config, conn *bus.Conn, st *rover, heart, fault *time.Ticker, down <-chan struct{}, aw wire.Award) phaseResult {
-	ops := cfg.opsFor(aw.TaskID, aw.Type)
+	ops, res := resolveWorkOps(ctx, cfg, conn, st, heart, fault, down, aw)
+	if res != phaseDone {
+		return res // ctx cancelled / killed / faulted while generating: no completion
+	}
 	if len(ops) == 0 {
 		// No ops to stream: hold for the fixed work timer (pre-harness fallback) —
 		// the path the forced-empty-ops invariant test exercises.
 		return workTimer(ctx, cfg, conn, st, heart, fault, down, aw)
 	}
 	return streamOps(ctx, cfg, conn, st, heart, fault, down, aw, ops)
+}
+
+// resolveWorkOps resolves the work phase's op stream. In replay mode this is an
+// instantaneous map/cache lookup, so it returns immediately. In LIVE mode the
+// Build harness runs a blocking model call that can take SECONDS — far longer than
+// the lease TTL (≥ 3× heartbeat) — so the generation runs on its own goroutine
+// while this loop KEEPS HEARTBEATING (and honours ctx/kill/fault), exactly as the
+// streaming work phases do. Without this the lease would TTL-expire mid-generation
+// and the coordinator would re-auction the Task out from under the rover (bh-08).
+//
+// The model call is bound to a context that is also cancelled on kill/ctx-done, so
+// a killed rover does not keep an LLM call in flight for a Task it has abandoned.
+// On exhaustion/error workOps already degrades to the replay/primitive stream, so
+// a non-phaseDone result here is only an outage/fault, never a model failure.
+func resolveWorkOps(ctx context.Context, cfg Config, conn *bus.Conn, st *rover, heart, fault *time.Ticker, down <-chan struct{}, aw wire.Award) ([]wire.BuildOp, phaseResult) {
+	// Replay mode (the default): no model call, resolve inline and return at once so
+	// the path stays byte-for-byte the pre-08 behaviour.
+	if cfg.Mode != ModeLive || cfg.LiveBuilder == nil {
+		return cfg.opsFor(aw.TaskID, aw.Type), phaseDone
+	}
+
+	// Live mode: generate on a background goroutine, cancellable on kill/ctx-done,
+	// while we heartbeat the lease so it never false-expires during a slow call.
+	genCtx, cancel := context.WithCancel(ctx)
+	defer cancel()
+	type genResult struct{ ops []wire.BuildOp }
+	resCh := make(chan genResult, 1)
+	go func() {
+		resCh <- genResult{ops: cfg.workOps(genCtx, aw.TaskID, aw.Type)}
+	}()
+
+	for {
+		select {
+		case <-ctx.Done():
+			cancel()
+			return nil, phaseAbort
+		case <-down:
+			cancel() // killed mid-generation: stop the in-flight model call
+			return nil, phaseAbort
+		case <-fault.C:
+			if rollFault(st) {
+				cancel()
+				return nil, phaseFault
+			}
+		case <-heart.C:
+			sendHeartbeat(conn, cfg.ID, aw.TaskID)
+		case r := <-resCh:
+			return r.ops, phaseDone
+		}
+	}
 }
 
 // workTimer is the pre-harness work phase: hold at the worksite for the fixed
