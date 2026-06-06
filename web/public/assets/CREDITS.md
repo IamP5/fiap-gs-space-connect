@@ -1,11 +1,16 @@
 # Third-party assets — provenance & licensing (bh-07b)
 
-Every asset below is **CC0 1.0 (public-domain dedication)**, verified at its
-source. The Build spec's `model_ref` (glTF) and `material.map` (texture) slots are
+Every asset below is verified at its source against the admissible license set.
+The Build spec's `model_ref` (glTF) and `material.map` (texture) slots are
 exercised with these REAL assets; a missing/failed load falls back to the
 existing primitive geometry, so the scene never depends on them (ADR-0004).
 
-ADR-0004 forbids unlicensed art — these are all CC0, so they are admissible.
+ADR-0004 forbids **unlicensed** art. The admissible license set is:
+**CC0 1.0** (public-domain dedication, no attribution required) +
+**CC-BY 4.0** (admissible with attribution recorded in this file) +
+**NASA / US-gov public domain** (credit `NASA / <author>` as courtesy; never
+imply NASA endorsement, never use the NASA insignia). All assets currently shipped
+below are CC0 1.0.
 
 Downloaded: 2026-06-06.
 

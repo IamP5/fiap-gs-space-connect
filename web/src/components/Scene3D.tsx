@@ -24,14 +24,17 @@
 //   - dpr capped at 1.5 and bloom kept cheap (small kernel, no MSAA).
 //
 // HARD SCOPE GUARD (ADR-0004 — obeyed here):
-//   - Rover is PRIMITIVE geometry (low-poly box body + cylinder wheels). No CC0
-//     glTF was available offline and we must NOT fetch unlicensed assets, so the
-//     documented primitive fallback stands in — it still honors "primitive
-//     geometry / no hand-modelled art".
+//   - LICENSED art only (CC0 / CC-BY 4.0 with attribution / NASA-PD), NEVER
+//     unlicensed art. glTF models and PBR/HDR textures ARE admissible, but each
+//     MUST carry a primitive fallback (the SpecModel box / SpecPrimitive flat
+//     color) so a missing/slow/failed asset never breaks the render. The rover
+//     ships as PRIMITIVE geometry (low-poly box body + cylinder wheels) — the
+//     documented fallback — and licensed glTFs swap in through the buildspec seam.
 //   - ONE fixed default orbit-camera angle (OrbitControls allowed, clamped).
 //   - BLOOM ONLY on the status halos, via a selective-bloom layer limited to the
 //     halo meshes (never full-scene bloom). See HALO_BLOOM_LAYER below.
-//   - No custom physics, no hand-modelled art.
+//   - No custom physics; only LICENSED art (CC0/CC-BY/NASA-PD), each with a
+//     mandatory primitive fallback.
 
 import { memo, useEffect, useMemo, useRef, useState } from "react";
 import { Canvas, useFrame, useThree, type ThreeEvent } from "@react-three/fiber";
