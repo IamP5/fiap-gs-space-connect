@@ -27,9 +27,17 @@ const modelPkg = "swarmbuild/internal/harness/model"
 // legible and a future refactor that hides the model import behind one of them still
 // fails this test.
 var labModelPkgs = []string{
-	"swarmbuild/internal/harness/loop", // Generator↔Evaluator refine loop
-	"swarmbuild/internal/harness/bake", // offline bake / bake-all (drives the loop)
+	"swarmbuild/internal/harness/loop",   // Generator↔Evaluator refine loop
+	"swarmbuild/internal/harness/bake",   // offline bake / bake-all (drives the loop)
+	"swarmbuild/internal/harness/vision", // bh-06 bake-time vision pass (model + headless Chrome)
 }
+
+// visionPkg is the bake-time vision pass (bh-06). It reaches the Model seam (a
+// vision-capable model call) AND drives headless Chrome (chromedp), so a live
+// vision call on an award/heartbeat/expiry would be doubly catastrophic. It MUST
+// stay off the hot path; the labModelPkgs check above enforces it, and
+// TestVisionSeamIsReal below confirms the boundary is real.
+const visionPkg = "swarmbuild/internal/harness/vision"
 
 // hotPathPkgs are the deterministic core packages on the live path of an award,
 // a lease renewal/heartbeat, an expiry, and the single-writer tick (TECHSPEC §8,
@@ -110,5 +118,55 @@ func TestArchTestGuardsTheRightSeam(t *testing.T) {
 	}
 	if !foundOpenAI {
 		t.Fatalf("expected the Model seam %s to import openai-go (so the arch boundary is real)", modelPkg)
+	}
+}
+
+// TestVisionSeamIsReal is the bh-06 meta-guard: it confirms the vision pass package
+// genuinely pulls in BOTH the Model seam (a vision/model call) and chromedp (a
+// headless browser), so the "vision off the hot path" assertion in
+// TestModelSeamOffHotPath (via labModelPkgs) is guarding a real, network-and-browser
+// boundary rather than a vacuous one.
+func TestVisionSeamIsReal(t *testing.T) {
+	if !goAvailable() {
+		t.Skip("go toolchain not on PATH; skipping vision arch self-check")
+	}
+	var foundModel, foundChrome bool
+	for _, dep := range deps(t, visionPkg) {
+		if dep == modelPkg {
+			foundModel = true
+		}
+		if strings.Contains(dep, "chromedp/chromedp") {
+			foundChrome = true
+		}
+	}
+	if !foundModel {
+		t.Fatalf("expected the vision pass %s to import the Model seam %s (so it is a real model boundary)", visionPkg, modelPkg)
+	}
+	if !foundChrome {
+		t.Fatalf("expected the vision pass %s to import chromedp (so it is a real headless-browser boundary)", visionPkg)
+	}
+}
+
+// TestHeadlinePathMakesZeroVisionCalls is the bh-06 acceptance guard: the headline
+// replay path (the cache + the deterministic core that consults it) must NOT import
+// the vision pass, so no award/heartbeat/expiry/tick or cache replay can ever
+// trigger a headless render or a vision-model call. The cache package is the
+// headline's only window onto baked specs; it carries DATA, never the vision seam.
+func TestHeadlinePathMakesZeroVisionCalls(t *testing.T) {
+	if !goAvailable() {
+		t.Skip("go toolchain not on PATH; skipping headline-zero-vision arch test")
+	}
+	// The replay surface: the cache (consulted on the headline) plus every hot-path
+	// package. None may pull in the vision pass.
+	replayPkgs := append([]string{"swarmbuild/internal/harness/cache"}, hotPathPkgs...)
+	for _, pkg := range replayPkgs {
+		t.Run(pkg, func(t *testing.T) {
+			for _, dep := range deps(t, pkg) {
+				if dep == visionPkg {
+					t.Fatalf("ARCH VIOLATION: headline/replay package %s imports the vision pass %s "+
+						"(bh-06: the headline makes ZERO vision calls). Keep the vision pass on the bake/lab path only.", pkg, visionPkg)
+				}
+			}
+		})
 	}
 }

@@ -11,7 +11,7 @@
       "shape": "cylinder",
       "pos": {
         "X": 0,
-        "Y": -1.6,
+        "Y": -1.7,
         "Z": 0
       },
       "rot": {
@@ -21,12 +21,12 @@
       },
       "scale": {
         "X": 3.2,
-        "Y": 0.4,
+        "Y": 0.5,
         "Z": 3.2
       },
       "material": {
-        "color": "#d3d3d3",
-        "roughness": 0.8,
+        "color": "#D3D3D3",
+        "roughness": 0.7,
         "metalness": 0.1
       }
     },
@@ -35,7 +35,7 @@
       "shape": "cylinder",
       "pos": {
         "X": 0,
-        "Y": -1,
+        "Y": -1.2,
         "Z": 0
       },
       "rot": {
@@ -45,13 +45,13 @@
       },
       "scale": {
         "X": 2.8,
-        "Y": 0.6,
+        "Y": 0.5,
         "Z": 2.8
       },
       "material": {
-        "color": "#e0e0e0",
-        "roughness": 0.9,
-        "metalness": 0.05
+        "color": "#C0C0C0",
+        "roughness": 0.5,
+        "metalness": 0.4
       }
     },
     {
@@ -59,7 +59,7 @@
       "shape": "cylinder",
       "pos": {
         "X": 0,
-        "Y": -0.1,
+        "Y": -0.7,
         "Z": 0
       },
       "rot": {
@@ -69,21 +69,21 @@
       },
       "scale": {
         "X": 2.4,
-        "Y": 0.8,
+        "Y": 0.5,
         "Z": 2.4
       },
       "material": {
-        "color": "#b0c4de",
-        "roughness": 0.7,
+        "color": "#B0B0B0",
+        "roughness": 0.6,
         "metalness": 0.2
       }
     },
     {
       "op": "place",
-      "shape": "sphere",
+      "shape": "cylinder",
       "pos": {
         "X": 0,
-        "Y": 1,
+        "Y": -0.2,
         "Z": 0
       },
       "rot": {
@@ -93,17 +93,41 @@
       },
       "scale": {
         "X": 2,
-        "Y": 0.6,
+        "Y": 0.5,
         "Z": 2
       },
       "material": {
-        "color": "#708090",
-        "roughness": 0.6,
+        "color": "#A0A0A0",
+        "roughness": 0.5,
         "metalness": 0.3
+      }
+    },
+    {
+      "op": "place",
+      "shape": "sphere",
+      "pos": {
+        "X": 0,
+        "Y": 0.5,
+        "Z": 0
+      },
+      "rot": {
+        "X": 0,
+        "Y": 0,
+        "Z": 0
+      },
+      "scale": {
+        "X": 1.8,
+        "Y": 1.2,
+        "Z": 1.8
+      },
+      "material": {
+        "color": "#708090",
+        "roughness": 0.4,
+        "metalness": 0.5
       }
     }
   ],
-  "repaired": false,
+  "repaired": true,
   "contract": {
     "blueprint_id": "dome",
     "task_id": "dome-cap",

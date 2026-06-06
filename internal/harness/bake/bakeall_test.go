@@ -93,7 +93,7 @@ func TestBakeAll_BakesEveryTaskInTopologicalOrder(t *testing.T) {
 	m := &recordingModel{spec: genericSpec(t)}
 	tasks := demoTasks()
 
-	results, review, err := All(context.Background(), m, store, tasks, DemoContract, "openai", "gpt-4o")
+	results, review, err := All(context.Background(), m, store, tasks, DemoContract, "openai", "gpt-4o", nil)
 	if err != nil {
 		t.Fatalf("BakeAll: %v", err)
 	}
@@ -239,7 +239,7 @@ func TestBakeAll_LowQualityCachedNotWithheld(t *testing.T) {
 	m := &recordingModel{spec: flatJSON}
 
 	tasks := []PlanTask{{ID: "foundation-1", Type: typeFoundation, Pos: domain.Vec2{}}}
-	_, review, err := All(context.Background(), m, store, tasks, DemoContract, "openai", "gpt-4o")
+	_, review, err := All(context.Background(), m, store, tasks, DemoContract, "openai", "gpt-4o", nil)
 	if err != nil {
 		t.Fatalf("BakeAll: %v", err)
 	}

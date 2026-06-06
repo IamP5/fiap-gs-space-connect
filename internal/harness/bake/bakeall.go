@@ -10,6 +10,7 @@ import (
 	"swarmbuild/internal/core/planner"
 	"swarmbuild/internal/harness/cache"
 	"swarmbuild/internal/harness/evaluator"
+	"swarmbuild/internal/harness/loop"
 	"swarmbuild/internal/harness/model"
 )
 
@@ -111,9 +112,10 @@ type ContractFn func(id domain.TaskID, taskType domain.TaskType) (Contract, erro
 // never aborts the dome. It returns the per-Task results and the operator Review.
 //
 // m is the constructed Model seam (a fake in tests). store is the committed cache.
-// contractFor builds each Task's contract. The trace sidecar + quality flag are
-// written by the underlying Bake.
-func All(ctx context.Context, m model.Model, store *cache.Store, tasks []PlanTask, contractFor ContractFn, provider, modelID string) ([]AllResult, Review, error) {
+// contractFor builds each Task's contract. vision is the OPTIONAL bake-time vision
+// pass threaded into each Bake (nil ⇒ analytic-only). The trace sidecar + quality
+// flag are written by the underlying Bake.
+func All(ctx context.Context, m model.Model, store *cache.Store, tasks []PlanTask, contractFor ContractFn, provider, modelID string, vision loop.SilhouetteScorer) ([]AllResult, Review, error) {
 	order, err := topoOrder(tasks)
 	if err != nil {
 		return nil, Review{}, err
@@ -145,7 +147,7 @@ func All(ctx context.Context, m model.Model, store *cache.Store, tasks []PlanTas
 			Neighbours:    neighbours,
 		}
 
-		res, bErr := Bake(ctx, m, store, contract, world, provider, modelID)
+		res, bErr := Bake(ctx, m, store, contract, world, provider, modelID, vision)
 		ar := AllResult{TaskID: t.ID, Type: t.Type, Result: res, Err: bErr}
 		results = append(results, ar)
 

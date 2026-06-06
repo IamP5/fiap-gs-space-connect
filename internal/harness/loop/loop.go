@@ -46,6 +46,21 @@ func (g ModelGenerator) Generate(ctx context.Context, messages []model.Message) 
 	return model.GenerateSpec(ctx, g.M, messages)
 }
 
+// SilhouetteScorer is the bake-time VISION PASS seam (bh-06, issue 06): given a
+// hard-gate-passing Build spec, it renders the real Scene3D headless, screenshots
+// it, and scores how well the rendered structure reads as the intended thing,
+// returning a 0–2 silhouette Score with evidence. It is OPTIONAL on Request.Vision;
+// when nil the loop behaves exactly as bh-04 (analytic-only, no vision call).
+//
+// It is an interface so the loop stays dependency-light — the production
+// implementation (internal/harness/vision) pulls in chromedp + the model adapter,
+// but the loop only needs this one method, and tests drive it with a fake (no
+// browser, no network). It runs ONLY here on the bake path; the headline never
+// constructs a scorer (ADR-0005).
+type SilhouetteScorer interface {
+	ScoreSilhouette(ctx context.Context, taskType string, ops []wire.BuildOp) (evaluator.Score, error)
+}
+
 // Request is one refine-loop run for a single Task. It carries everything the
 // Generator and Evaluator need: the prompt seed (system + user messages built by
 // the caller from the contract + world snapshot), the analytic envelope/done the
@@ -59,6 +74,18 @@ type Request struct {
 	Done          evaluator.DoneCriteria
 	SubjectOrigin domain.Vec3
 	Neighbours    []evaluator.Neighbour
+
+	// Vision is the OPTIONAL bake-time vision pass (bh-06). When non-nil, the loop
+	// scores the silhouette of each hard-gate-passing spec through it and folds the
+	// score into the verdict's rubric, so a low silhouette (a spec that passes the
+	// analytic gate but "looks wrong") triggers another Generator iteration within
+	// budget and, on exhaustion, flags the cached spec quality_flag:low (never
+	// withheld — ADR-0008). When nil the loop is analytic-only (bh-04 behaviour).
+	Vision SilhouetteScorer
+	// TaskType is passed to the vision pass so the rendered structure is judged
+	// against the right intent (foundation | wall | dome-cap). Unused when Vision is
+	// nil.
+	TaskType string
 }
 
 // Outcome is the loop's result for one Task: the accepted ops (nil on fallback),
@@ -89,11 +116,13 @@ func Run(ctx context.Context, gen Generator, eval *evaluator.Evaluator, req Requ
 	copy(convo, req.Messages)
 
 	var (
-		iterations []trace.Iteration
-		bestOps    []wire.BuildOp
-		bestScore  = -1
-		bestPass   bool
-		lastErr    error
+		iterations  []trace.Iteration
+		bestOps     []wire.BuildOp
+		bestScore   = -1
+		bestVerdict evaluator.Verdict
+		bestVision  bool // whether the best spec's silhouette was vision-scored
+		bestPass    bool
+		lastErr     error
 	)
 
 	for range MaxIterations {
@@ -106,6 +135,13 @@ func Run(ctx context.Context, gen Generator, eval *evaluator.Evaluator, req Requ
 		}
 
 		v := eval.Evaluate(ops, req.Envelope, req.Done, req.SubjectOrigin, req.Neighbours)
+
+		// VISION PASS (bh-06): only a hard-gate-passing spec is worth rendering. When a
+		// vision scorer is configured, score the silhouette and fold it into the verdict
+		// BEFORE the trace records the iteration. A vision failure is non-fatal (the soft
+		// rubric never blocks); see scoreVision.
+		visionScored := scoreVision(ctx, req, ops, &v)
+
 		// Record a defensive copy of the ops so later mutation of the slice cannot
 		// rewrite the trace history.
 		iterations = append(iterations, trace.Iteration{GenOps: cloneOps(ops), Verdict: v})
@@ -114,14 +150,19 @@ func Run(ctx context.Context, gen Generator, eval *evaluator.Evaluator, req Requ
 			if v.SoftScore() > bestScore {
 				bestScore = v.SoftScore()
 				bestOps = cloneOps(ops)
+				bestVerdict = v
+				bestVision = visionScored
 				bestPass = true
 			}
-			// Good enough on quality too ⇒ stop early (don't burn budget).
-			if v.SoftScore() >= eval.Threshold() {
+			// Good enough on quality too ⇒ stop early (don't burn budget). When the
+			// vision pass scored this spec, "good enough" ALSO requires the silhouette
+			// to clear its own bar — a high analytic score with a low silhouette (passes
+			// the gate but "looks wrong") keeps refining within budget.
+			if v.SoftScore() >= eval.Threshold() && silhouetteOK(v, visionScored, eval.SilhouetteThreshold()) {
 				break
 			}
-			// Passing but low quality: spend remaining budget asking for a richer
-			// pass, but we already have a cacheable spec.
+			// Passing but low quality (analytic OR silhouette): spend remaining budget
+			// asking for a richer pass, but we already have a cacheable spec.
 			convo = appendRefine(convo, ops, qualityRefine(v))
 			continue
 		}
@@ -132,10 +173,24 @@ func Run(ctx context.Context, gen Generator, eval *evaluator.Evaluator, req Requ
 
 	if bestPass {
 		flag := trace.QualityOK
-		reason := fmt.Sprintf("hard gate passed; soft score %d/%d", bestScore, maxSoftPoints)
-		if bestScore < eval.Threshold() {
+		maxPoints := maxSoftPoints
+		if bestVision {
+			maxPoints = maxSoftPointsWithVision
+		}
+		reason := fmt.Sprintf("hard gate passed; soft score %d/%d", bestScore, maxPoints)
+		// Flag low if the summed soft score is below threshold OR — when the vision
+		// pass scored it — the silhouette itself is below its bar (a spec that passes
+		// the analytic gate but "looks wrong"; the (B)→(C) signal, ADR-0008).
+		lowSilhouette := bestVision && bestVerdict.Rubric.Silhouette.Score < eval.SilhouetteThreshold()
+		if bestScore < eval.Threshold() || lowSilhouette {
 			flag = trace.QualityLow
-			reason = fmt.Sprintf("hard gate passed but soft score %d below threshold %d (flagged for operator review)", bestScore, eval.Threshold())
+			switch {
+			case lowSilhouette:
+				reason = fmt.Sprintf("hard gate passed but vision silhouette %d below threshold %d (passes analytic, looks wrong) — flagged for operator review (evidence: %s)",
+					bestVerdict.Rubric.Silhouette.Score, eval.SilhouetteThreshold(), bestVerdict.Rubric.Silhouette.Evidence)
+			default:
+				reason = fmt.Sprintf("hard gate passed but soft score %d below threshold %d (flagged for operator review)", bestScore, eval.Threshold())
+			}
 		}
 		return Outcome{
 			Ops:         bestOps,
@@ -155,9 +210,46 @@ func Run(ctx context.Context, gen Generator, eval *evaluator.Evaluator, req Requ
 	}
 }
 
-// maxSoftPoints is the maximum summed soft score in this slice (done-coverage 0–2 +
-// coherence 0–2); silhouette lands in bh-06.
-const maxSoftPoints = 4
+// maxSoftPoints is the maximum summed soft score WITHOUT the vision pass
+// (done-coverage 0–2 + coherence 0–2). maxSoftPointsWithVision adds the silhouette
+// dimension (0–2) when the bh-06 vision pass has scored the spec.
+const (
+	maxSoftPoints           = 4
+	maxSoftPointsWithVision = 6
+)
+
+// scoreVision runs the optional bake-time vision pass on a hard-gate-passing spec
+// and folds the silhouette score into v's rubric (so the trace carries it and the
+// quality decision accounts for it). It returns whether a real score was obtained:
+// false when no scorer is configured, the spec failed the hard gate (nothing worth
+// rendering), or the pass errored — in the error case the silhouette dimension
+// records WHY it is unscored. A vision failure never blocks caching (ADR-0008).
+func scoreVision(ctx context.Context, req Request, ops []wire.BuildOp, v *evaluator.Verdict) bool {
+	if req.Vision == nil || !v.Pass() {
+		return false
+	}
+	s, err := req.Vision.ScoreSilhouette(ctx, req.TaskType, ops)
+	if err != nil {
+		v.Rubric.Silhouette = evaluator.Score{
+			Score:    0,
+			Evidence: fmt.Sprintf("vision pass unavailable: %v", err),
+		}
+		return false
+	}
+	v.Rubric.Silhouette = s
+	return true
+}
+
+// silhouetteOK reports whether a passing spec's silhouette clears its bar. When the
+// vision pass did NOT score this spec (visionScored=false), there is no silhouette
+// signal to gate on, so it returns true (the analytic soft-score check stands
+// alone). When it DID, the silhouette must reach the threshold for an early stop.
+func silhouetteOK(v evaluator.Verdict, visionScored bool, threshold int) bool {
+	if !visionScored {
+		return true
+	}
+	return v.Rubric.Silhouette.Score >= threshold
+}
 
 // cloneOps returns a defensive copy of an op slice (wire.BuildOp's *float64
 // material fields are shared, but the loop never mutates them, so a shallow element

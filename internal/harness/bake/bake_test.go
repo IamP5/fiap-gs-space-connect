@@ -4,8 +4,10 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"strings"
 	"swarmbuild/internal/core/domain"
 	"swarmbuild/internal/harness/cache"
+	"swarmbuild/internal/harness/evaluator"
 	"swarmbuild/internal/harness/model"
 	"swarmbuild/internal/harness/trace"
 	"swarmbuild/internal/wire"
@@ -47,7 +49,7 @@ func TestBake_WritesValidCacheEntry(t *testing.T) {
 	if err != nil {
 		t.Fatalf("contract: %v", err)
 	}
-	res, err := Bake(context.Background(), fake, store, c, WorldContext{TaskPos: domain.Vec2{X: 10, Y: 20}}, "openai", "gpt-4o")
+	res, err := Bake(context.Background(), fake, store, c, WorldContext{TaskPos: domain.Vec2{X: 10, Y: 20}}, "openai", "gpt-4o", nil)
 	if err != nil {
 		t.Fatalf("bake: %v", err)
 	}
@@ -96,7 +98,7 @@ func TestBake_FallbackWritesTraceButNoSpec(t *testing.T) {
 	fake := &model.FakeModel{Responses: []json.RawMessage{invalid, invalid, invalid, invalid, invalid, invalid}}
 
 	c, _ := DemoContract("foundation-1", typeFoundation)
-	res, err := Bake(context.Background(), fake, store, c, WorldContext{}, "openai", "gpt-4o")
+	res, err := Bake(context.Background(), fake, store, c, WorldContext{}, "openai", "gpt-4o", nil)
 	if !errors.Is(err, model.ErrFallback) {
 		t.Fatalf("want ErrFallback on exhaustion, got %v", err)
 	}
@@ -108,6 +110,64 @@ func TestBake_FallbackWritesTraceButNoSpec(t *testing.T) {
 	}
 	if countTraceFiles(t, dir) != 1 {
 		t.Fatal("fallback must still write a trace sidecar for the operator review")
+	}
+}
+
+// fakeVision is a no-browser, no-network SilhouetteScorer for the bake vision test:
+// it always returns the staged score, so the bake's vision wiring is proven without
+// a headless render.
+type fakeVision struct{ score evaluator.Score }
+
+func (f fakeVision) ScoreSilhouette(_ context.Context, _ string, _ []wire.BuildOp) (evaluator.Score, error) {
+	return f.score, nil
+}
+
+// TestBake_VisionScoreLandsInTrace: with the vision pass wired in, the silhouette
+// score+evidence lands in the written trace sidecar, and a LOW silhouette flags the
+// cached spec quality_flag:low (never withheld — ADR-0008). This is the bh-06
+// bake-level round-trip with NO browser and NO network.
+func TestBake_VisionScoreLandsInTrace(t *testing.T) {
+	dir := t.TempDir()
+	store, err := cache.NewStore(dir)
+	if err != nil {
+		t.Fatalf("store: %v", err)
+	}
+	// Analytically-rich on every pass, but the vision pass always scores silhouette 0
+	// (looks wrong) — so the loop spends its budget then caches the spec flagged low.
+	rich := validOpsJSON(t)
+	fake := &model.FakeModel{Responses: []json.RawMessage{rich, rich, rich, rich, rich, rich}}
+	vis := fakeVision{score: evaluator.Score{Score: 0, Evidence: "reads as an indistinct block, not a plinth"}}
+
+	c, _ := DemoContract("foundation-1", typeFoundation)
+	res, err := Bake(context.Background(), fake, store, c, WorldContext{}, "openai", "gpt-4o", vis)
+	if err != nil {
+		t.Fatalf("bake: %v", err)
+	}
+	if res.FellBack() {
+		t.Fatalf("a hard-gate-passing spec must cache even with a low silhouette, got fallback: %s", res.Reason)
+	}
+	if res.QualityFlag != trace.QualityLow {
+		t.Fatalf("a low silhouette must flag quality_flag:low, got %q", res.QualityFlag)
+	}
+
+	// The written trace sidecar carries the silhouette score+evidence (ADR-0008).
+	traceBytes, rErr := readFile(t, res.TracePath)
+	if rErr != nil {
+		t.Fatalf("read trace: %v", rErr)
+	}
+	tr, pErr := trace.Parse(traceBytes)
+	if pErr != nil {
+		t.Fatalf("parse trace: %v", pErr)
+	}
+	if len(tr.Iterations) == 0 {
+		t.Fatal("trace must record iterations")
+	}
+	last := tr.Iterations[len(tr.Iterations)-1].Verdict.Rubric.Silhouette
+	if last.Score != 0 || last.Evidence == "" {
+		t.Fatalf("the trace must carry the vision silhouette score+evidence, got %+v", last)
+	}
+	if !strings.Contains(tr.Outcome.Reason, "silhouette") {
+		t.Fatalf("the low-quality trace outcome must cite the silhouette, got %q", tr.Outcome.Reason)
 	}
 }
 
