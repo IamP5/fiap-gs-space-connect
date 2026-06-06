@@ -18,6 +18,8 @@ import { useEffect, useMemo, useState } from "react";
 import { useThree } from "@react-three/fiber";
 import * as THREE from "three";
 import { GLTFLoader } from "three/examples/jsm/loaders/GLTFLoader.js";
+import { DRACOLoader } from "three/examples/jsm/loaders/DRACOLoader.js";
+import { MeshoptDecoder } from "three/examples/jsm/libs/meshopt_decoder.module.js";
 import { suppressRaycast } from "../lib/suppressRaycast";
 
 // Self-contained loader + cache (mirrors Scene3D's loadGLTF): N references to the
@@ -25,7 +27,17 @@ import { suppressRaycast } from "../lib/suppressRaycast";
 // transforms never cross-contaminate. raycast is suppressed on the CACHED source
 // here AND re-applied to every clone (clone(true) does not carry the own-property
 // override — see suppressRaycast).
+//
+// The NASA-PD set-pieces are Draco-compressed (extensionsRequired:
+// KHR_draco_mesh_compression), so this loader MUST carry a DRACOLoader pointed at
+// the self-hosted decoder (web/public/draco/, vendored by #52) or every load
+// throws "No DRACOLoader instance provided" and silently falls back to a box.
+// meshopt is wired too, matching Scene3D's module-level loader.
 const sceneryLoader = new GLTFLoader();
+const sceneryDraco = new DRACOLoader();
+sceneryDraco.setDecoderPath("/draco/");
+sceneryLoader.setDRACOLoader(sceneryDraco);
+sceneryLoader.setMeshoptDecoder(MeshoptDecoder);
 const sceneryCache = new Map<string, Promise<THREE.Group>>();
 
 function loadScenery(url: string): Promise<THREE.Group> {
