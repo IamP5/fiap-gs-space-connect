@@ -199,3 +199,62 @@ Original 1K downloads (resized down to 512; otherwise unmodified):
 - `https://ambientcg.com/get?file=MetalPlates006_1K-JPG.zip`
 
 ambientCG publishes all of its assets under CC0 1.0 (https://ambientcg.com/license).
+
+## Sky bodies — Moon & Earth (NASA-PD)
+
+Decorative, snapshot-independent sky bodies rendered by
+`web/src/components/SkyBodies.tsx` (issue #51): the Moon globe in orbit view, the
+"Earthrise" Earth in the black surface sky. These are **Scenery** (ADR-0004
+allows snapshot-independent decoration), never snapshot-driven Assets; a
+failed/missing texture falls back to the sphere's flat material color (ADR-0004
+mandatory fallback). All source images are US-government public-domain works from
+NASA's 3D Resources repository (`master` branch). Credited as `NASA` as a
+courtesy; this project is **not** affiliated with or endorsed by NASA, and the
+NASA insignia is **not** used. Each download was verified as a real JPEG
+(`file <path>` reports `JPEG image data`). Downloaded: 2026-06-06.
+
+| File | Source asset | Author | Source URL | License |
+|------|--------------|--------|-----------|---------|
+| `textures/moon_color_1024.jpg` | NASA 3D Resources → `Images and Textures/Moon/Moon.jpg`, resized to 1024 | NASA | https://github.com/nasa/NASA-3D-Resources/blob/master/Images%20and%20Textures/Moon/Moon.jpg | Public Domain (NASA-PD) |
+| `textures/moon_normal_1024.jpg` | Baked OFFLINE from `Moon.jpg` (grayscale heightfield → Sobel-gradient OpenGL normal map, 1024) | NASA (derived) | https://github.com/nasa/NASA-3D-Resources/blob/master/Images%20and%20Textures/Moon/Moon.jpg | Public Domain (NASA-PD) |
+| `textures/moon_rough_512.jpg` | Baked OFFLINE from `Moon.jpg` (grayscale, clamped to a high-roughness band, 512) | NASA (derived) | https://github.com/nasa/NASA-3D-Resources/blob/master/Images%20and%20Textures/Moon/Moon.jpg | Public Domain (NASA-PD) |
+| `textures/earth_color_512.jpg` | NASA 3D Resources → `Images and Textures/Earth (A)/Earth (A).jpg`, resized to 1024×512 | NASA | https://github.com/nasa/NASA-3D-Resources/blob/master/Images%20and%20Textures/Earth%20(A)/Earth%20(A).jpg | Public Domain (NASA-PD) |
+
+Original downloads (raw `master`, the `.jpg` not the huge `.tif`):
+
+- `https://raw.githubusercontent.com/nasa/NASA-3D-Resources/master/Images%20and%20Textures/Moon/Moon.jpg`
+- `https://raw.githubusercontent.com/nasa/NASA-3D-Resources/master/Images%20and%20Textures/Earth%20(A)/Earth%20(A).jpg`
+
+The Moon color/Earth color were downscaled (ImageMagick `magick … -resize`) for
+bundle size; otherwise the photometry is unmodified. The Moon normal + roughness
+maps are baked offline from the same Moon photo (a heightfield-derived OpenGL
+normal map for crater relief — relief is applied as a **normal map, never a
+displacementMap**) and so are derivative NASA-PD works. NASA's image and media
+usage guidelines state NASA content is generally not copyrighted and may be used
+for educational/informational purposes; the NASA insignia/logo and flags are
+excluded and are NOT used here. See
+https://www.nasa.gov/nasa-brand-center/images-and-media/ and
+https://github.com/nasa/NASA-3D-Resources.
+
+## Rover model (NASA-PD)
+
+Used by `<Rover3D>` (issue #54) as the realistic worker-entity render — every
+rover swaps its primitive box body for this one configured glTF. It is NOT a
+Build-spec catalog Asset; the model is fixed for all rovers. A missing/failed
+load falls back FOREVER to the primitive rover (box body + sensor mast + 4
+wheels), so the scene never blanks (ADR-0004). Self-hosted, conditioned +
+Draco-compressed by `scripts/condition-asset.mjs` (recentered, fit-to-unit);
+fitted + ground-seated at load. The loaded tree is raycast-suppressed so the
+rover's invisible hit-proxy sphere stays the SOLE pickable surface.
+
+| File | Source asset | Author | Source URL | License |
+|------|--------------|--------|-----------|---------|
+| `models/rassor_rover.glb` | "Regolith Advanced Surface Systems Operations Robot (RASSOR)" — NASA's lunar regolith excavation/construction robot. Draco-decompressed, decimated (~2.1M → render-light), conditioned (Y-up, recentered, fit-to-unit), then Draco-recompressed (6.3 MB → 2.0 MB). | NASA | https://github.com/nasa/NASA-3D-Resources/tree/master/3D%20Models/Regolith%20Advanced%20Surface%20Systems%20Operations%20Robot%20(RASSOR) | NASA-PD |
+
+NASA's 3D Resources are released into the public domain (NASA-PD); see
+https://github.com/nasa/NASA-3D-Resources (Usage Guidelines). No NASA insignia
+("meatball"/worm logo) is included — `condition-asset.mjs` strips insignia/decal
+nodes. This use does not imply NASA endorsement.
+
+Original download (Draco-compressed source; conditioned, not committed as-is):
+`https://raw.githubusercontent.com/nasa/NASA-3D-Resources/master/3D%20Models/Regolith%20Advanced%20Surface%20Systems%20Operations%20Robot%20%28RASSOR%29/Regolith%20Advanced%20Surface%20Systems%20Operations%20Robot%20%28RASSOR%29.glb`
