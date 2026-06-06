@@ -80,10 +80,14 @@ func waitCoordinatorReady(t *testing.T, h *selfHealHarness) {
 }
 
 // place publishes a placeBlueprint control frame over the bus, exactly as the
-// gateway relays a dashboard drag-to-place.
-func place(t *testing.T, h *selfHealHarness, id string, origin domain.Vec2, rotation float64) {
+// gateway relays a dashboard drag-to-place. mode is optional (bh-08c): omit it for
+// the replay default, or pass a single "live"/"replay" to tag the placement.
+func place(t *testing.T, h *selfHealHarness, id string, origin domain.Vec2, rotation float64, mode ...string) {
 	t.Helper()
 	ctl := wire.Control{Cmd: "placeBlueprint", BlueprintID: id, Origin: origin, Rotation: rotation}
+	if len(mode) > 0 {
+		ctl.Mode = mode[0]
+	}
 	if err := h.conn.PublishJSON(wire.SubjControl, ctl); err != nil {
 		t.Fatalf("publish placeBlueprint %s: %v", id, err)
 	}
@@ -154,6 +158,54 @@ func TestPlaceBlueprint_MultipleConcurrent(t *testing.T) {
 			tk, ok := h.getTask(id)
 			return ok && tk.Status == domain.Done
 		})
+	}
+}
+
+// TestPlaceBlueprint_ModeTagsTasksAndCoexist is the bh-08c proof: the coordinator
+// stamps each injected Task with the placement's chosen build mode, and a LIVE
+// blueprint and a REPLAY blueprint coexist in ONE world and both build to DONE.
+//
+// The placement swarm wires no LiveBuilder, so a live-tagged Task degrades to the
+// deterministic replay/primitive stream and still completes — which is exactly the
+// model-free, back-compat-safe guarantee this slice needs (the mode tag rides the
+// World Model whether or not a model is wired). The default placement carries no
+// mode (empty ⇒ replay), and an explicit "live" placement carries "live".
+func TestPlaceBlueprint_ModeTagsTasksAndCoexist(t *testing.T) {
+	replayIDs := instanceIDs("bp1", "pad-1", "pad-2", "panel-1", "panel-2")
+	liveIDs := instanceIDs("bp2", "base", "mast", "antenna")
+	all := append(append([]domain.TaskID{}, replayIDs...), liveIDs...)
+
+	h := newSelfHealHarness(t, placementConfig(), all...)
+	waitCoordinatorReady(t, h)
+
+	// A default (replay) solar array and an explicit LIVE comms mast, far apart.
+	place(t, h, "solar-array", domain.Vec2{X: -100, Y: 0}, 0) // omitted mode ⇒ replay
+	place(t, h, "comms-mast", domain.Vec2{X: 100, Y: 0}, 0, "live")
+
+	// Both DAGs build to DONE in the same world (coexistence).
+	for _, id := range all {
+		h.poll(fmt.Sprintf("%s DONE", id), func() bool {
+			tk, ok := h.getTask(id)
+			return ok && tk.Status == domain.Done
+		})
+	}
+
+	// The coordinator stamped each injected Task with the placement's mode in the
+	// World Model: the default (omitted-mode) array tasks are normalized to the
+	// canonical replay tag, the live mast tasks carry "live". Either way the
+	// effective build path is replay for the array (an empty or "replay" tag both
+	// resolve to replay on the rover), so this is back-compat-safe.
+	for _, id := range replayIDs {
+		tk, _ := h.getTask(id)
+		if tk.Mode != string(agent.ModeReplay) {
+			t.Fatalf("default-placement task %s mode = %q, want %q (replay)", id, tk.Mode, agent.ModeReplay)
+		}
+	}
+	for _, id := range liveIDs {
+		tk, _ := h.getTask(id)
+		if tk.Mode != string(agent.ModeLive) {
+			t.Fatalf("live task %s mode = %q, want %q", id, tk.Mode, agent.ModeLive)
+		}
 	}
 }
 

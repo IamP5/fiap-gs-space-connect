@@ -43,6 +43,24 @@ const (
 	ModeLive Mode = "live"
 )
 
+// effectiveMode resolves the mode for ONE awarded Task (bh-08c): the per-Task mode
+// tag the coordinator stamped onto the Award (from a placeBlueprint) WINS, so the
+// operator's per-placement choice is honoured even on a rover whose Config.Mode is
+// the replay default. When the Task carries no mode (the empty default — every
+// pre-08c award, the whole startup board), the rover falls back to its Config.Mode,
+// so `cmd/agent --build-mode=live` still drives a whole rover live. Any value other
+// than the explicit ModeLive (incl. "replay" and the empty fallback) is replay, so
+// a malformed tag can never silently start live model calls.
+func effectiveMode(taskMode string, cfgMode Mode) Mode {
+	if taskMode == string(ModeLive) {
+		return ModeLive
+	}
+	if taskMode == "" && cfgMode == ModeLive {
+		return ModeLive
+	}
+	return ModeReplay
+}
+
 // LiveBuilder is the agent's INJECTED seam onto the Build harness (bh-08, live
 // mode). BuildLive runs the Generator↔Evaluator refine loop for one Task via the
 // Model seam and STREAMS each accepted/revised refine iteration as a batch of patch
@@ -138,12 +156,15 @@ type Config struct {
 }
 
 // liveEnabled reports whether this rover should source its work-phase ops from the
-// injected Build harness for task type t: live mode with a builder wired AND no
-// explicit Config.BuildOps override (which — incl. a forced-empty slice — is the
-// tests/invariant path and beats every source in both modes, keeping that suite
-// model-free regardless of Mode).
-func (c Config) liveEnabled() bool {
-	return c.Mode == ModeLive && c.LiveBuilder != nil && c.BuildOps == nil
+// injected Build harness for the EFFECTIVE mode of the awarded Task (bh-08c): live
+// mode with a builder wired AND no explicit Config.BuildOps override (which — incl.
+// a forced-empty slice — is the tests/invariant path and beats every source in both
+// modes, keeping that suite model-free regardless of Mode). mode is
+// effectiveMode(aw.Mode, cfg.Mode): the per-Task tag wins, falling back to
+// Config.Mode, so one rover replays a replay-tagged Task and builds live for a
+// live-tagged Task in the same world rather than the mode being fixed per-rover.
+func (c Config) liveEnabled(mode Mode) bool {
+	return mode == ModeLive && c.LiveBuilder != nil && c.BuildOps == nil
 }
 
 // opsFor resolves the ordered op stream this rover emits while working task (of
@@ -845,7 +866,10 @@ func workPhase(ctx context.Context, cfg Config, conn *bus.Conn, st *rover, heart
 	// harness produces them, pacing emission by the Choreography cadence while
 	// heartbeating. On exhaustion/error (nothing emitted) it degrades to the
 	// deterministic replay/primitive stream — a model fault never crashes the swarm.
-	if cfg.liveEnabled() {
+	// The decision uses the EFFECTIVE mode for THIS Task (bh-08c): the awarded Task's
+	// per-Task tag wins, falling back to Config.Mode when the Task carries none.
+	mode := effectiveMode(aw.Mode, cfg.Mode)
+	if cfg.liveEnabled(mode) {
 		res, emitted := streamLiveOps(ctx, cfg, conn, st, heart, fault, down, aw)
 		if res != phaseDone {
 			return res // ctx cancelled / killed / faulted mid-stream: no completion

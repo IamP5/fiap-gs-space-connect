@@ -794,7 +794,7 @@ func (st *state) openAuction(t domain.Task) {
 		bids:     make(map[domain.RobotID]float64),
 		closesAt: time.Now().Add(st.window),
 	}
-	ann := wire.Announce{TaskID: t.ID, Type: t.Type, Pos: pos, Version: t.Version}
+	ann := wire.Announce{TaskID: t.ID, Type: t.Type, Pos: pos, Mode: t.Mode, Version: t.Version}
 	_ = st.conn.PublishJSON(wire.SubjTaskAnnounce, ann)
 	slog.Info("announce", "task", ann.TaskID, "type", ann.Type, "version", ann.Version)
 }
@@ -869,6 +869,7 @@ func (st *state) award(ctx context.Context, t domain.Task, winner domain.RobotID
 		TaskID:   t.ID,
 		Robot:    winner,
 		Type:     t.Type,       // so the winner knows which op stream to emit (bh-02)
+		Mode:     t.Mode,       // per-Task build mode so the winner honours replay/live (bh-08c)
 		Pos:      st.pos[t.ID], // where the winner must drive to (slice 02)
 		LeaseTTL: st.ttl,
 		Version:  next.Version,

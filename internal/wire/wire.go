@@ -68,10 +68,16 @@ func KVSpecKey(task domain.TaskID) string { return "spec/" + string(task) }
 // Announce auctions a ready task. Pos is the task's worksite location so rovers
 // can score distance.
 type Announce struct {
-	TaskID  domain.TaskID   `json:"task_id"`
-	Type    domain.TaskType `json:"type"`
-	Pos     domain.Vec2     `json:"pos"`
-	Version domain.Lamport  `json:"version"`
+	TaskID domain.TaskID   `json:"task_id"`
+	Type   domain.TaskType `json:"type"`
+	Pos    domain.Vec2     `json:"pos"`
+	// Mode is the Task's build mode tag (bh-08c): "live" ⇒ the winning Rover runs
+	// the Build harness inline; empty/"replay" ⇒ the deterministic replay/primitive
+	// stream (the default). Carried on the Announce so a bidder could surface it,
+	// though the binding decision rides the Award. A plain string, never the
+	// agent.Mode type, so wire stays model-free. Omitted when empty (back-compat).
+	Mode    string         `json:"mode,omitempty"`
+	Version domain.Lamport `json:"version"`
 }
 
 // Bid is a rover's cost to perform an announced task. Lower wins; ties break by
@@ -91,10 +97,18 @@ type Award struct {
 	// Type is the task's kind, carried so the winning Rover knows which
 	// deterministic build-op stream to emit while working it (bh-02) without
 	// having to remember the prior Announce.
-	Type     domain.TaskType `json:"type,omitempty"`
-	Pos      domain.Vec2     `json:"pos"`
-	LeaseTTL domain.Tick     `json:"lease_ttl"`
-	Version  domain.Lamport  `json:"version"`
+	Type domain.TaskType `json:"type,omitempty"`
+	// Mode is the Task's build mode tag (bh-08c), threaded from the placeBlueprint
+	// control onto the Task and carried here so the WINNING Rover honours the
+	// PER-TASK mode at award time: "live" ⇒ run the Build harness inline via the
+	// injected LiveBuilder seam; empty/"replay" ⇒ the deterministic replay/primitive
+	// stream. The Rover falls back to its own Config.Mode when this is empty, so
+	// `cmd/agent --build-mode=live` still works and existing awards are unchanged.
+	// A plain string, never the agent.Mode type, so wire stays model-free.
+	Mode     string         `json:"mode,omitempty"`
+	Pos      domain.Vec2    `json:"pos"`
+	LeaseTTL domain.Tick    `json:"lease_ttl"`
+	Version  domain.Lamport `json:"version"`
 }
 
 // Complete reports that a rover finished its leased task.
@@ -344,6 +358,11 @@ type Control struct {
 	BlueprintID string      `json:"blueprint_id,omitempty"` // catalog Blueprint to place
 	Origin      domain.Vec2 `json:"origin,omitzero"`        // worksite anchor for the injected DAG
 	Rotation    float64     `json:"rotation,omitempty"`     // radians, about the origin
+	// Mode picks the build mode for THIS placement (bh-08c): "live" ⇒ the injected
+	// DAG's Tasks are tagged live and a winning Rover runs the Build harness inline;
+	// "replay" or empty ⇒ the deterministic replay (the default, back-compat). The
+	// coordinator stamps it onto every injected Task. Ignored by every other command.
+	Mode string `json:"mode,omitempty"`
 }
 
 // SubjControl is the bus subject the gateway relays browser Control messages onto.

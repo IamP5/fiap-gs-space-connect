@@ -15,13 +15,17 @@
 
 import { memo, useCallback } from "react";
 import { CATALOG } from "../lib/blueprintCatalog";
+import type { BuildMode } from "../types/wire";
 
 // Placement is the active drag-to-place interaction, owned by App. `invalidReason`
 // is the client-side mirror of the server's bounds/no-overlap gate (null = valid),
 // so confirm is disabled and the reason is surfaced when the spot is illegal.
+// `mode` is the per-placement replay/live choice (bh-08c): the operator picks it
+// here BEFORE dropping, and confirm threads it into the placeBlueprint control.
 export type Placement = {
   blueprintId: string;
   rotation: number; // radians
+  mode: BuildMode; // "replay" (default) | "live"
   invalidReason: string | null;
 };
 
@@ -29,6 +33,7 @@ type Props = {
   placement: Placement | null;
   onStart: (blueprintId: string) => void;
   onRotate: (rotation: number) => void;
+  onModeChange: (mode: BuildMode) => void;
   onConfirm: () => void;
   onCancel: () => void;
 };
@@ -40,6 +45,7 @@ export const BlueprintPalette = memo(function BlueprintPalette({
   placement,
   onStart,
   onRotate,
+  onModeChange,
   onConfirm,
   onCancel,
 }: Props) {
@@ -79,6 +85,35 @@ export const BlueprintPalette = memo(function BlueprintPalette({
             Move the cursor over the worksite to set <strong>{active.name}</strong>’s spot, then
             confirm.
           </p>
+
+          {/* Per-placement build mode (bh-08c): replay (deterministic, the default)
+              or live (the Build harness generates the structure inline). Chosen
+              BEFORE drop; confirm threads it into the placeBlueprint control. */}
+          <div className="control">
+            <div className="control-head">
+              <span className="control-label" id="bp-mode-label">
+                Build mode
+              </span>
+            </div>
+            <div className="bp-mode" role="group" aria-labelledby="bp-mode-label">
+              <button
+                type="button"
+                className={`bp-mode-btn ${placement.mode === "replay" ? "is-active" : ""}`}
+                aria-pressed={placement.mode === "replay"}
+                onClick={() => onModeChange("replay")}
+              >
+                Replay
+              </button>
+              <button
+                type="button"
+                className={`bp-mode-btn ${placement.mode === "live" ? "is-active" : ""}`}
+                aria-pressed={placement.mode === "live"}
+                onClick={() => onModeChange("live")}
+              >
+                Live
+              </button>
+            </div>
+          </div>
 
           <div className="control">
             <div className="control-head">

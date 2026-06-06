@@ -111,6 +111,16 @@ type Task struct {
 	LeaseExpiry Tick
 	// Version is the Lamport stamp guarding updates to this record.
 	Version Lamport
+
+	// Mode selects how the Rover that wins this Task sources its Build-op stream
+	// (bh-08c): "live" runs the Build harness inline via the injected LiveBuilder
+	// seam; anything else (incl. the empty default) replays the deterministic
+	// cache/primitive stream. It is a PLAIN STRING TAG, deliberately NOT the
+	// agent.Mode type, so this hot-path/core record stays model-free (ADR-0005):
+	// the coordinator threads it from a placeBlueprint control onto each injected
+	// Task, and the winning Rover honours it at award time. Empty ⇒ replay, so
+	// every existing Task (and the whole startup board) is unchanged.
+	Mode string
 }
 
 // RoverState is the snapshot of a rover the Allocation Engine scores a bid

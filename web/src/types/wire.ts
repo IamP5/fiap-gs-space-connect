@@ -117,11 +117,12 @@ export type EarthUplink = {
 //                                worksite); cmd-only, no robot/value
 //   · setFailureProb  (value) — 0..1 per-rover induced failure rate (issue 08)
 //   · setLatency      (value) — ms of delay on the earth.uplink feed (issue 09)
-//   · placeBlueprint  (blueprint_id, origin, rotation) — drag a pre-authored
+//   · placeBlueprint  (blueprint_id, origin, rotation, mode) — drag a pre-authored
 //                       Blueprint into the world; the coordinator validates
 //                       bounds/terrain/no-overlap then injects its task DAG, which
-//                       the Auction builds exactly as today (bh-05). The fields
-//                       are snake_case to mirror wire.go's Control JSON tags.
+//                       the Auction builds exactly as today (bh-05). `mode` picks
+//                       replay (the default) or live PER PLACEMENT (bh-08c). The
+//                       fields are snake_case to mirror wire.go's Control JSON tags.
 export type Control = {
   cmd: string;
   robot?: string;
@@ -129,7 +130,13 @@ export type Control = {
   blueprint_id?: string; // placeBlueprint: catalog Blueprint id
   origin?: Vec2; // placeBlueprint: worksite anchor for the injected DAG
   rotation?: number; // placeBlueprint: radians about the origin
+  mode?: BuildMode; // placeBlueprint: "replay" (default) | "live" build mode (bh-08c)
 };
+
+// BuildMode is the per-placement build mode the operator chooses before dropping a
+// Blueprint (bh-08c): "replay" replays the deterministic cache/primitive stream
+// (the default), "live" runs the Build harness inline. Mirrors agent.Mode in Go.
+export type BuildMode = "replay" | "live";
 
 // Narrow an arbitrary parsed JSON value to a Snapshot. Defensive: a malformed
 // frame must never crash the pure render.
