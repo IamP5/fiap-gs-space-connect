@@ -39,6 +39,7 @@
 import { memo, useEffect, useMemo, useRef, useState } from "react";
 import { Canvas, useFrame, useThree, type ThreeEvent } from "@react-three/fiber";
 import { Line, OrbitControls } from "@react-three/drei";
+import { SpaceEnvironment } from "./SpaceEnvironment";
 import { EffectComposer, SelectiveBloom } from "@react-three/postprocessing";
 import { KernelSize } from "postprocessing";
 import * as THREE from "three";
@@ -59,6 +60,8 @@ import {
   beatProgress,
 } from "../lib/choreography";
 import { GLTFLoader } from "three/examples/jsm/loaders/GLTFLoader.js";
+import { DRACOLoader } from "three/examples/jsm/loaders/DRACOLoader.js";
+import { MeshoptDecoder } from "three/examples/jsm/libs/meshopt_decoder.module.js";
 import {
   type MeshDesc,
   type ModelDesc,
@@ -461,6 +464,15 @@ function LeaseBeam({ from, to, map }: { from: RoverView; to: TaskView; map: Scen
 // same .glb parse it ONCE (r3f-geometry "reuse"), and the parsed scene is cloned
 // per placement so transforms/materials never cross-contaminate.
 const gltfLoader = new GLTFLoader();
+// Self-hosted Draco + meshopt decoders so conditioned (compressed) .glb load
+// OFFLINE — no gstatic CDN fetch (the projector may have no network). The
+// decoder files live in web/public/draco/ and are served from the same origin;
+// '/draco/' is where DRACOLoader looks for draco_wasm_wrapper.js +
+// draco_decoder.wasm (the glTF decoder variant vendored from three's examples).
+const dracoLoader = new DRACOLoader();
+dracoLoader.setDecoderPath("/draco/");
+gltfLoader.setDRACOLoader(dracoLoader);
+gltfLoader.setMeshoptDecoder(MeshoptDecoder);
 const gltfCache = new Map<string, Promise<THREE.Group>>();
 
 function loadGLTF(url: string): Promise<THREE.Group> {
@@ -1195,6 +1207,7 @@ function SceneContents({
       <>
         <ambientLight intensity={0.4} />
         <LunarTerrain />
+        <SpaceEnvironment />
       </>
     );
   }
@@ -1208,6 +1221,13 @@ function SceneContents({
       <directionalLight ref={lightRef} position={[6, 10, 6]} intensity={1.4} />
 
       <LunarTerrain />
+
+      {/* Static, snapshot-independent backdrop: hand-rolled starfield + self-
+          hosted HDR skybox/IBL (issue #50). Encodes no world state — sits
+          OUTSIDE the snapshot-derived meshes; gives metallic glTFs real
+          reflections. The directional key light + halo bloom path below are
+          unaffected. */}
+      <SpaceEnvironment />
 
       {/* Tasks / rising dome. */}
       {snapshot.tasks.map((t) => (
@@ -1339,6 +1359,10 @@ export function Scene3D({
       // plus soft halo bloom reads fine without canvas-level AA.
       gl={{ antialias: false, powerPreference: "high-performance" }}
     >
+      {/* Black background as the GRACEFUL FALLBACK (issue #50): the HDR
+          Environment in <SpaceEnvironment> overrides scene.background once it
+          loads, but if the .hdr is missing/fails this black backdrop remains so
+          the scene never goes blank (ADR-0004 mandatory fallback). */}
       <color attach="background" args={["#000000"]} />
       <SceneContents
         snapshot={snapshot}

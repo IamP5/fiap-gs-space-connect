@@ -57,6 +57,20 @@ export const MOCK_SNAPSHOT: Snapshot = {
           material: { color: "#e8e8ef" },
           model_ref: "/assets/models/hangar_roundA.glb",
         },
+        {
+          // issue #52 demo: a DRACO-compressed conditioned model (recentered,
+          // fit-to-unit, KHR_draco_mesh_compression required) — exercises the
+          // self-hosted /draco/ decoder end-to-end. Falls back to the box if the
+          // decoder is missing, so the scene never breaks. Dev-only (VITE_MOCK=1).
+          op: "place",
+          id: "generator",
+          shape: "model",
+          pos: { X: 1.6, Y: 0.3, Z: 0 },
+          rot: { X: 0, Y: 0, Z: 0 },
+          scale: { X: 1.4, Y: 1.4, Z: 1.4 },
+          material: { color: "#cdd2e0" },
+          model_ref: "/assets/models/machine_generator_draco.glb",
+        },
       ],
     },
     {

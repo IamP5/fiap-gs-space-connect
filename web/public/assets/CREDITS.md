@@ -32,6 +32,18 @@ The pack's bundled `License.txt` states verbatim:
 > This content is free to use in personal, educational and commercial projects.
 > Support us by crediting Kenney or www.kenney.nl (this is not mandatory)
 
+## Conditioned models (Issue #52 — geometry-baked + Draco-compressed)
+
+Produced OFFLINE by `scripts/condition-asset.mjs` (see `scripts/README.md`):
+up-axis fix, `computeVertexNormals()` when missing, recenter-to-origin,
+fit-to-unit, NASA-insignia strip, then `gltf-transform optimize --compress draco`.
+These require the self-hosted Draco decoder under `web/public/draco/` to load
+(no gstatic CDN). The conditioned `.glb` is committed; sources are not.
+
+| File | Source asset | Author | Source URL | License | Conditioning |
+|------|--------------|--------|-----------|---------|--------------|
+| `models/machine_generator_draco.glb` | `models/machine_generator.glb` (Kenney Space Kit, CC0) | Kenney (kenney.nl) | https://kenney.nl/assets/space-kit | CC0 1.0 | recenter + fit-to-unit + `--compress draco` (28.3 KB → 3.1 KB). Proves the Draco decode path end-to-end. |
+
 ## Textures
 
 | File | Source asset | Authors | Source URL | License |
@@ -69,3 +81,21 @@ Original 1K downloads (resized down to 512; otherwise unmodified):
 Poly Haven publishes all of its assets under CC0 1.0
 (https://polyhaven.com/license); the set's authors are confirmed via the Poly
 Haven API (`https://api.polyhaven.com/info/moon_01`).
+
+## HDR environments
+
+Used by `<SpaceEnvironment>` (issue #50) as the self-hosted skybox + image-based
+lighting (IBL) source — it provides both the backdrop and the PBR reflections on
+metallic glTFs. Loaded via `files=` (self-hosted in `/public`), never a CDN
+`preset=`. A failed load falls back to the Canvas's black background.
+
+| File | Source asset | Author | Source URL | License |
+|------|--------------|--------|-----------|---------|
+| `hdr/moonless_golf_2k.hdr` | "Moonless Golf" — 2K HDRI (neutral night sky, suits a space scene) | Greg Zaal | https://polyhaven.com/a/moonless_golf | CC0 1.0 |
+
+2K download (unmodified):
+`https://dl.polyhaven.org/file/ph-assets/HDRIs/hdr/2k/moonless_golf_2k.hdr`
+
+Poly Haven publishes all of its assets under CC0 1.0
+(https://polyhaven.com/license); the asset's author is confirmed via the Poly
+Haven API (`https://api.polyhaven.com/info/moonless_golf`).

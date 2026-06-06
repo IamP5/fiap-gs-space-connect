@@ -6,6 +6,7 @@ import (
 	"swarmbuild/internal/agent"
 	"swarmbuild/internal/coordinator"
 	"swarmbuild/internal/core/domain"
+	"swarmbuild/internal/harness/asset"
 	"swarmbuild/internal/wire"
 	"testing"
 	"time"
@@ -210,5 +211,101 @@ func TestBuildOps_EmptyOpsByteForBytePreHarness(t *testing.T) {
 	//    renderer's primitive fallback is byte-for-byte the pre-harness behaviour.
 	if got := h.getSpec(id); len(got) != 0 {
 		t.Fatalf("forced-empty ops still accumulated %d ops; pre-harness invariant violated", len(got))
+	}
+}
+
+// assetKeyOp returns a single well-formed `place` box op (passes spec.Validate)
+// that ADDITIONALLY references the given Asset key. The AssetKey is what the
+// coordinator's fold gates on (issue #60); the box shape keeps the op
+// schema-valid so the ONLY reason it could be rejected is the catalog check.
+func assetKeyOp(key string) wire.BuildOp {
+	rough, metal := 0.85, 0.1
+	return wire.BuildOp{
+		Op:       wire.BuildOpPlace,
+		Shape:    wire.ShapeBox,
+		AssetKey: key,
+		Pos:      domain.Vec3{X: 0, Y: 0.25, Z: 0},
+		Scale:    domain.Vec3{X: 1.6, Y: 0.5, Z: 0.6},
+		Material: wire.Material{Color: "#9aa0aa", Roughness: &rough, Metalness: &metal},
+	}
+}
+
+// assetKeyConfig is oneTaskConfig with a caller-supplied Asset catalog injected.
+// Issue #60 must stay independent of #55/#59's DefaultCatalog() contents, so the
+// tests feed their OWN catalog rather than relying on whatever the default holds.
+func assetKeyConfig(id domain.TaskID, ops map[domain.TaskType][]wire.BuildOp, cat *asset.Catalog) coordinator.Config {
+	cfg := oneTaskConfig(id, ops)
+	cfg.AssetCatalog = cat
+	return cfg
+}
+
+// TestBuildOps_InCatalogAssetKeyAccepted: a build op that carries an AssetKey
+// present in the (injected) catalog AND suiting the Task's type folds normally
+// and becomes durable Build spec, AssetKey intact (resolution happens later, at
+// the snapshot seam, not in the fold).
+func TestBuildOps_InCatalogAssetKeyAccepted(t *testing.T) {
+	const id domain.TaskID = "build-x"
+	cat := asset.NewCatalog(
+		asset.NewEntry("test-key", "/assets/test.glb", []domain.TaskType{typeFoundation}, asset.Identity()),
+	)
+	want := []wire.BuildOp{assetKeyOp("test-key")}
+	h := newSelfHealHarness(t, assetKeyConfig(id, map[domain.TaskType][]wire.BuildOp{typeFoundation: want}, cat), id)
+
+	// The in-catalog op folds and is mirrored durably, byte-for-byte (AssetKey kept).
+	h.poll("build-x in-catalog op accepted and durable", func() bool {
+		return specEqual(h.getSpec(id), want)
+	})
+
+	// And the task completes end-to-end.
+	h.poll("build-x DONE", func() bool {
+		tk, ok := h.getTask(id)
+		return ok && tk.Status == domain.Done
+	})
+}
+
+// TestBuildOps_OutOfCatalogAssetKeyRejected: an op whose AssetKey is NOT in the
+// injected catalog is rejected at the single-writer fold — it never appends, so
+// the durable spec for the task stays empty even though the task still completes.
+// The rejection is the observable: the op never reaches the Snapshot/World Model.
+func TestBuildOps_OutOfCatalogAssetKeyRejected(t *testing.T) {
+	const id domain.TaskID = "build-x"
+	// Catalog holds a DIFFERENT key; the streamed op references an unknown one.
+	cat := asset.NewCatalog(
+		asset.NewEntry("test-key", "/assets/test.glb", []domain.TaskType{typeFoundation}, asset.Identity()),
+	)
+	ops := []wire.BuildOp{assetKeyOp("hallucinated-key")}
+	h := newSelfHealHarness(t, assetKeyConfig(id, map[domain.TaskType][]wire.BuildOp{typeFoundation: ops}, cat), id)
+
+	// The task still completes (a rejected op does not stall the work loop)...
+	h.poll("build-x DONE despite rejected op", func() bool {
+		tk, ok := h.getTask(id)
+		return ok && tk.Status == domain.Done
+	})
+
+	// ...but the out-of-catalog op never became durable Build spec.
+	if got := h.getSpec(id); len(got) != 0 {
+		t.Fatalf("out-of-catalog AssetKey leaked into the spec: %d ops accumulated, want 0", len(got))
+	}
+}
+
+// TestBuildOps_TypeUnsuitedAssetKeyRejected: a key that IS in the catalog but is
+// declared to suit a DIFFERENT Task type than this Task's is rejected by the same
+// fold gate (entry.SuitsType is false), so it never becomes durable spec.
+func TestBuildOps_TypeUnsuitedAssetKeyRejected(t *testing.T) {
+	const id domain.TaskID = "build-x"
+	// "test-key" exists but suits only "wall", while the task is a foundation.
+	cat := asset.NewCatalog(
+		asset.NewEntry("test-key", "/assets/test.glb", []domain.TaskType{"wall"}, asset.Identity()),
+	)
+	ops := []wire.BuildOp{assetKeyOp("test-key")}
+	h := newSelfHealHarness(t, assetKeyConfig(id, map[domain.TaskType][]wire.BuildOp{typeFoundation: ops}, cat), id)
+
+	h.poll("build-x DONE despite type-unsuited op", func() bool {
+		tk, ok := h.getTask(id)
+		return ok && tk.Status == domain.Done
+	})
+
+	if got := h.getSpec(id); len(got) != 0 {
+		t.Fatalf("type-unsuited AssetKey leaked into the spec: %d ops accumulated, want 0", len(got))
 	}
 }
