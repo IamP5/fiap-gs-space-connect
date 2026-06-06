@@ -108,6 +108,10 @@ _Avoid_: Stop, disable, crash, terminate.
 The deliberate pacing of the demo so an evaluator can *see* the self-heal beats (lease draining, re-auction, the replacement driving over). Every beat is derived from a real worksite event, never fabricated.
 _Avoid_: Animation, scripting, demo mode, staging.
 
+**Scenery**:
+The non-diegetic decoration layer of the 3D view that encodes **no** World Model state — the Moon, starfield, regolith ground, and inert space set-pieces (a landed lander, launch structures). It exists for realism only: unlike Choreography it is not derived from a worksite event, and unlike the rendered Rovers and Tasks it is never read back as truth. It is the boundary that keeps the scene a pure re-render of the snapshot (ADR-0004) even as realistic assets are added. Set-pieces that *imply* activity the swarm isn't doing (e.g. an active launch) are admitted only as Scenery, knowingly non-diegetic — they are not a worksite beat.
+_Avoid_: Background, props, set dressing, backdrop (name the non-diegetic layer specifically).
+
 ### The build harness (AI construction layer)
 
 The agentic layer that sits **on top of** the deterministic swarm. It never decides *who* builds or *when* (the Auction owns that, untouched); it only produces *what a completed task looks like*. The swarm self-heals deterministically; the harness adds the visible construction.
@@ -127,6 +131,14 @@ _Avoid_: Generator, codegen, agent loop, executor.
 **Build spec**:
 The declarative, engine-agnostic description of geometry a Build harness emits — an **append-only ordered log of build operations** the renderer **folds, then interprets, never executes**. An operation either *places* geometry (a primitive/model with transform + material) or, when a harness revises its own earlier work, *moves* or *deletes* an existing one; folding the log yields the Task's current geometry. It is durable Task state (carried in the snapshot), so the scene stays a pure re-render (ADR-0004). Designed to grow from primitives + procedural materials to custom models (glTF) and textures without changing the seam.
 _Avoid_: Three.js code, mesh, payload, script (it is data, not executable code).
+
+**Asset**:
+A licensed, self-hosted piece of 3D art a Build spec can place — a glTF model (`.glb`) or a texture — referenced by a Build op (`model_ref` / `material.map`) and always backed by a primitive fallback so a missing one degrades to geometry, never a broken scene. Distinct from a **Model** (the LLM behind the Model seam) and from a **Rover** (the worker): an Asset is inert art.
+_Avoid_: Model, mesh, prop, resource (reserve "model" for the LLM).
+
+**Asset catalog**:
+The curated, validated, **closed** set of Assets a Build harness is allowed to place — each entry pairing an Asset's `model_ref` with the task types it suits. Carried by the Build contract so a Rover (in either Build mode) composes geometry + Assets by **choosing from this bounded set**, never emitting a free-form reference. It is the "ready architecture" the swarm delegates to.
+_Avoid_: Asset library, model list, registry, manifest (name the bounded, contract-carried set specifically).
 
 **Build mode**:
 How a Task's geometry is produced when a Rover works it: **replay** (the deterministic default — the Rover streams a frozen, pre-approved Build spec from cache, no model call, the bulletproof headline) or **live** (the Rover runs its Build harness *as it works*, so the structure is generated and visibly self-corrected in the world step by step). Live mode deliberately trades determinism for authenticity and is chosen per Blueprint placement; the two coexist, even side by side (ADR-0009).
