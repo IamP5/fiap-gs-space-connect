@@ -75,6 +75,35 @@ describe("opToMesh", () => {
     expect(m.map).toBe("/assets/textures/rock.jpg");
   });
 
+  // issue #53: the full PBR map set (normal/roughness/ao) rides onto the
+  // descriptor when present, each only when its material field is set.
+  it("carries the full PBR map set onto the primitive descriptor when present", () => {
+    const m = opToMesh({
+      ...box,
+      material: {
+        color: "#cfcfd6",
+        map: "/assets/textures/d.jpg",
+        normal_map: "/assets/textures/n.jpg",
+        roughness_map: "/assets/textures/r.jpg",
+        ao_map: "/assets/textures/ao.jpg",
+      },
+    });
+    if (!m || m.kind !== "primitive") throw new Error("expected primitive");
+    expect(m.map).toBe("/assets/textures/d.jpg");
+    expect(m.normalMap).toBe("/assets/textures/n.jpg");
+    expect(m.roughnessMap).toBe("/assets/textures/r.jpg");
+    expect(m.aoMap).toBe("/assets/textures/ao.jpg");
+  });
+
+  it("omits PBR maps that the material does not declare", () => {
+    const m = opToMesh({ ...box, material: { color: "#cfcfd6", map: "/d.jpg" } });
+    if (!m || m.kind !== "primitive") throw new Error("expected primitive");
+    expect(m.map).toBe("/d.jpg");
+    expect(m.normalMap).toBeUndefined();
+    expect(m.roughnessMap).toBeUndefined();
+    expect(m.aoMap).toBeUndefined();
+  });
+
   // bh-07b: a "model" op with a model_ref produces a glTF descriptor that names
   // the asset to load AND a box primitive fallback (so a failed load still draws).
   it("maps a 'model' op + model_ref to a glTF descriptor with a primitive fallback", () => {

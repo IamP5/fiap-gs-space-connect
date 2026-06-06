@@ -409,6 +409,7 @@ func transformEqual(a, b wire.BuildOp) bool {
 // value (nil ⇄ set is a difference; both nil is equal).
 func materialEqual(a, b wire.Material) bool {
 	return a.Color == b.Color && a.Map == b.Map &&
+		a.NormalMap == b.NormalMap && a.RoughnessMap == b.RoughnessMap && a.AOMap == b.AOMap &&
 		floatPtrEqual(a.Roughness, b.Roughness) && floatPtrEqual(a.Metalness, b.Metalness)
 }
 
