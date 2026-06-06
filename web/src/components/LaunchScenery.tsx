@@ -66,56 +66,87 @@ type SetPiece = {
   modelRef: string;
   position: Vec3;
   rotation?: Vec3;
-  scale: number;
-  // Box fallback dimensions (scene units) + tint, shown until/if the glTF loads.
-  fallback: { size: Vec3; color: string };
+  // Target for the model's LARGEST bounding-box dimension, in world units. The
+  // NASA glTFs have arbitrary native units + off-origin pivots, so a fixed scale
+  // scalar is meaningless (one model fills the sky, another is a speck). We fit
+  // each model to this size at load (see fitAndSeat) so presence is predictable
+  // regardless of the source units. The fallback box uses the same number.
+  fit: number;
+  // Tint for the box fallback shown until/if the glTF loads.
+  fallbackColor: string;
 };
 
 // Set-pieces parked along the FAR edge of the ~20-unit worksite (GROUND_SPAN=20,
-// terrain reaches ±16). Placed back at z ≈ -11..-14 and spread on x so they read
-// as a launch complex on the horizon without crowding the active worksite.
+// terrain reaches ±16), spread on x so they read as a launch complex on the
+// horizon without crowding the active worksite. `fit` keeps the towers tall but
+// no longer dominating: an ~8-unit launcher/gantry reads as a backdrop next to
+// the ~2-unit dome, the crawler sits low and wide, the lander is smallest.
 const SET_PIECES: SetPiece[] = [
   {
     key: "crawler",
     modelRef: "/assets/models/nasa_crawler.glb",
-    position: [-12, 0, -12],
+    position: [-13, 0, -13],
     rotation: [0, Math.PI / 5, 0],
-    scale: 0.9,
-    fallback: { size: [4, 1.4, 5], color: "#5a5a4e" },
+    fit: 4.5,
+    fallbackColor: "#5a5a4e",
   },
   {
     key: "mobile-launcher",
     modelRef: "/assets/models/nasa_mobile_launcher.glb",
-    position: [-4, 0, -14],
+    position: [-5, 0, -15],
     rotation: [0, 0, 0],
-    scale: 0.9,
-    fallback: { size: [3, 7, 3], color: "#6b6b72" },
+    fit: 8,
+    fallbackColor: "#6b6b72",
   },
   {
     key: "gantry",
     modelRef: "/assets/models/nasa_gantry.glb",
-    position: [5, 0, -13.5],
+    position: [6, 0, -14],
     rotation: [0, -Math.PI / 8, 0],
-    scale: 0.9,
-    fallback: { size: [3.5, 8, 3.5], color: "#7a4a3a" },
+    fit: 7,
+    fallbackColor: "#7a4a3a",
   },
   {
     key: "lander",
     modelRef: "/assets/models/nasa_lunar_module.glb",
-    position: [13, 0, -11],
+    position: [13, 0, -12],
     rotation: [0, -Math.PI / 4, 0],
-    scale: 0.9,
-    fallback: { size: [2.5, 2.5, 2.5], color: "#b8a070" },
+    fit: 3,
+    fallbackColor: "#b8a070",
   },
 ];
+
+// fitAndSeat normalizes a loaded model in place: scale its largest dimension to
+// `fit` world units, recenter on x/z, and seat its base at y=0 — so the wrapping
+// <group position={piece.position}> drops it cleanly onto the ground. This is the
+// fitToView bake the research flagged for NASA's arbitrary-unit, off-origin glbs;
+// doing it at load (vs. baking each .glb) keeps the vendored assets untouched.
+function fitAndSeat(obj: THREE.Object3D, fit: number) {
+  obj.updateMatrixWorld(true);
+  const box = new THREE.Box3().setFromObject(obj);
+  if (box.isEmpty()) return;
+  const size = box.getSize(new THREE.Vector3());
+  const center = box.getCenter(new THREE.Vector3());
+  const maxDim = Math.max(size.x, size.y, size.z) || 1;
+  const s = fit / maxDim;
+  obj.scale.setScalar(s);
+  // Center x/z on the group origin; lift so the model's base rests on y=0.
+  obj.position.set(-center.x * s, -box.min.y * s, -center.z * s);
+}
 
 function SceneryPiece({ piece }: { piece: SetPiece }) {
   const [scene, setScene] = useState<THREE.Group | null>(null);
   const invalidate = useThree((s) => s.invalidate);
 
+  // Fallback box approximates the normalized model: a slim upright volume whose
+  // height is `fit` (towers read tall, the crawler low-ish), seated on the ground.
+  const fallbackSize = useMemo<Vec3>(
+    () => [piece.fit * 0.6, piece.fit, piece.fit * 0.6],
+    [piece.fit],
+  );
   const fallbackGeo = useMemo(
-    () => new THREE.BoxGeometry(...piece.fallback.size),
-    [piece.fallback.size],
+    () => new THREE.BoxGeometry(...fallbackSize),
+    [fallbackSize],
   );
   useEffect(() => () => fallbackGeo.dispose(), [fallbackGeo]);
 
@@ -128,7 +159,12 @@ function SceneryPiece({ piece }: { piece: SetPiece }) {
         // owns nothing disposable; we only clone for an independent transform
         // node. Re-suppress raycast: clone(true) does not carry the own-property
         // override, so each placement must re-apply it to stay non-pickable.
-        setScene(suppressRaycast(g.clone(true)));
+        const obj = suppressRaycast(g.clone(true));
+        // Normalize the raw NASA model (arbitrary units / off-origin pivot) to a
+        // predictable size, centered on x/z and seated on y=0, so the wrapping
+        // group's position drops it onto the ground at a sensible scale.
+        fitAndSeat(obj, piece.fit);
+        setScene(obj);
         invalidate(); // wake the demand loop so the scenery shows once loaded
       })
       .catch(() => {
@@ -137,7 +173,7 @@ function SceneryPiece({ piece }: { piece: SetPiece }) {
     return () => {
       disposed = true;
     };
-  }, [piece.modelRef, invalidate]);
+  }, [piece.modelRef, piece.fit, invalidate]);
 
   if (!scene) {
     // Box fallback: parked at the set-piece position, raised by half its height
@@ -147,24 +183,23 @@ function SceneryPiece({ piece }: { piece: SetPiece }) {
         geometry={fallbackGeo}
         position={[
           piece.position[0],
-          piece.position[1] + piece.fallback.size[1] / 2,
+          piece.position[1] + fallbackSize[1] / 2,
           piece.position[2],
         ]}
         rotation={piece.rotation}
         raycast={() => null}
       >
-        <meshStandardMaterial color={piece.fallback.color} roughness={1} metalness={0} />
+        <meshStandardMaterial color={piece.fallbackColor} roughness={1} metalness={0} />
       </mesh>
     );
   }
 
+  // The model is pre-normalized (centered x/z, base at y=0), so the group just
+  // positions + orients it on the ground.
   return (
-    <primitive
-      object={scene}
-      position={piece.position}
-      rotation={piece.rotation ?? [0, 0, 0]}
-      scale={piece.scale}
-    />
+    <group position={piece.position} rotation={piece.rotation ?? [0, 0, 0]}>
+      <primitive object={scene} />
+    </group>
   );
 }
 
