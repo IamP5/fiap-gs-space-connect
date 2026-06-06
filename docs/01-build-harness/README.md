@@ -14,7 +14,7 @@ which makes the self-heal beat *stronger*, not weaker.
 there). Then [TECHSPEC.md](./TECHSPEC.md).
 
 **Load-bearing decisions** (these continue the system ADR sequence from
-[docs/mvp/adr/](../mvp/adr/)):
+[docs/00-mvp/adr/](../00-mvp/adr/)):
 
 - [ADR-0005](./adr/0005-llm-build-harness-augments-deterministic-swarm.md) — the harness
   **augments, never replaces** the deterministic swarm; it is best-effort and the core

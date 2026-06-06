@@ -3,8 +3,8 @@
 - **Issue:** [#62](https://github.com/IamP5/fiap-gs-space-connect/issues/62)
 - **Labels:** `area:backend`, `type:feature`
 - **Type:** Epic (downstream — separate from the realism milestone #46)
-- **ADR:** [0010 — live-mode curated Asset catalog](../build-harness/adr/0010-live-mode-curated-asset-catalog.md)
-- **Builds on:** the [realistic-3d-world](../realistic-3d-world/README.md) milestone (Asset catalog #59–#61, vendored Assets #54–#57)
+- **ADR:** [0010 — live-mode curated Asset catalog](../01-build-harness/adr/0010-live-mode-curated-asset-catalog.md)
+- **Builds on:** the [realistic-3d-world](../02-realistic-3d-world/README.md) milestone (Asset catalog #59–#61, vendored Assets #54–#57)
 
 ## What to build
 

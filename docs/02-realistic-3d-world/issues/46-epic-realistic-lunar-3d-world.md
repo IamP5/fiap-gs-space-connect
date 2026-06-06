@@ -2,13 +2,13 @@
 
 - **Issue:** [#46](https://github.com/IamP5/fiap-gs-space-connect/issues/46)
 - **Labels:** `area:frontend`, `type:feature`
-- **ADR:** [0010 — live-mode curated Asset catalog](../../build-harness/adr/0010-live-mode-curated-asset-catalog.md)
+- **ADR:** [0010 — live-mode curated Asset catalog](../../01-build-harness/adr/0010-live-mode-curated-asset-catalog.md)
 
 ## What to build
 
 Make the `web/` R3F lunar scene (`Scene3D.tsx`) as realistic as possible: a full Moon viewable from **orbit** and from the **surface**, plus realistic rovers, habitats, ships/landers, a launch platform/gantry, and construction props the swarm assembles — without breaking the three invariants that make the renderer trustworthy (pure-function-of-snapshot, mandatory primitive fallback, demand-loop perf budget).
 
-Full research lives in **`docs/realistic-3d-world/`** (`realistic-3d-world-assets.md` + the README index).
+Full research lives in **`docs/02-realistic-3d-world/`** (`realistic-3d-world-assets.md` + the README index).
 
 **Locked decisions (grill session):**
 - **Licensing:** **CC0 + NASA/US-gov public-domain only** for what ships (zero attribution obligation; `CREDITS.md` is courtesy; no `/credits` overlay). CC-BY is break-glass only (lands only with an in-app credits affordance). Reject NC/ND/unknown. Self-host **all** assets in `web/public/assets/`.

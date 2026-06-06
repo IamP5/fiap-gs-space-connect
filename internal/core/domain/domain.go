@@ -3,7 +3,7 @@
 // It is the single contract the four deep modules (allocation, lease, world,
 // planner) agree on. It holds data types and small pure helpers only — no NATS,
 // no simulation, no wall clock. See CONTEXT.md for the domain language these
-// names come from and docs/mvp/TECHSPEC.md §4 for the interface contracts.
+// names come from and docs/00-mvp/TECHSPEC.md §4 for the interface contracts.
 package domain
 
 import "math"

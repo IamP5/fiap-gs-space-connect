@@ -2,7 +2,7 @@
 
 > Type: HITL · Build sequence step 7 (stretch) · [TECHSPEC](../TECHSPEC.md) · respects
 > [ADR-0006](../adr/0006-build-spec-is-declarative-data-not-executed-code.md),
-> [ADR-0004](../../mvp/adr/0004-react-three-fiber-3d-built-2d-first.md) · see memory:
+> [ADR-0004](../../00-mvp/adr/0004-react-three-fiber-3d-built-2d-first.md) · see memory:
 > build-harness-agent-topology
 
 ## What to build

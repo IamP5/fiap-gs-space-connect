@@ -7,7 +7,7 @@ primitives — but the Model never emits a free-form `model_ref`. Each Build con
 closed **Asset catalog** (validated Asset-key → `model_ref` pairs); a Rover's Build harness in
 live mode emits only an **Asset key** from that catalog; the coordinator **rejects any
 out-of-catalog key before it folds into the World Model**; and the renderer's mandatory
-primitive fallback ([ADR-0004](../../mvp/adr/0004-react-three-fiber-3d-built-2d-first.md)) still
+primitive fallback ([ADR-0004](../../00-mvp/adr/0004-react-three-fiber-3d-built-2d-first.md)) still
 covers a runtime asset miss. Replay and live draw from the **same** catalog. This extends
 [ADR-0009](./0009-live-build-mode-runs-the-harness-on-the-work-path.md) (live on the work path)
 and [ADR-0006](./0006-build-spec-is-declarative-data-not-executed-code.md) (Build spec is data).
@@ -15,7 +15,7 @@ and [ADR-0006](./0006-build-spec-is-declarative-data-not-executed-code.md) (Buil
 ## Context
 
 ADR-0009 put the Model on the live work path; ADR-0006's `model` op + `model_ref` slot let a
-Build spec place a glTF. The realism work (`docs/realistic-3d-world/`) vendors curated,
+Build spec place a glTF. The realism work (`docs/02-realistic-3d-world/`) vendors curated,
 licensed Assets (rovers, habitats, launch set-pieces) and wires them through the existing
 `SpecModel` seam. The open question was whether **live** mode — where the Model emits ops *as
 it works* — may place those Assets, and if so, how without reintroducing the two risks the
@@ -24,7 +24,7 @@ project is built to avoid:
 - **Nondeterminism / hallucination** on the headline-adjacent work path: a Model free to emit
   any `model_ref` string can invent a path, point at a gone asset, or drift between runs.
 - **Licensing exposure:** a free-form ref could pull in art outside the
-  CC0 + NASA-PD posture (`docs/realistic-3d-world/`).
+  CC0 + NASA-PD posture (`docs/02-realistic-3d-world/`).
 
 The operator wants live mode to compose real Assets + procedural geometry (not be primitive-
 only), and for Blueprints to carry "a ready architecture to delegate to." The resolution is to

@@ -68,7 +68,7 @@ blockers are noted.
 Live **and** replay Build modes place curated **Assets** from a closed, contract-carried
 **Asset catalog** by **key** — the Model never emits a free-form ref, and the coordinator
 validates catalog membership before the World Model fold (see
-[`docs/build-harness/adr/0010-live-mode-curated-asset-catalog.md`](../build-harness/adr/0010-live-mode-curated-asset-catalog.md)).
+[`docs/01-build-harness/adr/0010-live-mode-curated-asset-catalog.md`](../01-build-harness/adr/0010-live-mode-curated-asset-catalog.md)).
 #55 (habitats) and #57 (task-placed props) **populate** the catalog; #54 (rover) is a
 `Rover3D` render swap and #56 (launch) is **Scenery** — neither is a catalog Asset.
 
@@ -77,4 +77,4 @@ validates catalog membership before the World Model fold (see
 [#62 — Natural-language Blueprint authoring](https://github.com/IamP5/fiap-gs-space-connect/issues/62)
 (Architect extension) is a **separate epic** downstream of this milestone — it composes Blueprints
 from a stated goal using the Asset catalog. It has its own folder:
-[`docs/nl-blueprint-authoring/`](../nl-blueprint-authoring/README.md). Not part of the realism slices.
+[`docs/03-nl-blueprint-authoring/`](../03-nl-blueprint-authoring/README.md). Not part of the realism slices.

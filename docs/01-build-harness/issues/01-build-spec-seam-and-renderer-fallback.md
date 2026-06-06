@@ -2,7 +2,7 @@
 
 > Type: AFK · Build sequence step 1 · [TECHSPEC](../TECHSPEC.md) · respects
 > [ADR-0006](../adr/0006-build-spec-is-declarative-data-not-executed-code.md),
-> [ADR-0004](../../mvp/adr/0004-react-three-fiber-3d-built-2d-first.md)
+> [ADR-0004](../../00-mvp/adr/0004-react-three-fiber-3d-built-2d-first.md)
 
 ## What to build
 

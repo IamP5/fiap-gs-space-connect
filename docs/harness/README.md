@@ -6,8 +6,8 @@
 > harness before you blame the model.*
 
 This folder is the operating system for agent work on SwarmBuild. It complements — does
-not replace — the engineering docs (`CONTEXT.md`, `DESIGN.md`, `docs/mvp/`,
-`docs/build-harness/`). Those say *what we're building*; the harness says *how a session
+not replace — the engineering docs (`CONTEXT.md`, `DESIGN.md`, `docs/00-mvp/`,
+`docs/01-build-harness/`). Those say *what we're building*; the harness says *how a session
 runs*.
 
 It is adapted from the [Harness Engineering course](https://walkinglabs.github.io/learn-harness-engineering/en/)

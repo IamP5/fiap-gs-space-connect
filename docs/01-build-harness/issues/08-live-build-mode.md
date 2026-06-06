@@ -4,7 +4,7 @@
 > [TECHSPEC](../TECHSPEC.md) §5 · governed by
 > [ADR-0009](../adr/0009-live-build-mode-runs-the-harness-on-the-work-path.md);
 > upholds [ADR-0006](../adr/0006-build-spec-is-declarative-data-not-executed-code.md),
-> [ADR-0004](../../mvp/adr/0004-react-three-fiber-3d-built-2d-first.md)
+> [ADR-0004](../../00-mvp/adr/0004-react-three-fiber-3d-built-2d-first.md)
 >
 > **This is the parent overview.** It is broken into seven grabbable sub-slices (08a–08g);
 > implement those, not this file. See the table under *Sub-slices* below.

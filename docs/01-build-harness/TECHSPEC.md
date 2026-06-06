@@ -1,9 +1,9 @@
 # Build Harness — Technical Specification
 
-> The AI construction layer over the [SwarmBuild MVP](../mvp/TECHSPEC.md).
+> The AI construction layer over the [SwarmBuild MVP](../00-mvp/TECHSPEC.md).
 > Domain language: [CONTEXT.md](../../CONTEXT.md) (load-bearing — Architect, Build contract,
 > Build harness, Build spec, Model seam, Build envelope).
-> Load-bearing decisions: [adr/](./adr/) (0005–0007), continuing [docs/mvp/adr/](../mvp/adr/).
+> Load-bearing decisions: [adr/](./adr/) (0005–0007), continuing [docs/00-mvp/adr/](../00-mvp/adr/).
 > Status: ready to build (layered on the shipped deep core + sim + bus + 3D dashboard).
 
 ## 1. What this is

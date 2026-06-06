@@ -13,7 +13,7 @@ The feature was first described as workers emitting "three.js code to be injecte
 webapp." Taken literally that means `eval()`/`new Function()` on model output in the browser.
 That is arbitrary code execution in the dashboard, and it breaks the load-bearing invariant
 of the frontend: the dashboard is a **pure re-render of the server-authoritative snapshot**
-([ADR-0004](../../mvp/adr/0004-react-three-fiber-3d-built-2d-first.md)), which is what makes
+([ADR-0004](../../00-mvp/adr/0004-react-three-fiber-3d-built-2d-first.md)), which is what makes
 it safe, testable, reconnect-proof, and unable to lie about World Model state. Executed code
 also cannot be cached, replayed, or validated, and a bad snippet can crash the renderer
 mid-demo.

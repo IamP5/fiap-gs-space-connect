@@ -4,7 +4,7 @@
 - **Epic:** [#46](https://github.com/IamP5/fiap-gs-space-connect/issues/46)
 - **Labels:** `area:backend`, `type:feature`
 - **Type:** AFK
-- **ADR:** [0010 — live-mode curated Asset catalog](../../build-harness/adr/0010-live-mode-curated-asset-catalog.md)
+- **ADR:** [0010 — live-mode curated Asset catalog](../../01-build-harness/adr/0010-live-mode-curated-asset-catalog.md)
 
 ## What to build
 

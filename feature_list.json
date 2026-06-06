@@ -251,7 +251,7 @@
       "evidence": [
         "internal/harness/vision: bake-time headless-Chrome render of the REAL Scene3D → screenshot → gpt-4o vision score → silhouette soft-rubric dimension (0-2 + evidence) into the trace; bake/lab only (archtest TestHeadlinePathMakesZeroVisionCalls green)",
         "live: dome-cap iter0 silhouette 0 ('flat white dot') → refine → iter1 silhouette 2 ('clear dome shape') in the committed trace — the 'passes analytic, looks wrong → refine' lever end-to-end",
-        "Gemini provider-swap config-only (gemini-2.5-flash, strict json_schema held first try, validate-and-repair retained); doc note docs/build-harness/vision-pass-and-provider-swap.md; make check + smoke green; PR #9 (bh/06→bh/04)"
+        "Gemini provider-swap config-only (gemini-2.5-flash, strict json_schema held first try, validate-and-repair retained); doc note docs/01-build-harness/vision-pass-and-provider-swap.md; make check + smoke green; PR #9 (bh/06→bh/04)"
       ],
       "notes": "HITL. Vision pass sources the silhouette rubric dimension; bake/lab only — zero vision calls on the headline. Landed in PR #9; integrated + verified green."
     },
