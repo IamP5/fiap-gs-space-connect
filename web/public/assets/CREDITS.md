@@ -32,6 +32,18 @@ The pack's bundled `License.txt` states verbatim:
 > This content is free to use in personal, educational and commercial projects.
 > Support us by crediting Kenney or www.kenney.nl (this is not mandatory)
 
+## Conditioned models (Issue #52 — geometry-baked + Draco-compressed)
+
+Produced OFFLINE by `scripts/condition-asset.mjs` (see `scripts/README.md`):
+up-axis fix, `computeVertexNormals()` when missing, recenter-to-origin,
+fit-to-unit, NASA-insignia strip, then `gltf-transform optimize --compress draco`.
+These require the self-hosted Draco decoder under `web/public/draco/` to load
+(no gstatic CDN). The conditioned `.glb` is committed; sources are not.
+
+| File | Source asset | Author | Source URL | License | Conditioning |
+|------|--------------|--------|-----------|---------|--------------|
+| `models/machine_generator_draco.glb` | `models/machine_generator.glb` (Kenney Space Kit, CC0) | Kenney (kenney.nl) | https://kenney.nl/assets/space-kit | CC0 1.0 | recenter + fit-to-unit + `--compress draco` (28.3 KB → 3.1 KB). Proves the Draco decode path end-to-end. |
+
 ## Textures
 
 | File | Source asset | Authors | Source URL | License |
