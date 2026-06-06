@@ -7,6 +7,7 @@ import (
 	"swarmbuild/internal/core/domain"
 	"swarmbuild/internal/harness/loop"
 	"swarmbuild/internal/harness/model"
+	"swarmbuild/internal/harness/spec"
 	"swarmbuild/internal/wire"
 	"testing"
 )
@@ -48,22 +49,54 @@ func fakeBuilder(fake *model.FakeModel) *Builder {
 	return NewBuilderWithGenerator(loop.ModelGenerator{M: fake}, "fake", "fake-model")
 }
 
+// collect drives BuildLive and gathers every streamed iteration batch plus the
+// flattened patch log, so a test can assert on what the live path emits (bh-08d).
+type collected struct {
+	batches [][]wire.BuildOp
+	log     []wire.BuildOp
+	ok      bool
+}
+
+func collect(t *testing.T, b *Builder, task domain.TaskID, taskType domain.TaskType) collected {
+	t.Helper()
+	var c collected
+	c.ok = b.BuildLive(context.Background(), task, taskType, func(ops []wire.BuildOp) {
+		c.batches = append(c.batches, ops)
+		c.log = append(c.log, ops...)
+	})
+	return c
+}
+
 // TestBuildLive_GeneratesAcceptedSpec: a FakeModel returning a hard-gate-passing
-// foundation spec flows through the real harness and BuildLive returns those ops
-// with ok=true — the Rover builds from generated ops (no network).
+// foundation spec flows through the real harness and BuildLive streams those ops as
+// a place batch with ok=true — the Rover builds from generated ops (no network). The
+// streamed patch log folds to the generated geometry.
 func TestBuildLive_GeneratesAcceptedSpec(t *testing.T) {
 	fake := &model.FakeModel{Responses: []json.RawMessage{specJSON(t, richFoundation())}}
 	b := fakeBuilder(fake)
 
-	ops, ok := b.BuildLive(context.Background(), "foundation-1", "foundation")
-	if !ok {
+	c := collect(t, b, "foundation-1", "foundation")
+	if !c.ok {
 		t.Fatalf("expected accepted live spec, got ok=false")
 	}
-	if len(ops) != len(richFoundation()) {
-		t.Fatalf("expected %d generated ops, got %d", len(richFoundation()), len(ops))
+	folded, err := spec.Fold(c.log)
+	if err != nil {
+		t.Fatalf("streamed patch log must fold cleanly: %v", err)
 	}
-	if ops[0].Shape != wire.ShapeBox {
-		t.Fatalf("expected the generated slab first, got %v", ops[0].Shape)
+	if len(folded) != len(richFoundation()) {
+		t.Fatalf("expected %d folded ops, got %d", len(richFoundation()), len(folded))
+	}
+	if folded[0].Shape != wire.ShapeBox {
+		t.Fatalf("expected the generated slab first, got %v", folded[0].Shape)
+	}
+	// A single accepted iteration streams as place-only ops (nothing to self-correct).
+	for i, op := range c.log {
+		if op.Op != wire.BuildOpPlace {
+			t.Fatalf("op %d: first accepted spec must stream as a place, got %q", i, op.Op)
+		}
+		if op.ID == "" {
+			t.Fatalf("op %d: a streamed place must carry a stable slot id", i)
+		}
 	}
 }
 
@@ -78,12 +111,12 @@ func TestBuildLive_RepairsThenAccepts(t *testing.T) {
 	}}
 	b := fakeBuilder(fake)
 
-	ops, ok := b.BuildLive(context.Background(), "foundation-1", "foundation")
-	if !ok {
+	c := collect(t, b, "foundation-1", "foundation")
+	if !c.ok {
 		t.Fatalf("expected accepted after one repair, got ok=false")
 	}
-	if len(ops) == 0 {
-		t.Fatalf("expected repaired ops, got none")
+	if len(c.log) == 0 {
+		t.Fatalf("expected repaired ops streamed, got none")
 	}
 	if fake.Calls() != 2 {
 		t.Fatalf("expected exactly one repair re-ask (2 Generate calls), got %d", fake.Calls())
@@ -98,12 +131,12 @@ func TestBuildLive_ForcedErrorDegradesGracefully(t *testing.T) {
 	fake := &model.FakeModel{Err: errors.New("simulated provider timeout")}
 	b := fakeBuilder(fake)
 
-	ops, ok := b.BuildLive(context.Background(), "foundation-1", "foundation")
-	if ok {
-		t.Fatalf("a forced model error must degrade to fallback (ok=false), got ok=true with %d ops", len(ops))
+	c := collect(t, b, "foundation-1", "foundation")
+	if c.ok {
+		t.Fatalf("a forced model error must degrade to fallback (ok=false), got ok=true with %d ops", len(c.log))
 	}
-	if ops != nil {
-		t.Fatalf("fallback must return nil ops, got %#v", ops)
+	if len(c.batches) != 0 {
+		t.Fatalf("fallback must stream nothing, got %d iteration batches", len(c.batches))
 	}
 }
 
@@ -113,10 +146,100 @@ func TestBuildLive_UnknownTaskTypeDegrades(t *testing.T) {
 	fake := &model.FakeModel{Responses: []json.RawMessage{specJSON(t, richFoundation())}}
 	b := fakeBuilder(fake)
 
-	if _, ok := b.BuildLive(context.Background(), "mystery-1", "mystery"); ok {
+	if c := collect(t, b, "mystery-1", "mystery"); c.ok {
 		t.Fatalf("an unknown task type must degrade to fallback (ok=false)")
 	}
 	if fake.Calls() != 0 {
 		t.Fatalf("an unbuildable contract must not reach the model; got %d Generate calls", fake.Calls())
+	}
+}
+
+// TestStreamer_DiffsIterationsIntoPatches: the per-iteration differ turns successive
+// accepted specs into place/move/delete patches on stable slot ids (bh-08d, 08a op
+// identity), so the world self-corrects IN PLACE. It drives the streamer directly:
+// iter1 places two pieces; iter2 moves slot 0, recolours slot 1, and drops slot 2's
+// absence — the streamed log must fold to iter2's geometry.
+func TestStreamer_DiffsIterationsIntoPatches(t *testing.T) {
+	box := func(pos domain.Vec3, color string) wire.BuildOp {
+		return wire.BuildOp{
+			Op:       wire.BuildOpPlace,
+			Shape:    wire.ShapeBox,
+			Pos:      pos,
+			Scale:    domain.Vec3{X: 1, Y: 1, Z: 1},
+			Material: wire.Material{Color: color},
+		}
+	}
+	iter1 := []wire.BuildOp{
+		box(domain.Vec3{X: 0, Y: 0, Z: 0}, "#111111"),
+		box(domain.Vec3{X: 1, Y: 0, Z: 0}, "#222222"),
+		box(domain.Vec3{X: 2, Y: 0, Z: 0}, "#333333"),
+	}
+	// iter2: slot0 moves, slot1 recolours in place, slot2 is dropped.
+	iter2 := []wire.BuildOp{
+		box(domain.Vec3{X: 0, Y: 5, Z: 0}, "#111111"), // moved up
+		box(domain.Vec3{X: 1, Y: 0, Z: 0}, "#ff0000"), // recoloured
+	}
+
+	var log []wire.BuildOp
+	s := &streamer{emit: func(ops []wire.BuildOp) { log = append(log, ops...) }}
+	s.onIteration(1, iter1)
+	s.onIteration(2, iter2)
+
+	if s.emitted != 2 {
+		t.Fatalf("expected 2 streamed iterations, got %d", s.emitted)
+	}
+
+	var sawMove, sawDelete bool
+	for _, op := range log {
+		switch op.Op {
+		case wire.BuildOpMove:
+			sawMove = true
+		case wire.BuildOpDelete:
+			sawDelete = true
+		}
+	}
+	if !sawMove {
+		t.Fatalf("a moved piece must stream a move patch; log=%+v", log)
+	}
+	if !sawDelete {
+		t.Fatalf("a dropped piece must stream a delete patch; log=%+v", log)
+	}
+
+	folded, err := spec.Fold(log)
+	if err != nil {
+		t.Fatalf("streamed patch log must fold cleanly: %v", err)
+	}
+	if len(folded) != 2 {
+		t.Fatalf("after dropping slot2, fold must leave 2 pieces, got %d", len(folded))
+	}
+	if folded[0].Pos.Y != 5 {
+		t.Fatalf("slot0 must be moved to y=5, got %+v", folded[0])
+	}
+	if folded[1].Material.Color != "#ff0000" {
+		t.Fatalf("slot1 must be recoloured #ff0000, got %q", folded[1].Material.Color)
+	}
+}
+
+// TestStreamer_UnchangedIterationStreamsNothing: an iteration identical to the last
+// produces no patch (no churn on the bus), so a stable refine pass does not re-stream.
+func TestStreamer_UnchangedIterationStreamsNothing(t *testing.T) {
+	ops := []wire.BuildOp{
+		{
+			Op:       wire.BuildOpPlace,
+			Shape:    wire.ShapeBox,
+			Pos:      domain.Vec3{X: 0, Y: 0, Z: 0},
+			Scale:    domain.Vec3{X: 1, Y: 1, Z: 1},
+			Material: wire.Material{Color: "#abcabc"},
+		},
+	}
+	var calls int
+	s := &streamer{emit: func([]wire.BuildOp) { calls++ }}
+	s.onIteration(1, ops)
+	s.onIteration(2, ops) // identical: no patch
+	if calls != 1 {
+		t.Fatalf("an unchanged iteration must not re-stream; emit called %d times", calls)
+	}
+	if s.emitted != 1 {
+		t.Fatalf("expected exactly 1 emitted iteration, got %d", s.emitted)
 	}
 }

@@ -14,14 +14,20 @@
 // composition root (cmd/agent) constructs this Builder and injects it. The
 // archtest enforces the boundary mechanically.
 //
-// First cut (bh-08b) emits a single accepted spec (place-only ops). Per-iteration
-// patch streaming is a later slice (08d); failure-heal/retry is 08f. On loop
-// exhaustion BuildLive returns ok=false so the Rover degrades to its deterministic
-// replay/primitive stream — a model fault never crashes the swarm.
+// bh-08d evolves this from "emit a single accepted spec once" to STREAMING each
+// accepted/revised refine iteration as patch ops: BuildLive takes an emit callback
+// that the refine loop drives once per hard-gate-passing pass, and this package
+// DIFFS each iteration against the last to produce place/move/delete patches (08a op
+// identity) so the world visibly grows and self-corrects between passes. The Rover
+// paces the emitted ops onto build.op.<task> by the Choreography cadence. On loop
+// exhaustion BuildLive returns ok=false (nothing emitted) so the Rover degrades to
+// its deterministic replay/primitive stream — a model fault never crashes the swarm.
+// Failure-heal/retry is 08f.
 package live
 
 import (
 	"context"
+	"fmt"
 	"log/slog"
 	"swarmbuild/internal/core/domain"
 	"swarmbuild/internal/harness/bake"
@@ -63,32 +69,46 @@ func NewBuilderWithGenerator(gen Generator, provider, modelID string) *Builder {
 	return &Builder{gen: gen, provider: provider, modelID: modelID}
 }
 
-// BuildLive runs the Generator↔Evaluator refine loop for one Task and returns the
-// accepted Build spec ops (ok=true) — the inline-generation work phase. It returns
-// ok=false on loop exhaustion (no hard-gate-passing spec), an unbuildable contract
-// (e.g. an unknown task type), or an empty accepted spec, so the Rover degrades to
-// its deterministic replay/primitive stream and the Task still completes (ADR-0005
-// fallback; failure-heal is slice 08f). It makes a LIVE model call and so must run
+// BuildLive runs the Generator↔Evaluator refine loop for one Task and STREAMS each
+// accepted/revised iteration to emit as a batch of patch ops, AS the loop produces
+// it (bh-08d). emit is called once per hard-gate-passing refine pass with that
+// iteration's patch batch — place ops for the first accepted spec, then move/delete/
+// place patches that turn the previously-emitted geometry into this pass's geometry
+// (08a op identity), so the Rover, pacing them onto build.op.<task>, makes the world
+// visibly grow and self-correct between passes. Each batch is a defensive copy emit
+// may retain; emit runs ON the loop goroutine, so the Rover's emit hands off promptly.
+//
+// It returns ok=true once at least one iteration has been emitted, ok=false on loop
+// exhaustion (no hard-gate-passing spec), an unbuildable contract (e.g. an unknown
+// task type), or an empty accepted spec — so the Rover degrades to its deterministic
+// replay/primitive stream and the Task still completes (ADR-0005 fallback;
+// failure-heal is slice 08f). When ok=false nothing was emitted, so the Rover's
+// fallback starts from a clean op stream. It makes a LIVE model call and so must run
 // ONLY off the hot path, reached through the injected agent.LiveBuilder seam.
-func (b *Builder) BuildLive(ctx context.Context, task domain.TaskID, taskType domain.TaskType) ([]wire.BuildOp, bool) {
+func (b *Builder) BuildLive(ctx context.Context, task domain.TaskID, taskType domain.TaskType, emit func(iterationOps []wire.BuildOp)) bool {
 	contract, err := bake.DemoContract(task, taskType)
 	if err != nil {
 		slog.Warn("live build: no contract for task", "task", task, "type", taskType, "error", err)
-		return nil, false
+		return false
 	}
 
 	contractJSON, err := contract.JSON()
 	if err != nil {
 		slog.Warn("live build: contract marshal failed", "task", task, "error", err)
-		return nil, false
+		return false
 	}
 
 	world := bake.WorldContext{Note: "live build mode: rover builds inline in the Task envelope frame"}
 	messages, err := bake.BuildPrompt(contract, contractJSON, world)
 	if err != nil {
 		slog.Warn("live build: prompt build failed", "task", task, "error", err)
-		return nil, false
+		return false
 	}
+
+	// streamer diffs each accepted iteration against the last and turns it into a
+	// patch batch (place/move/delete) on stable per-slot ids, so successive passes
+	// move/recolour/remove pieces IN PLACE rather than re-placing the whole world.
+	stream := &streamer{emit: emit}
 
 	eval := evaluator.New(evaluator.Config{})
 	out := loop.Run(ctx, b.gen, eval, loop.Request{
@@ -98,12 +118,147 @@ func (b *Builder) BuildLive(ctx context.Context, task domain.TaskID, taskType do
 		SubjectOrigin: world.SubjectOrigin,
 		Neighbours:    world.Neighbours,
 		TaskType:      string(contract.Type),
+		EmitAccepted:  stream.onIteration,
 	})
 
-	if !out.Accepted() || len(out.Ops) == 0 {
+	// The loop keeps the BEST passing spec, which may differ from the LAST emitted
+	// iteration (a later pass can score lower). Reconcile the streamed geometry to
+	// the accepted Outcome so the durable patch log folds to exactly what the loop
+	// chose to cache — the same spec a non-streaming bake would accept.
+	if out.Accepted() && len(out.Ops) > 0 {
+		stream.reconcile(out.Ops)
+	}
+
+	if stream.emitted == 0 {
 		slog.Warn("live build exhausted: degrading to replay/primitive",
 			"task", task, "type", taskType, "reason", out.Reason)
-		return nil, false
+		return false
 	}
-	return out.Ops, true
+	return true
+}
+
+// streamer turns the refine loop's per-iteration accepted specs into an append-only
+// patch log: the FIRST accepted spec is emitted as place ops (stable per-slot ids);
+// each later spec is diffed against the previous one into move/delete/place patches,
+// so the renderer's fold updates pieces IN PLACE between passes (bh-08d, 08a fold).
+// It is not goroutine-safe: the loop drives onIteration serially on its own goroutine.
+type streamer struct {
+	emit    func(ops []wire.BuildOp)
+	prev    []wire.BuildOp // last folded geometry we've streamed, keyed by slot id
+	emitted int            // number of iterations streamed (the ok signal)
+}
+
+// slotID is the stable key for the i-th piece across iterations. Diffing on slot
+// index lets a later pass MOVE/RECOLOUR the same piece instead of re-placing it.
+func slotID(i int) string { return fmt.Sprintf("p%d", i) }
+
+// onIteration streams one accepted iteration. The first becomes place ops; later
+// iterations become a diff patch against the previously-streamed geometry.
+func (s *streamer) onIteration(_ int, ops []wire.BuildOp) {
+	patch := s.diff(ops)
+	if len(patch) == 0 {
+		return // identical to the last iteration: nothing to stream
+	}
+	s.emit(patch)
+	s.emitted++
+}
+
+// reconcile emits a final patch so the streamed geometry matches the loop's chosen
+// best spec (which may be an EARLIER iteration than the last). If the last streamed
+// iteration already equals it, diff yields no ops and nothing extra is streamed.
+func (s *streamer) reconcile(best []wire.BuildOp) {
+	patch := s.diff(best)
+	if len(patch) == 0 {
+		return
+	}
+	s.emit(patch)
+	s.emitted++
+}
+
+// diff computes the patch ops that turn the previously-streamed geometry (s.prev)
+// into next, on stable per-slot ids, and advances s.prev. The Generator emits
+// place-only, transform-bearing ops; we key them by slot index:
+//
+//   - new slot (next longer than prev): a place.
+//   - existing slot with a changed shape: delete + place (a shape change can't be a
+//     move; move only carries pos/rot/scale, 08a).
+//   - existing slot with same shape but changed transform/material: a place
+//     overwrite (last-write-wins on the id) — the simplest patch the fold honours.
+//   - dropped slot (prev longer than next): a delete.
+//
+// A slot identical across iterations yields no op, so an unchanged piece does not
+// re-stream. The returned ops carry the slot id so the fold updates in place.
+func (s *streamer) diff(next []wire.BuildOp) []wire.BuildOp {
+	var patch []wire.BuildOp
+	for i := range next {
+		op := next[i]
+		op.ID = slotID(i)
+		if i >= len(s.prev) {
+			op.Op = wire.BuildOpPlace
+			patch = append(patch, op)
+			continue
+		}
+		if opEqual(s.prev[i], op) {
+			continue // unchanged piece: no patch
+		}
+		if s.prev[i].Shape != op.Shape {
+			// A shape change is delete + re-place (move carries only the transform).
+			patch = append(patch, wire.BuildOp{Op: wire.BuildOpDelete, ID: op.ID})
+			op.Op = wire.BuildOpPlace
+			patch = append(patch, op)
+			continue
+		}
+		if transformEqual(s.prev[i], op) {
+			// Same shape + transform, only material changed: re-place to recolour.
+			op.Op = wire.BuildOpPlace
+			patch = append(patch, op)
+			continue
+		}
+		// Same shape, moved (and possibly recoloured): a move updates the transform,
+		// then a place overwrites if the material also changed.
+		patch = append(patch, wire.BuildOp{Op: wire.BuildOpMove, ID: op.ID, Pos: op.Pos, Rot: op.Rot, Scale: op.Scale})
+		if !materialEqual(s.prev[i].Material, op.Material) {
+			op.Op = wire.BuildOpPlace
+			patch = append(patch, op)
+		}
+	}
+	// Slots that vanished in the new spec are deleted (highest index first so a
+	// fold never references a slot that a later delete in the same batch removed).
+	for i := len(next); i < len(s.prev); i++ {
+		patch = append(patch, wire.BuildOp{Op: wire.BuildOpDelete, ID: slotID(i)})
+	}
+
+	// Advance s.prev to the new geometry as place ops (the canonical slot state).
+	prev := make([]wire.BuildOp, len(next))
+	for i := range next {
+		prev[i] = next[i]
+		prev[i].Op = wire.BuildOpPlace
+		prev[i].ID = slotID(i)
+	}
+	s.prev = prev
+	return patch
+}
+
+// opEqual reports whether two ops describe the same rendered piece (shape +
+// transform + material). Op/ID are ignored — the slot id is assigned by the differ.
+func opEqual(a, b wire.BuildOp) bool {
+	return a.Shape == b.Shape && transformEqual(a, b) && materialEqual(a.Material, b.Material)
+}
+
+func transformEqual(a, b wire.BuildOp) bool {
+	return a.Pos == b.Pos && a.Rot == b.Rot && a.Scale == b.Scale
+}
+
+// materialEqual compares two materials including the optional *float64 PBR fields by
+// value (nil ⇄ set is a difference; both nil is equal).
+func materialEqual(a, b wire.Material) bool {
+	return a.Color == b.Color && a.Map == b.Map &&
+		floatPtrEqual(a.Roughness, b.Roughness) && floatPtrEqual(a.Metalness, b.Metalness)
+}
+
+func floatPtrEqual(a, b *float64) bool {
+	if a == nil || b == nil {
+		return a == b
+	}
+	return *a == *b
 }

@@ -94,6 +94,18 @@ type Request struct {
 	// loop's decision or the cached result, runs on the loop's own goroutine, and
 	// is nil on every bake/headline path (so behaviour there is byte-identical).
 	Observer Observer
+
+	// EmitAccepted is an OPTIONAL per-iteration streaming hook (bh-08d, Live Build
+	// Mode): when non-nil it is called with the Generator's ops EACH TIME a refine
+	// pass produces a hard-gate-passing (renderable) spec, AS IT HAPPENS — so the
+	// live work phase can stream each accepted/revised iteration onto build.op.<task>
+	// and the world visibly grows and self-corrects between passes, rather than
+	// receiving one terminal blob. It is fed a defensive copy it may retain. Like
+	// Observer it is purely observational — it never affects the loop's decision or
+	// the final Outcome (which still carries the single best spec) — and runs on the
+	// loop's own goroutine, so a streaming sink must hand off promptly. It is nil on
+	// every bake/headline/lab path, keeping behaviour there byte-identical.
+	EmitAccepted func(iter int, ops []wire.BuildOp)
 }
 
 // Observer receives a copy of each refine pass's Generator output and Evaluator
@@ -170,6 +182,11 @@ func Run(ctx context.Context, gen Generator, eval *evaluator.Evaluator, req Requ
 		iterations = append(iterations, trace.Iteration{GenOps: cloneOps(ops), Verdict: v})
 
 		if v.Pass() {
+			// STREAM this accepted/revised iteration (bh-08d): every hard-gate-passing
+			// pass is renderable, so the live work phase can emit it as patches and the
+			// world grows/self-corrects between passes. Purely observational — it does
+			// not change which spec the loop ultimately caches below.
+			emitAccepted(req.EmitAccepted, iter, ops)
 			if v.SoftScore() > bestScore {
 				bestScore = v.SoftScore()
 				bestOps = cloneOps(ops)
@@ -250,6 +267,16 @@ func notifyObserver(o Observer, iter int, ops []wire.BuildOp, v evaluator.Verdic
 		return
 	}
 	o.OnIteration(iter, cloneOps(ops), v)
+}
+
+// emitAccepted streams one hard-gate-passing pass's ops to the optional bh-08d
+// per-iteration sink, handing it a defensive copy so it may retain them. A nil
+// sink (every bake/headline/lab run) is a no-op, keeping Run byte-identical there.
+func emitAccepted(emit func(iter int, ops []wire.BuildOp), iter int, ops []wire.BuildOp) {
+	if emit == nil {
+		return
+	}
+	emit(iter, cloneOps(ops))
 }
 
 // scoreVision runs the optional bake-time vision pass on a hard-gate-passing spec

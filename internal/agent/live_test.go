@@ -5,6 +5,7 @@ import (
 	"swarmbuild/internal/bus"
 	"swarmbuild/internal/bus/bustest"
 	"swarmbuild/internal/core/domain"
+	"swarmbuild/internal/harness/spec"
 	"swarmbuild/internal/wire"
 	"sync"
 	"testing"
@@ -12,25 +13,35 @@ import (
 )
 
 // fakeLiveBuilder is a no-network agent.LiveBuilder for the live-mode integration
-// tests: it returns a scripted op stream (ok=true), or — when Fail is set —
-// ok=false to exercise the graceful degrade-to-primitive path. It records each
-// call so a test can assert the live seam was (or was not) reached.
+// tests: it streams one or more scripted iteration batches (ok=true), or — when
+// Fail is set — emits nothing and returns ok=false to exercise the graceful
+// degrade-to-primitive path. It records each call so a test can assert the live
+// seam was (or was not) reached. A single ops slice is streamed as one iteration;
+// iters (when set) streams each batch as its own iteration, modelling self-correction.
 type fakeLiveBuilder struct {
-	ops  []wire.BuildOp
-	fail bool
+	ops   []wire.BuildOp   // single-iteration script (used when iters is nil)
+	iters [][]wire.BuildOp // multi-iteration script: one emit per batch
+	fail  bool
 
 	mu    sync.Mutex
 	calls int
 }
 
-func (f *fakeLiveBuilder) BuildLive(_ context.Context, _ domain.TaskID, _ domain.TaskType) ([]wire.BuildOp, bool) {
+func (f *fakeLiveBuilder) BuildLive(_ context.Context, _ domain.TaskID, _ domain.TaskType, emit func([]wire.BuildOp)) bool {
 	f.mu.Lock()
 	f.calls++
 	f.mu.Unlock()
 	if f.fail {
-		return nil, false
+		return false // nothing emitted: the rover degrades to replay/primitive
 	}
-	return f.ops, true
+	if f.iters != nil {
+		for _, batch := range f.iters {
+			emit(batch)
+		}
+		return true
+	}
+	emit(f.ops)
+	return true
 }
 
 func (f *fakeLiveBuilder) callCount() int {
@@ -179,6 +190,111 @@ func TestLiveMode_BuildsFromGeneratedOps(t *testing.T) {
 			t.Fatalf("op %d: expected Seq %d, got %d", i, i, m.Seq)
 		}
 	}
+}
+
+// TestLiveMode_StreamsIterationsAndSelfCorrects: a LiveBuilder that emits MULTIPLE
+// iterations streams each iteration's patch batch onto build.op.<task> as separate
+// paced ops (Seq monotonic ACROSS iterations), and a later iteration's move/delete
+// patches update the world IN PLACE — the bh-08d "grows and self-corrects" path.
+// The streamed patch log folds to the final geometry (the renderer's pure fold).
+func TestLiveMode_StreamsIterationsAndSelfCorrects(t *testing.T) {
+	sphere := func(id string, y, scale float64, color string) wire.BuildOp {
+		return wire.BuildOp{
+			Op:       wire.BuildOpPlace,
+			ID:       id,
+			Shape:    wire.ShapeSphere,
+			Pos:      domain.Vec3{X: 0, Y: y, Z: 0},
+			Scale:    domain.Vec3{X: scale, Y: scale, Z: scale},
+			Material: wire.Material{Color: color},
+		}
+	}
+	// Iteration 1: place two pieces. Iteration 2: move p0 up + recolour, delete p1 —
+	// the self-correction (a piece visibly moves/recolours, another vanishes).
+	iter1 := []wire.BuildOp{sphere("p0", 1, 0.5, "#11ff22"), sphere("p1", 2, 0.4, "#11ff22")}
+	iter2 := []wire.BuildOp{
+		{Op: wire.BuildOpMove, ID: "p0", Pos: domain.Vec3{X: 0, Y: 3, Z: 0}, Scale: domain.Vec3{X: 0.5, Y: 0.5, Z: 0.5}},
+		sphere("p0", 3, 0.5, "#ff0000"), // recolour after the move
+		{Op: wire.BuildOpDelete, ID: "p1"},
+	}
+	builder := &fakeLiveBuilder{iters: [][]wire.BuildOp{iter1, iter2}}
+	h := newLiveHarness(t, "R-live-iter", Config{Mode: ModeLive, LiveBuilder: builder})
+
+	h.award(t, "foundation-live")
+
+	wantTotal := len(iter1) + len(iter2)
+	deadline := time.Now().Add(5 * time.Second)
+	for time.Now().Before(deadline) {
+		if h.completes() > 0 && len(h.ops()) >= wantTotal {
+			break
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
+	if h.completes() == 0 {
+		t.Fatalf("live-mode multi-iteration rover did not complete the task")
+	}
+
+	got := h.ops()
+	if len(got) != wantTotal {
+		t.Fatalf("expected %d streamed ops across two iterations, got %d", wantTotal, len(got))
+	}
+	// Seq is monotonic across iterations and the op kinds prove move/delete streamed.
+	assertMonotonicSeq(t, got)
+	assertStreamedKinds(t, got, wire.BuildOpMove, wire.BuildOpDelete)
+
+	// The whole streamed patch log folds to the final geometry: p0 moved+recoloured,
+	// p1 gone — exactly the renderer's pure fold (ADR-0004 / 08a).
+	folded := foldStreamed(t, got)
+	if len(folded) != 1 {
+		t.Fatalf("after delete of p1, fold must leave 1 piece, got %d", len(folded))
+	}
+	if folded[0].ID != "p0" || folded[0].Pos.Y != 3 || folded[0].Material.Color != "#ff0000" {
+		t.Fatalf("folded piece must be the moved+recoloured p0 at y=3 #ff0000, got %+v", folded[0])
+	}
+}
+
+// foldStreamed flattens the streamed ops into a patch log and folds it, failing the
+// test if the log does not fold cleanly (the renderer's pure fold, ADR-0004 / 08a).
+func foldStreamed(t *testing.T, msgs []wire.BuildOpMsg) []wire.BuildOp {
+	t.Helper()
+	log := make([]wire.BuildOp, len(msgs))
+	for i, m := range msgs {
+		log[i] = m.Op
+	}
+	folded, err := spec.Fold(log)
+	if err != nil {
+		t.Fatalf("streamed patch log must fold cleanly: %v", err)
+	}
+	return folded
+}
+
+// assertStreamedKinds fails unless every named op kind appears in the stream.
+func assertStreamedKinds(t *testing.T, msgs []wire.BuildOpMsg, kinds ...string) {
+	t.Helper()
+	for _, k := range kinds {
+		if !streamedKind(msgs, k) {
+			t.Fatalf("a self-correcting iteration must stream a %q patch; ops=%+v", k, msgs)
+		}
+	}
+}
+
+// assertMonotonicSeq checks each streamed op's Seq is its zero-based position.
+func assertMonotonicSeq(t *testing.T, msgs []wire.BuildOpMsg) {
+	t.Helper()
+	for i, m := range msgs {
+		if m.Seq != i {
+			t.Fatalf("op %d: expected monotonic Seq %d, got %d", i, i, m.Seq)
+		}
+	}
+}
+
+// streamedKind reports whether any streamed op carries the given op kind.
+func streamedKind(msgs []wire.BuildOpMsg, kind string) bool {
+	for _, m := range msgs {
+		if m.Op.Op == kind {
+			return true
+		}
+	}
+	return false
 }
 
 // TestLiveMode_ForcedErrorDegradesToPrimitive: a LiveBuilder that returns ok=false
