@@ -40,6 +40,7 @@ import { memo, useEffect, useMemo, useRef, useState } from "react";
 import { Canvas, useFrame, useThree, type ThreeEvent } from "@react-three/fiber";
 import { Line, OrbitControls } from "@react-three/drei";
 import { SpaceEnvironment } from "./SpaceEnvironment";
+import { SkyBodies } from "./SkyBodies";
 import { EffectComposer, SelectiveBloom } from "@react-three/postprocessing";
 import { KernelSize } from "postprocessing";
 import * as THREE from "three";
@@ -1138,6 +1139,7 @@ function SceneContents({
   ghost,
   onPlaceMove,
   onPlaceConfirm,
+  viewMode = "surface",
 }: Scene3DProps) {
   const lightRef = useRef<THREE.DirectionalLight>(null);
   const invalidate = useThree((s) => s.invalidate);
@@ -1209,6 +1211,7 @@ function SceneContents({
         <ambientLight intensity={0.4} />
         <LunarTerrain />
         <SpaceEnvironment />
+        <SkyBodies viewMode={viewMode} />
       </>
     );
   }
@@ -1229,6 +1232,11 @@ function SceneContents({
           reflections. The directional key light + halo bloom path below are
           unaffected. */}
       <SpaceEnvironment />
+
+      {/* Decorative sky bodies (issue #51) — snapshot-INDEPENDENT Scenery,
+          swapped by view mode: the Moon globe in orbit view, Earth in the black
+          surface sky. Never both. raycast-suppressed; no useFrame. */}
+      <SkyBodies viewMode={viewMode} />
 
       {/* Tasks / rising dome. */}
       {snapshot.tasks.map((t) => (
@@ -1377,6 +1385,7 @@ export function Scene3D({
         ghost={ghost}
         onPlaceMove={onPlaceMove}
         onPlaceConfirm={onPlaceConfirm}
+        viewMode={viewMode}
       />
       <ViewModeSync viewMode={viewMode} />
       <OrbitControls

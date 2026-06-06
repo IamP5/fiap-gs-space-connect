@@ -146,3 +146,39 @@ metallic glTFs. Loaded via `files=` (self-hosted in `/public`), never a CDN
 Poly Haven publishes all of its assets under CC0 1.0
 (https://polyhaven.com/license); the asset's author is confirmed via the Poly
 Haven API (`https://api.polyhaven.com/info/moonless_golf`).
+
+## Sky bodies — Moon & Earth (NASA-PD)
+
+Decorative, snapshot-independent sky bodies rendered by
+`web/src/components/SkyBodies.tsx` (issue #51): the Moon globe in orbit view, the
+"Earthrise" Earth in the black surface sky. These are **Scenery** (ADR-0004
+allows snapshot-independent decoration), never snapshot-driven Assets; a
+failed/missing texture falls back to the sphere's flat material color (ADR-0004
+mandatory fallback). All source images are US-government public-domain works from
+NASA's 3D Resources repository (`master` branch). Credited as `NASA` as a
+courtesy; this project is **not** affiliated with or endorsed by NASA, and the
+NASA insignia is **not** used. Each download was verified as a real JPEG
+(`file <path>` reports `JPEG image data`). Downloaded: 2026-06-06.
+
+| File | Source asset | Author | Source URL | License |
+|------|--------------|--------|-----------|---------|
+| `textures/moon_color_1024.jpg` | NASA 3D Resources → `Images and Textures/Moon/Moon.jpg`, resized to 1024 | NASA | https://github.com/nasa/NASA-3D-Resources/blob/master/Images%20and%20Textures/Moon/Moon.jpg | Public Domain (NASA-PD) |
+| `textures/moon_normal_1024.jpg` | Baked OFFLINE from `Moon.jpg` (grayscale heightfield → Sobel-gradient OpenGL normal map, 1024) | NASA (derived) | https://github.com/nasa/NASA-3D-Resources/blob/master/Images%20and%20Textures/Moon/Moon.jpg | Public Domain (NASA-PD) |
+| `textures/moon_rough_512.jpg` | Baked OFFLINE from `Moon.jpg` (grayscale, clamped to a high-roughness band, 512) | NASA (derived) | https://github.com/nasa/NASA-3D-Resources/blob/master/Images%20and%20Textures/Moon/Moon.jpg | Public Domain (NASA-PD) |
+| `textures/earth_color_512.jpg` | NASA 3D Resources → `Images and Textures/Earth (A)/Earth (A).jpg`, resized to 1024×512 | NASA | https://github.com/nasa/NASA-3D-Resources/blob/master/Images%20and%20Textures/Earth%20(A)/Earth%20(A).jpg | Public Domain (NASA-PD) |
+
+Original downloads (raw `master`, the `.jpg` not the huge `.tif`):
+
+- `https://raw.githubusercontent.com/nasa/NASA-3D-Resources/master/Images%20and%20Textures/Moon/Moon.jpg`
+- `https://raw.githubusercontent.com/nasa/NASA-3D-Resources/master/Images%20and%20Textures/Earth%20(A)/Earth%20(A).jpg`
+
+The Moon color/Earth color were downscaled (ImageMagick `magick … -resize`) for
+bundle size; otherwise the photometry is unmodified. The Moon normal + roughness
+maps are baked offline from the same Moon photo (a heightfield-derived OpenGL
+normal map for crater relief — relief is applied as a **normal map, never a
+displacementMap**) and so are derivative NASA-PD works. NASA's image and media
+usage guidelines state NASA content is generally not copyrighted and may be used
+for educational/informational purposes; the NASA insignia/logo and flags are
+excluded and are NOT used here. See
+https://www.nasa.gov/nasa-brand-center/images-and-media/ and
+https://github.com/nasa/NASA-3D-Resources.
