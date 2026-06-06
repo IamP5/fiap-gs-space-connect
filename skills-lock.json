@@ -259,6 +259,12 @@
       "skillPath": "skills/golang-uber-fx/SKILL.md",
       "computedHash": "abf3e6052d04fc7d618df0bb2428c82c8eb0e14465bde1d66e3019cfc214b3dd"
     },
+    "harness-creator": {
+      "source": "walkinglabs/learn-harness-engineering",
+      "sourceType": "github",
+      "skillPath": "skills/harness-creator/SKILL.md",
+      "computedHash": "a87a708b46d85f81eccfc1ea2b1d472328bb08e1a27f14c633de29bc0388fbe3"
+    },
     "r3f-animation": {
       "source": "EnzeD/r3f-skills",
       "sourceType": "github",

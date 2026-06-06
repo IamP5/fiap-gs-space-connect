@@ -1,0 +1,154 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+concurrency:
+  group: ci-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
+permissions:
+  contents: read
+  pull-requests: read
+
+jobs:
+  changes:
+    name: Detect changes
+    runs-on: ubuntu-latest
+    outputs:
+      go: ${{ steps.filter.outputs.go }}
+      web: ${{ steps.filter.outputs.web }}
+    steps:
+      - uses: actions/checkout@v6
+
+      - uses: dorny/paths-filter@v3
+        id: filter
+        with:
+          filters: |
+            go:
+              - '**.go'
+              - 'go.mod'
+              - 'go.sum'
+              - '.golangci.yml'
+              - '.github/workflows/ci.yml'
+            web:
+              - 'web/**'
+              - '.github/workflows/ci.yml'
+
+  go-lint:
+    name: Go Lint
+    needs: changes
+    if: needs.changes.outputs.go == 'true'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v6
+
+      - name: Set up Go
+        uses: actions/setup-go@v6
+        with:
+          go-version: stable
+
+      - name: Run go vet
+        run: go vet ./...
+
+      - name: golangci-lint
+        uses: golangci/golangci-lint-action@v9
+        with:
+          version: latest
+          args: --timeout 5m
+
+  go-test:
+    name: Go Test (Go ${{ matrix.go }})
+    needs: changes
+    if: needs.changes.outputs.go == 'true'
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        go:
+          - "1.25"
+          - "stable"
+    steps:
+      - uses: actions/checkout@v6
+
+      - name: Set up Go
+        uses: actions/setup-go@v6
+        with:
+          go-version: ${{ matrix.go }}
+
+      - name: Verify dependencies
+        run: |
+          go mod verify
+          go mod download
+
+      - name: Check go mod tidy
+        run: |
+          go mod tidy
+          git diff --exit-code go.mod go.sum
+
+      - name: Build
+        run: go build ./...
+
+      - name: Run tests
+        run: go test -race -shuffle=on -coverprofile=coverage.out ./...
+
+      - name: Upload coverage
+        if: matrix.go == 'stable'
+        uses: codecov/codecov-action@v5
+        with:
+          files: ./coverage.out
+          fail_ci_if_error: false
+          token: ${{ secrets.CODECOV_TOKEN }}
+
+  web:
+    name: Web
+    needs: changes
+    if: needs.changes.outputs.web == 'true'
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: web
+    steps:
+      - uses: actions/checkout@v6
+
+      - name: Set up Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+          cache: npm
+          cache-dependency-path: web/package-lock.json
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: ESLint
+        run: npm run lint
+
+      - name: Typecheck
+        run: npm run typecheck
+
+      - name: Test
+        run: npm test
+
+  # Single stable check to mark as "required" in branch protection.
+  # Passes when every job either succeeded or was skipped; fails only on a
+  # real failure or cancellation.
+  ci-success:
+    name: CI Success
+    needs: [go-lint, go-test, web]
+    if: always()
+    runs-on: ubuntu-latest
+    steps:
+      - name: Verify upstream jobs
+        run: |
+          results="${{ needs.go-lint.result }} ${{ needs.go-test.result }} ${{ needs.web.result }}"
+          echo "Job results: $results"
+          for r in $results; do
+            if [ "$r" = "failure" ] || [ "$r" = "cancelled" ]; then
+              echo "::error::A required CI job failed or was cancelled."
+              exit 1
+            fi
+          done
+          echo "All required CI jobs passed or were skipped."
