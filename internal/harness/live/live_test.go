@@ -154,6 +154,73 @@ func TestBuildLive_UnknownTaskTypeDegrades(t *testing.T) {
 	}
 }
 
+// TestBuildLiveResult_RetriesTransientThenAccepts: a FakeModel that fails the FIRST
+// Generate call with a transient error, then returns a valid spec, is ridden out by
+// the live path's bounded per-call retry (bh-08f) — the build ACCEPTS, makes 2 model
+// calls, and is NOT a model failure.
+func TestBuildLiveResult_RetriesTransientThenAccepts(t *testing.T) {
+	fake := &model.FakeModel{FailFirst: 1, Responses: []json.RawMessage{specJSON(t, richFoundation())}}
+	b := fakeBuilder(fake)
+
+	r := b.BuildLiveResult(context.Background(), "foundation-1", "foundation", func([]wire.BuildOp) {})
+	if !r.OK {
+		t.Fatalf("a transient blip within the retry budget must still accept, got %+v", r)
+	}
+	if r.ModelFailed {
+		t.Fatal("a recovered build is not a model failure")
+	}
+	if fake.Calls() != 2 {
+		t.Fatalf("expected exactly 1 retry (2 Generate calls), got %d", fake.Calls())
+	}
+}
+
+// TestBuildLiveResult_ForcedErrorIsModelFailure: a FakeModel that errors on EVERY
+// call (surviving the bounded retry) yields ok=false with ModelFailed=TRUE, so the
+// Rover routes it through self-heal (counts toward its death threshold) — distinct
+// from a graceful degrade. More than one Generate call proves the retry occurred.
+func TestBuildLiveResult_ForcedErrorIsModelFailure(t *testing.T) {
+	fake := &model.FakeModel{Err: errors.New("simulated provider timeout")}
+	b := fakeBuilder(fake)
+
+	r := b.BuildLiveResult(context.Background(), "foundation-1", "foundation", func([]wire.BuildOp) {})
+	if r.OK {
+		t.Fatalf("a forced model error must not produce ops (ok=false), got %+v", r)
+	}
+	if !r.ModelFailed {
+		t.Fatal("a model error surviving the retry must report ModelFailed=true (route through self-heal)")
+	}
+	if fake.Calls() < 2 {
+		t.Fatalf("the bounded per-call retry must re-ask the model at least once; got %d Generate calls", fake.Calls())
+	}
+}
+
+// TestBuildLiveResult_UnbuildableContractIsNotModelFailure: an unknown task type (no
+// contract) yields ok=false but ModelFailed=FALSE — it is a degrade, not a Rover
+// fault, so it never counts toward the death threshold and never reaches the model.
+func TestBuildLiveResult_UnbuildableContractIsNotModelFailure(t *testing.T) {
+	fake := &model.FakeModel{Responses: []json.RawMessage{specJSON(t, richFoundation())}}
+	b := fakeBuilder(fake)
+
+	r := b.BuildLiveResult(context.Background(), "mystery-1", "mystery", func([]wire.BuildOp) {})
+	if r.OK || r.ModelFailed {
+		t.Fatalf("an unbuildable contract must degrade (ok=false, modelFailed=false), got %+v", r)
+	}
+	if fake.Calls() != 0 {
+		t.Fatalf("an unbuildable contract must not reach the model; got %d Generate calls", fake.Calls())
+	}
+}
+
+// TestBuildLiveFault_MatchesResult: the two-boolean facade the agent's optional seam
+// matches structurally returns the same (OK, ModelFailed) as BuildLiveResult.
+func TestBuildLiveFault_MatchesResult(t *testing.T) {
+	fake := &model.FakeModel{Err: errors.New("boom")}
+	b := fakeBuilder(fake)
+	ok, modelFailed := b.BuildLiveFault(context.Background(), "foundation-1", "foundation", func([]wire.BuildOp) {})
+	if ok || !modelFailed {
+		t.Fatalf("BuildLiveFault on a forced error: got (ok=%v, modelFailed=%v), want (false, true)", ok, modelFailed)
+	}
+}
+
 // TestStreamer_DiffsIterationsIntoPatches: the per-iteration differ turns successive
 // accepted specs into place/move/delete patches on stable slot ids (bh-08d, 08a op
 // identity), so the world self-corrects IN PLACE. It drives the streamer directly:

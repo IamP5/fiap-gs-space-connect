@@ -428,6 +428,64 @@ func TestEffectiveMode(t *testing.T) {
 	}
 }
 
+// TestDispositionNoOps_ModelFailureKillsPastThreshold is the bh-08f core decision,
+// white-boxed: a non-model fall-back always degrades; a model failure degrades while
+// UNDER the rover's threshold (a transient blip should not orphan the Task) but, once
+// it crosses the threshold, KILLS the rover (so the lease TTL-expires and the Task
+// re-auctions) and returns liveModelDied.
+func TestDispositionNoOps_ModelFailureKillsPastThreshold(t *testing.T) {
+	aw := wire.Award{TaskID: "t1", Type: typeFoundation}
+
+	t.Run("non-model fallback degrades, never kills", func(t *testing.T) {
+		st := newRover(domain.Vec2{})
+		cfg := Config{LiveFailureThreshold: 1}
+		if got := dispositionNoOps(cfg, st, aw, false); got != liveDegrade {
+			t.Fatalf("a non-model fallback must degrade, got %v", got)
+		}
+		if _, _, _, alive := st.snapshot(); !alive {
+			t.Fatalf("a non-model fallback must NOT kill the rover")
+		}
+	})
+
+	t.Run("model failure under threshold degrades", func(t *testing.T) {
+		st := newRover(domain.Vec2{})
+		cfg := Config{LiveFailureThreshold: 2}
+		if got := dispositionNoOps(cfg, st, aw, true); got != liveDegrade {
+			t.Fatalf("the FIRST model failure (under threshold 2) must degrade, got %v", got)
+		}
+		if _, _, _, alive := st.snapshot(); !alive {
+			t.Fatalf("a model failure under threshold must NOT kill the rover yet")
+		}
+	})
+
+	t.Run("model failure at threshold kills", func(t *testing.T) {
+		st := newRover(domain.Vec2{})
+		cfg := Config{LiveFailureThreshold: 2}
+		_ = dispositionNoOps(cfg, st, aw, true)                               // 1st: degrade
+		if got := dispositionNoOps(cfg, st, aw, true); got != liveModelDied { // 2nd: cross threshold
+			t.Fatalf("the model failure that crosses the threshold must kill, got %v", got)
+		}
+		if _, _, _, alive := st.snapshot(); alive {
+			t.Fatalf("crossing the model-failure threshold must KILL the rover (stop heartbeating)")
+		}
+	})
+}
+
+// TestLiveFailureThreshold_DefaultsAndClamps: zero ⇒ the default; a positive value is
+// honoured; a non-positive value never silently disables the death path (clamps to
+// the default, which is ≥ 1).
+func TestLiveFailureThreshold_DefaultsAndClamps(t *testing.T) {
+	if got := (Config{}).liveFailureThreshold(); got != defaultLiveFailureThreshold {
+		t.Fatalf("zero threshold must default to %d, got %d", defaultLiveFailureThreshold, got)
+	}
+	if got := (Config{LiveFailureThreshold: 5}).liveFailureThreshold(); got != 5 {
+		t.Fatalf("a positive threshold must be honoured, got %d", got)
+	}
+	if got := (Config{LiveFailureThreshold: -3}).liveFailureThreshold(); got < 1 {
+		t.Fatalf("a non-positive threshold must clamp to ≥ 1, got %d", got)
+	}
+}
+
 // TestReplayMode_NeverReachesLiveBuilder: the default replay mode must NOT call the
 // LiveBuilder even when one is set — replay stays byte-for-byte model-free. With no
 // BlueprintID it streams the primitive foundation stream and completes.
