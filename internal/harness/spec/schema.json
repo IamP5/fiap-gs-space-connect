@@ -1,0 +1,48 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://swarmbuild/internal/harness/spec/build-spec.schema.json",
+  "title": "BuildSpec",
+  "description": "An ordered, append-only PATCH LOG of declarative Build ops (TECHSPEC §4, ADR-0006, bh-08a). The renderer FOLDS the log into current geometry: a place adds a piece keyed by id, a move updates an existing id's transform, a delete removes an id (last-write-wins). Interpreted, never executed.",
+  "type": "array",
+  "items": { "$ref": "#/$defs/buildOp" },
+  "$defs": {
+    "vec3": {
+      "type": "object",
+      "description": "A 3D vector. Marshalled with capital X/Y/Z to mirror Go's domain.Vec3 (no JSON tags).",
+      "properties": {
+        "X": { "type": "number" },
+        "Y": { "type": "number" },
+        "Z": { "type": "number" }
+      },
+      "required": ["X", "Y", "Z"],
+      "additionalProperties": false
+    },
+    "material": {
+      "type": "object",
+      "properties": {
+        "color": { "type": "string", "minLength": 1 },
+        "roughness": { "type": "number", "minimum": 0, "maximum": 1 },
+        "metalness": { "type": "number", "minimum": 0, "maximum": 1 },
+        "map": { "type": "string" }
+      },
+      "required": ["color"],
+      "additionalProperties": false
+    },
+    "buildOp": {
+      "type": "object",
+      "description": "One patch-log op. A place introduces a piece keyed by id; a move/delete targets an earlier place's id. Validation runs on the FOLDED result, not per op.",
+      "properties": {
+        "op": { "type": "string", "enum": ["place", "move", "delete"] },
+        "id": { "type": "string", "description": "Stable piece key; move/delete target an earlier place's id." },
+        "shape": { "type": "string", "enum": ["box", "cylinder", "sphere", "model"] },
+        "pos": { "$ref": "#/$defs/vec3" },
+        "rot": { "$ref": "#/$defs/vec3" },
+        "scale": { "$ref": "#/$defs/vec3" },
+        "material": { "$ref": "#/$defs/material" },
+        "model_ref": { "type": "string" }
+      },
+      "required": ["op", "pos", "rot", "scale"],
+      "additionalProperties": false
+    }
+  }
+}

@@ -39,7 +39,7 @@ import { Line, OrbitControls } from "@react-three/drei";
 import { EffectComposer, SelectiveBloom } from "@react-three/postprocessing";
 import { KernelSize } from "postprocessing";
 import * as THREE from "three";
-import type { RoverView, Snapshot, TaskView } from "../types/wire";
+import type { RoverView, Snapshot, TaskView, Vec2 } from "../types/wire";
 import { batteryPercent } from "../lib/format";
 import {
   GROUND_SPAN,
@@ -54,6 +54,14 @@ import {
   activeBeats,
   beatProgress,
 } from "../lib/choreography";
+import { GLTFLoader } from "three/examples/jsm/loaders/GLTFLoader.js";
+import {
+  type MeshDesc,
+  type ModelDesc,
+  type PrimitiveDesc,
+  interpretBuildSpec,
+} from "../lib/buildspec";
+import { type Ghost, footprintOf } from "../lib/placement";
 
 // Functional telemetry colors (DESIGN.md: live-data signals only — the brand
 // palette itself is black + white). Matched to the 2D canvas so the two
@@ -87,6 +95,12 @@ type SceneGeo = {
   foundation: THREE.BoxGeometry;
   wall: THREE.BoxGeometry;
   dome: THREE.SphereGeometry;
+  // Unit primitives for the Build-spec interpreter (ADR-0006): each interpreted
+  // op reuses one of these and is scaled per-op, so a spec of N ops still costs
+  // only these 3 shared GPU buffers (r3f-geometry "Reuse geometries").
+  specBox: THREE.BoxGeometry;
+  specCylinder: THREE.CylinderGeometry;
+  specSphere: THREE.SphereGeometry;
 };
 
 function makeSceneGeo(): SceneGeo {
@@ -102,6 +116,10 @@ function makeSceneGeo(): SceneGeo {
     foundation: new THREE.BoxGeometry(1.1, 0.3, 1.1),
     wall: new THREE.BoxGeometry(0.9, 1.1, 0.9),
     dome: new THREE.SphereGeometry(1.0, 24, 16, 0, Math.PI * 2, 0, Math.PI / 2),
+    // Unit primitives (edge/diameter 1) so a Build op's scale maps directly.
+    specBox: new THREE.BoxGeometry(1, 1, 1),
+    specCylinder: new THREE.CylinderGeometry(0.5, 0.5, 1, 20),
+    specSphere: new THREE.SphereGeometry(0.5, 20, 16),
   };
 }
 
@@ -415,6 +433,194 @@ function LeaseBeam({ from, to, map }: { from: RoverView; to: TaskView; map: Scen
   );
 }
 
+// ---- Build-spec mesh: primitive (optionally textured) or glTF model ---------
+//
+// bh-07b: the Build spec's forward-compatible slots become REAL. A primitive op
+// may carry a CC0 texture (material.map); a "model" op references a CC0 glTF
+// (model_ref). Both load asynchronously and FALL BACK to plain geometry on any
+// miss, so the scene is never broken by a gone/slow asset (ADR-0004 — the scene
+// stays a pure function of the snapshot, the renderer only INTERPRETS data).
+
+// One shared GLTFLoader + a tiny module-level cache, so N tasks referencing the
+// same .glb parse it ONCE (r3f-geometry "reuse"), and the parsed scene is cloned
+// per placement so transforms/materials never cross-contaminate.
+const gltfLoader = new GLTFLoader();
+const gltfCache = new Map<string, Promise<THREE.Group>>();
+
+function loadGLTF(url: string): Promise<THREE.Group> {
+  let p = gltfCache.get(url);
+  if (!p) {
+    p = new Promise<THREE.Group>((resolve, reject) => {
+      gltfLoader.load(
+        url,
+        (g) => resolve(g.scene),
+        undefined,
+        (err) => reject(err instanceof Error ? err : new Error(String(err))),
+      );
+    });
+    gltfCache.set(url, p);
+  }
+  return p;
+}
+
+// SpecPrimitive draws one primitive op. If the op declares a texture map
+// (bh-07b), it loads it via TextureLoader and applies it once ready; a load
+// failure simply leaves the flat color (the scene never breaks). The texture
+// loads on mount and is disposed on unmount.
+function SpecPrimitive({
+  desc,
+  geo,
+  color,
+  opacity,
+}: {
+  desc: PrimitiveDesc;
+  geo: SceneGeo;
+  color: string;
+  opacity: number;
+}) {
+  const matRef = useRef<THREE.MeshStandardMaterial>(null);
+  const invalidate = useThree((s) => s.invalidate);
+
+  useEffect(() => {
+    if (!desc.map) return;
+    let disposed = false;
+    let tex: THREE.Texture | null = null;
+    const loader = new THREE.TextureLoader();
+    loader.load(
+      desc.map,
+      (t) => {
+        if (disposed) {
+          t.dispose();
+          return;
+        }
+        t.colorSpace = THREE.SRGBColorSpace;
+        tex = t;
+        if (matRef.current) {
+          matRef.current.map = t;
+          matRef.current.needsUpdate = true;
+          invalidate(); // wake the demand loop so the texture shows
+        }
+      },
+      undefined,
+      () => {
+        // Missing/failed texture ⇒ keep the flat color (fallback, never crash).
+      },
+    );
+    return () => {
+      disposed = true;
+      tex?.dispose();
+    };
+  }, [desc.map, invalidate]);
+
+  const geometry =
+    desc.geometry === "box"
+      ? geo.specBox
+      : desc.geometry === "cylinder"
+        ? geo.specCylinder
+        : geo.specSphere;
+
+  return (
+    <mesh
+      geometry={geometry}
+      position={desc.position}
+      rotation={desc.rotation}
+      scale={desc.scale}
+      raycast={() => null}
+    >
+      <meshStandardMaterial
+        ref={matRef}
+        color={color}
+        roughness={desc.roughness}
+        metalness={desc.metalness}
+        transparent
+        opacity={opacity}
+        emissive="#000000"
+        emissiveIntensity={0}
+        toneMapped={false}
+      />
+    </mesh>
+  );
+}
+
+// SpecModel places a CC0 glTF model (model_ref, bh-07b). It loads the .glb on
+// mount; until it resolves — and FOREVER if it fails — it renders the descriptor's
+// box fallback, so the structure is always present and the scene stays a pure
+// function of the snapshot. The loaded scene is cloned so each placement is
+// independent; the clone is disposed on unmount.
+function SpecModel({
+  desc,
+  geo,
+  color,
+  opacity,
+}: {
+  desc: ModelDesc;
+  geo: SceneGeo;
+  color: string;
+  opacity: number;
+}) {
+  const [scene, setScene] = useState<THREE.Group | null>(null);
+  const invalidate = useThree((s) => s.invalidate);
+
+  useEffect(() => {
+    let disposed = false;
+    loadGLTF(desc.modelRef)
+      .then((g) => {
+        if (disposed) return;
+        // clone(true) SHARES the source geometry + materials with the cached glTF
+        // (Object3D.clone does not deep-copy them), so the clone owns nothing
+        // disposable — disposing its geometry/material would free the cached
+        // original and break every later placement of the same asset. The cached
+        // glTF lives for the session and is reclaimed on page unload; we only
+        // clone so each placement gets its own transform node.
+        setScene(g.clone(true));
+        invalidate();
+      })
+      .catch(() => {
+        // Missing/failed glTF ⇒ keep the box fallback below (never crash).
+      });
+    return () => {
+      disposed = true;
+    };
+  }, [desc.modelRef, invalidate]);
+
+  if (!scene) {
+    // Fallback primitive (a box at the op's transform) until/if the glTF loads.
+    return <SpecPrimitive desc={desc.fallback} geo={geo} color={color} opacity={opacity} />;
+  }
+
+  return (
+    <primitive
+      object={scene}
+      position={desc.position}
+      rotation={desc.rotation}
+      scale={desc.scale}
+    />
+  );
+}
+
+// SpecMesh dispatches one descriptor to the primitive or model renderer. Built
+// tasks show the op's own color; an unfinished interpreted task ghosts in the
+// shared status color (so it reads like the primitive ghost).
+function SpecMesh({
+  desc,
+  geo,
+  built,
+  ghostColor,
+  opacity,
+}: {
+  desc: MeshDesc;
+  geo: SceneGeo;
+  built: boolean;
+  ghostColor: string;
+  opacity: number;
+}) {
+  const color = built ? desc.color : ghostColor;
+  if (desc.kind === "model") {
+    return <SpecModel desc={desc} geo={geo} color={color} opacity={opacity} />;
+  }
+  return <SpecPrimitive desc={desc} geo={geo} color={color} opacity={opacity} />;
+}
+
 // ---- a task / dome block ----------------------------------------------------
 
 // Each task is a block in the rising habitat: foundations form the base, walls
@@ -446,14 +652,27 @@ function TaskBlock({
   const isCap = tier === "dome";
   const blockGeo = isCap ? geo.dome : tier === "foundation" ? geo.foundation : geo.wall;
 
+  // Interpret the Task's Build spec (ADR-0006), if any, into renderable meshes.
+  // EMPTY ⇒ the Task has no (renderable) spec, so we render EXACTLY today's
+  // primitive — the fallback this slice must keep pixel-identical. Memoized on
+  // the spec identity so the pure pass stays allocation-light (~12 Hz snapshots).
+  const specMeshes = useMemo<MeshDesc[]>(
+    () => interpretBuildSpec(task),
+    [task],
+  );
+  const interpreted = specMeshes.length > 0;
+
+  // Solidify-pop refs. The PRIMITIVE path animates its single mesh + material
+  // EXACTLY as before (meshRef/matRef). The INTERPRETED path has no single
+  // material to flash, so it pops the whole structure group (groupRef) by scale
+  // alone, keeping each op's procedural material intact. Only one path's refs are
+  // populated per render, so the unused branch is a harmless no-op.
   const meshRef = useRef<THREE.Mesh>(null);
   const matRef = useRef<THREE.MeshStandardMaterial>(null);
+  const groupRef = useRef<THREE.Group>(null);
 
   const id = task.id;
   useFrame(() => {
-    const mesh = meshRef.current;
-    const mat = matRef.current;
-    if (!mesh || !mat) return;
     const list = beats.current;
     let solidify = 0;
     if (list) {
@@ -465,16 +684,48 @@ function TaskBlock({
         }
       }
     }
-    // Solidify pop: a brief upward scale + green flash on a just-completed task.
-    mesh.scale.setScalar(solidify > 0 ? 1 + Math.sin(solidify * Math.PI) * 0.25 : 1);
-    if (solidify > 0) {
-      mat.emissive.set(SIGNAL_OK);
-      mat.emissiveIntensity = 1.5 * (1 - solidify);
-    } else if (mat.emissiveIntensity !== 0) {
-      mat.emissiveIntensity = 0;
+    const popScale = solidify > 0 ? 1 + Math.sin(solidify * Math.PI) * 0.25 : 1;
+
+    // Interpreted structure: pop the group (scale only — procedural mats stay).
+    if (groupRef.current) groupRef.current.scale.setScalar(popScale);
+
+    // Primitive: pop the single mesh + green-flash its material (unchanged).
+    const mesh = meshRef.current;
+    const mat = matRef.current;
+    if (mesh && mat) {
+      mesh.scale.setScalar(popScale);
+      if (solidify > 0) {
+        mat.emissive.set(SIGNAL_OK);
+        mat.emissiveIntensity = 1.5 * (1 - solidify);
+      } else if (mat.emissiveIntensity !== 0) {
+        mat.emissiveIntensity = 0;
+      }
     }
   });
 
+  // INTERPRETED PATH — the richer structure. Each op is drawn by <SpecMesh>,
+  // which renders a primitive (optionally textured, bh-07b) or a glTF model
+  // (model_ref, bh-07b) with a primitive fallback. The group sits at the same
+  // ground point as the primitive; built/ghost opacity is shared so an unfinished
+  // interpreted Task still reads as a ghost, like the primitive.
+  if (interpreted) {
+    return (
+      <group ref={groupRef} position={[p.x, 0, p.z]}>
+        {specMeshes.map((m, i) => (
+          <SpecMesh
+            key={i}
+            desc={m}
+            geo={geo}
+            built={built}
+            ghostColor={color}
+            opacity={opacity}
+          />
+        ))}
+      </group>
+    );
+  }
+
+  // PRIMITIVE FALLBACK — EXACTLY today's tierOf block (unchanged).
   return (
     <group position={[p.x, 0, p.z]}>
       <mesh ref={meshRef} geometry={blockGeo} position={[0, h, 0]} raycast={() => null}>
@@ -577,14 +828,119 @@ type Scene3DProps = {
   snapshot: Snapshot | null;
   selected: string | null;
   onPick: (id: string | null) => void;
+  // Drag-to-place (bh-05). `placing` arms the ground placement plane; `ghost` is
+  // the transient preview (null until the cursor hits the ground); `onPlaceMove`
+  // reports the world origin under the cursor; `onPlaceConfirm` drops it. All are
+  // optional so the 2D fallback / tests can omit them.
+  placing?: boolean;
+  ghost?: Ghost | null;
+  onPlaceMove?: (origin: Vec2) => void;
+  onPlaceConfirm?: () => void;
 };
+
+// GHOST_OK / GHOST_BAD tint the placement preview green when the spot is valid,
+// red when the client-side gate (bounds/no-overlap) rejects it — the UI feedback
+// for "invalid placement is rejected" before the control is even emitted.
+const GHOST_OK = "#38e1ff";
+const GHOST_BAD = "#e74c3c";
+
+// ---- drag-to-place ghost + placement plane (bh-05) -------------------------
+
+// BlueprintGhost draws the transient placement preview: each ghost Task's Build
+// envelope as a flat footprint quad on the ground, plus a thin upright box hinting
+// the envelope height. Tinted green when valid, red when the client gate rejects
+// the spot. It is CLIENT-ONLY transient state (never from the snapshot), so the
+// scene stays a pure function of the snapshot for everything authoritative — the
+// placed tasks themselves arrive via the next snapshot (ADR-0004).
+function BlueprintGhost({ ghost, map }: { ghost: Ghost; map: SceneMap }) {
+  const color = ghost.invalid ? GHOST_BAD : GHOST_OK;
+  return (
+    <group>
+      {ghost.tasks.map((t) => {
+        const f = footprintOf(t);
+        const center = map.at({ X: f.cx, Y: f.cy }, 0.06);
+        const w = f.halfX * 2 * map.scale;
+        const d = f.halfY * 2 * map.scale;
+        const h = Math.max(0.05, (t.envelope.size.Z * map.scale) / 2);
+        return (
+          <group key={t.id} position={[center.x, 0, center.z]}>
+            {/* Footprint quad flat on the ground. */}
+            <mesh position={[0, 0.06, 0]} rotation={[-Math.PI / 2, 0, 0]} raycast={() => null}>
+              <planeGeometry args={[w, d]} />
+              <meshBasicMaterial
+                color={color}
+                transparent
+                opacity={0.35}
+                side={THREE.DoubleSide}
+                depthWrite={false}
+              />
+            </mesh>
+            {/* A faint envelope box, so the ghost reads as a volume not just a pad. */}
+            <mesh position={[0, h, 0]} raycast={() => null}>
+              <boxGeometry args={[w, h * 2, d]} />
+              <meshBasicMaterial
+                color={color}
+                transparent
+                opacity={0.12}
+                depthWrite={false}
+              />
+            </mesh>
+          </group>
+        );
+      })}
+    </group>
+  );
+}
+
+// PlacementPlane is a large invisible ground plane, mounted ONLY while placing,
+// that captures the cursor: pointer-move raycasts a world origin (via the shared
+// sceneMap inverse, so the ghost can't drift from the rendered world) and reports
+// it; a click drops the Blueprint. It sits just above the terrain so it wins the
+// raycast over scene geometry during placement.
+function PlacementPlane({
+  map,
+  onMove,
+  onConfirm,
+}: {
+  map: SceneMap;
+  onMove: (origin: Vec2) => void;
+  onConfirm: () => void;
+}) {
+  return (
+    <mesh
+      position={[0, 0.02, 0]}
+      rotation={[-Math.PI / 2, 0, 0]}
+      onPointerMove={(e: ThreeEvent<PointerEvent>) => {
+        e.stopPropagation();
+        // e.point is the world-space (scene) hit; map its ground x/z back to the
+        // worksite origin via the inverse of the shared world→scene projection.
+        onMove(map.invert(e.point.x, e.point.z));
+      }}
+      onPointerDown={(e: ThreeEvent<PointerEvent>) => {
+        e.stopPropagation();
+        onConfirm();
+      }}
+    >
+      <planeGeometry args={[GROUND_SPAN * 4, GROUND_SPAN * 4]} />
+      <meshBasicMaterial transparent opacity={0} depthWrite={false} side={THREE.DoubleSide} />
+    </mesh>
+  );
+}
 
 // The actual scene contents (inside <Canvas>). The snapshot → meshes mapping is
 // a single pure pass that re-renders ONLY when a new snapshot arrives. Beats
 // animate via per-mesh useFrame ref-mutation (in Rover3D/TaskBlock), so the
 // React tree never re-renders per frame. This component's own useFrame just
 // prunes expired beats and keeps the demand loop alive while any beat is live.
-function SceneContents({ snapshot, selected, onPick }: Scene3DProps) {
+function SceneContents({
+  snapshot,
+  selected,
+  onPick,
+  placing,
+  ghost,
+  onPlaceMove,
+  onPlaceConfirm,
+}: Scene3DProps) {
   const lightRef = useRef<THREE.DirectionalLight>(null);
   const invalidate = useThree((s) => s.invalidate);
 
@@ -598,6 +954,14 @@ function SceneContents({ snapshot, selected, onPick }: Scene3DProps) {
   // useFrame; mutating it never triggers a React re-render.
   const beats = useRef<ActiveBeat[]>([]);
   const lastAt = useRef<number>(Number.NEGATIVE_INFINITY);
+
+  // Drag-to-place is transient client state, not a snapshot, so it does NOT ride
+  // the snapshot-driven invalidate above. Wake the demand loop whenever the ghost
+  // (cursor origin / rotation / validity) or the placing arm changes, so the ghost
+  // redraws as the user moves the cursor. Cheap: it draws one frame per change.
+  useEffect(() => {
+    invalidate();
+  }, [ghost, placing, invalidate]);
 
   // On each new snapshot, fold its events into the live beat list and wake the
   // demand loop so the new pulses (and the new mesh positions) get drawn.
@@ -686,6 +1050,13 @@ function SceneContents({ snapshot, selected, onPick }: Scene3DProps) {
         />
       ))}
 
+      {/* Drag-to-place ghost + cursor plane (bh-05). The plane is mounted only
+          while placing; the ghost only once the cursor has hit the ground. */}
+      {ghost ? <BlueprintGhost ghost={ghost} map={map} /> : null}
+      {placing && onPlaceMove && onPlaceConfirm ? (
+        <PlacementPlane map={map} onMove={onPlaceMove} onConfirm={onPlaceConfirm} />
+      ) : null}
+
       {/* Selective bloom — halos ONLY (ADR-0004). Rendered last; reads lightRef. */}
       <HaloBloom lightRef={lightRef} />
     </group>
@@ -702,14 +1073,24 @@ function SceneContents({ snapshot, selected, onPick }: Scene3DProps) {
 // a new snapshot, an animating beat, or orbit interaction (OrbitControls is
 // makeDefault, so drei invalidates on change + damping). dpr is capped at 1.5
 // so a retina projector doesn't pay for 4× the pixels.
-export function Scene3D({ snapshot, selected, onPick }: Scene3DProps) {
+export function Scene3D({
+  snapshot,
+  selected,
+  onPick,
+  placing,
+  ghost,
+  onPlaceMove,
+  onPlaceConfirm,
+}: Scene3DProps) {
   return (
     <Canvas
       className="world-canvas"
       frameloop="demand"
       dpr={[1, 1.5]}
       camera={{ position: [0, 14, 18], fov: 42, near: 0.1, far: 200 }}
-      onPointerMissed={() => onPick(null)} // click empty space → deselect
+      // While placing, a click on empty space confirms the drop; otherwise it
+      // deselects a rover (the existing behaviour).
+      onPointerMissed={() => (placing ? onPlaceConfirm?.() : onPick(null))}
       // antialias:false — the EffectComposer owns the framebuffers, so a
       // multisampled default backbuffer is redundant AND, on ANGLE/macOS, forces
       // a depth/stencil blitFramebuffer resolve that errors with "Read and write
@@ -719,10 +1100,21 @@ export function Scene3D({ snapshot, selected, onPick }: Scene3DProps) {
       gl={{ antialias: false, powerPreference: "high-performance" }}
     >
       <color attach="background" args={["#000000"]} />
-      <SceneContents snapshot={snapshot} selected={selected} onPick={onPick} />
+      <SceneContents
+        snapshot={snapshot}
+        selected={selected}
+        onPick={onPick}
+        placing={placing}
+        ghost={ghost}
+        onPlaceMove={onPlaceMove}
+        onPlaceConfirm={onPlaceConfirm}
+      />
       <OrbitControls
         makeDefault
         enablePan={false}
+        // Disable orbit drag while placing so a placement-drag doesn't spin the
+        // camera; the placement plane owns the cursor then.
+        enableRotate={!placing}
         minDistance={10}
         maxDistance={34}
         // Clamp the vertical angle so the camera can't dip under the ground or

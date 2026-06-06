@@ -1,0 +1,181 @@
+{
+  "blueprint_id": "dome",
+  "task_id": "wall-3",
+  "model": "gpt-4o-2024-08-06",
+  "contract": {
+    "blueprint_id": "dome",
+    "task_id": "wall-3",
+    "type": "wall",
+    "envelope": {
+      "center": {
+        "X": 0,
+        "Y": 0,
+        "Z": 0
+      },
+      "size": {
+        "X": 3,
+        "Y": 3.6,
+        "Z": 2
+      }
+    },
+    "done": {
+      "description": "several stacked courses rising to a coping stone, forming one segment of the dome wall",
+      "min_ops": 3,
+      "min_coverage": 0.02
+    },
+    "style": "moon-base habitat, pale prefab panels, brushed metal accents"
+  },
+  "iterations": [
+    {
+      "gen_ops": [
+        {
+          "op": "place",
+          "shape": "box",
+          "pos": {
+            "X": 0,
+            "Y": -1.7,
+            "Z": 0
+          },
+          "rot": {
+            "X": 0,
+            "Y": 0,
+            "Z": 0
+          },
+          "scale": {
+            "X": 2.5,
+            "Y": 0.4,
+            "Z": 1.8
+          },
+          "material": {
+            "color": "#d3d3d3",
+            "roughness": 0.8,
+            "metalness": 0.2
+          }
+        },
+        {
+          "op": "place",
+          "shape": "box",
+          "pos": {
+            "X": 0,
+            "Y": -1.3,
+            "Z": 0
+          },
+          "rot": {
+            "X": 0,
+            "Y": 0,
+            "Z": 0
+          },
+          "scale": {
+            "X": 2.3,
+            "Y": 0.4,
+            "Z": 1.6
+          },
+          "material": {
+            "color": "#d3d3d3",
+            "roughness": 0.8,
+            "metalness": 0.2
+          }
+        },
+        {
+          "op": "place",
+          "shape": "box",
+          "pos": {
+            "X": 0,
+            "Y": -0.9,
+            "Z": 0
+          },
+          "rot": {
+            "X": 0,
+            "Y": 0,
+            "Z": 0
+          },
+          "scale": {
+            "X": 2,
+            "Y": 0.4,
+            "Z": 1.4
+          },
+          "material": {
+            "color": "#b0c4de",
+            "roughness": 0.7,
+            "metalness": 0.3
+          }
+        },
+        {
+          "op": "place",
+          "shape": "box",
+          "pos": {
+            "X": 0,
+            "Y": -0.5,
+            "Z": 0
+          },
+          "rot": {
+            "X": 0,
+            "Y": 0,
+            "Z": 0
+          },
+          "scale": {
+            "X": 1.7,
+            "Y": 0.4,
+            "Z": 1.2
+          },
+          "material": {
+            "color": "#b0c4de",
+            "roughness": 0.7,
+            "metalness": 0.3
+          }
+        },
+        {
+          "op": "place",
+          "shape": "box",
+          "pos": {
+            "X": 0,
+            "Y": -0.1,
+            "Z": 0
+          },
+          "rot": {
+            "X": 0,
+            "Y": 0,
+            "Z": 0
+          },
+          "scale": {
+            "X": 1.4,
+            "Y": 0.2,
+            "Z": 1
+          },
+          "material": {
+            "color": "#b0c4de",
+            "roughness": 0.6,
+            "metalness": 0.5
+          }
+        }
+      ],
+      "verdict": {
+        "hard_gate": {
+          "envelope": true,
+          "collision": true,
+          "done": true
+        },
+        "rubric": {
+          "done_coverage": {
+            "score": 2,
+            "evidence": "envelope coverage ≈ 25% over 5 ops (target ≥ 2%)"
+          },
+          "silhouette": {
+            "score": 0,
+            "evidence": "silhouette scoring deferred to the vision pass (bh-06)"
+          },
+          "coherence": {
+            "score": 2,
+            "evidence": "1 shape(s), 2 colour(s); grounded, varied"
+          }
+        }
+      }
+    }
+  ],
+  "outcome": {
+    "result": "accepted",
+    "cached": true,
+    "quality_flag": "ok",
+    "reason": "hard gate passed; soft score 4/4"
+  }
+}

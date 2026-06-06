@@ -15,8 +15,11 @@ import (
 	"log/slog"
 	"os"
 	"os/signal"
+	"strings"
 	"swarmbuild/internal/coordinator"
 	"swarmbuild/internal/demo"
+	"swarmbuild/internal/harness/live"
+	"swarmbuild/internal/harness/model"
 	"syscall"
 )
 
@@ -60,6 +63,23 @@ func run() error {
 	}
 	cfg := demo.DomeScenario(natsURL, pacing)
 
+	// Live Build Mode (bh-08): when an API key is configured SERVER-SIDE, give the
+	// in-process demo rovers the model-backed LiveBuilder seam, so a Blueprint dropped
+	// in "live" mode on the dashboard (bh-08c per-Task toggle) actually runs the
+	// Generator↔Evaluator loop and streams geometry into the world. The rovers keep
+	// ModeReplay as their default, so the headline demo stays the deterministic replay
+	// headline UNLESS the operator opts a placement into live (effectiveMode: the
+	// per-Task tag wins). With NO key the builder is nil and every Task replays —
+	// byte-for-byte the pre-08 path. The key is read server-side only
+	// (model.Config.APIKey) and never reaches the browser; the coordinator LIBRARY
+	// never imports the Model seam — only this composition root does (ADR-0005).
+	if builder, ok := buildLiveFromEnv(); ok {
+		for i := range cfg.Rovers {
+			cfg.Rovers[i].LiveBuilder = builder
+		}
+		slog.Info("live build mode available: in-process rovers wired with the Model seam; drop a Blueprint in live mode to use it", "rovers", len(cfg.Rovers))
+	}
+
 	ctx, stop := signal.NotifyContext(context.Background(), syscall.SIGINT, syscall.SIGTERM)
 	defer stop()
 
@@ -69,4 +89,60 @@ func run() error {
 	}
 	slog.Info("coordinator shut down")
 	return nil
+}
+
+// buildLiveFromEnv constructs the live Build harness seam from the environment, or
+// returns ok=false when no API key is configured — in which case the in-process
+// rovers get no LiveBuilder and the demo is byte-for-byte the deterministic replay
+// path (bh-08). It mirrors cmd/agent's buildLive and cmd/{bake,gateway}'s provider
+// swap: LAB_PROVIDER / LAB_MODEL select the provider + model, the matching *_API_KEY
+// authenticates it. The key is read SERVER-SIDE only and never logged or shipped to
+// the browser; the agent package itself never imports the Model seam (ADR-0005).
+func buildLiveFromEnv() (*live.Builder, bool) {
+	provider := strings.ToLower(getenv("LAB_PROVIDER", "openai"))
+	modelID := getenv("LAB_MODEL", "gpt-4o-2024-08-06")
+	apiKey, baseURL := keyAndBaseURL(provider)
+	if apiKey == "" {
+		return nil, false // no key ⇒ stay pure replay, the demo unchanged
+	}
+	m, err := model.NewOpenAI(model.Config{
+		Provider: provider,
+		BaseURL:  baseURL,
+		Model:    modelID,
+		APIKey:   apiKey, // server-side only; never reaches the browser
+	})
+	if err != nil {
+		slog.Warn("live build mode requested but Model seam init failed; staying replay", "error", err)
+		return nil, false
+	}
+	// The rovers keep ModeReplay as their Config default; the per-Task live tag
+	// (bh-08c effectiveMode) is what opts a specific placement into this builder.
+	return live.NewBuilder(m, provider, modelID), true
+}
+
+// keyAndBaseURL resolves the API key + OpenAI-compatible base_url for a provider
+// from the environment, mirroring cmd/{agent,bake,gateway}'s provider swap.
+func keyAndBaseURL(provider string) (apiKey, baseURL string) {
+	switch provider {
+	case "gemini":
+		return os.Getenv("GEMINI_API_KEY"), model.BaseURLGemini
+	case "local":
+		// Ollama needs no real key; accept a placeholder so the adapter's non-empty
+		// check passes and local live builds run with no cloud key.
+		k := os.Getenv("OPENAI_API_KEY")
+		if k == "" {
+			k = "ollama"
+		}
+		return k, model.BaseURLLocal
+	default:
+		return os.Getenv("OPENAI_API_KEY"), model.BaseURLOpenAI
+	}
+}
+
+// getenv returns the environment value for key, or def when it is unset/empty.
+func getenv(key, def string) string {
+	if v := os.Getenv(key); v != "" {
+		return v
+	}
+	return def
 }

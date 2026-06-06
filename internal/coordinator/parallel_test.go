@@ -253,7 +253,7 @@ func TestDome_KillMidWallStillCloses(t *testing.T) {
 
 	// Kill the wall-builder via the dashboard control path: it stops heartbeating,
 	// so its lease TTL-expires and the wall self-heals to another rover.
-	if err := h.conn.PublishJSON(wire.SubjControl, wire.Control{Cmd: "kill", Robot: victim}); err != nil {
+	if err := h.conn.PublishJSON(wire.SubjControl, wire.Control{Cmd: cmdKill, Robot: victim}); err != nil {
 		t.Fatalf("publish kill %s: %v", victim, err)
 	}
 	_ = h.conn.Flush()

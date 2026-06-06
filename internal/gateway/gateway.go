@@ -12,6 +12,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"io"
 	"log/slog"
 	"net"
 	"net/http"
@@ -57,10 +58,39 @@ func (c *client) closeWith(code websocket.StatusCode, reason string) {
 	})
 }
 
+// LabRunner is the gateway's narrow seam onto the in-app LIVE lab generation
+// (bh-07a). It is an INTERFACE so the gateway package never imports the lab — and
+// therefore never imports the Model seam / refine loop — keeping the gateway off
+// the model's import graph; cmd/gateway injects the real
+// internal/harness/lab.Service. Run drives one live Generator↔Evaluator loop and
+// streams its events to w, in order, flushing each as Server-Sent Events. The hot
+// path never constructs a LabRunner, so the archtest stays green.
+//
+// reqBody is the raw JSON request body ({"task_id","task_type"}); the runner
+// decodes it. w is the already-prepared SSE response writer (headers set). It
+// returns when the run finishes or the request context is cancelled.
+type LabRunner interface {
+	Run(ctx context.Context, reqBody []byte, w SSEWriter) error
+	// CatalogJSON returns the JSON list of selectable Task types for the Lab
+	// panel's dropdown, so the gateway can serve it without importing the lab.
+	CatalogJSON() []byte
+}
+
+// SSEWriter is the minimal sink a LabRunner streams one run's events into: each
+// Event is a self-contained JSON object written as one `data:` line and flushed,
+// so the browser's EventSource sees each refine pass live. Kept tiny so the lab
+// package depends only on this, not on net/http internals.
+type SSEWriter interface {
+	// Send writes one event payload (raw JSON bytes) as an SSE `data:` frame and
+	// flushes it. Returns an error if the client has gone away.
+	Send(payload []byte) error
+}
+
 // Gateway fans the latest world snapshot out to every connected browser and
 // relays browser control messages back onto NATS.
 type Gateway struct {
 	bus busConn
+	lab LabRunner // optional in-app live lab (bh-07a); nil ⇒ the /lab route 503s
 
 	mu          sync.RWMutex
 	latest      []byte // last snapshot, marshalled once, served to new clients
@@ -74,6 +104,15 @@ func New(b busConn) *Gateway {
 		bus:     b,
 		clients: make(map[*client]struct{}),
 	}
+}
+
+// WithLab attaches the in-app live lab runner (bh-07a), enabling the /lab/generate
+// SSE endpoint. Injected by cmd/gateway from internal/harness/lab so the gateway
+// package itself never imports the Model seam (ADR-0005). nil ⇒ the lab route
+// returns 503 (the headline still runs; the lab is an opt-in extra).
+func (g *Gateway) WithLab(lab LabRunner) *Gateway {
+	g.lab = lab
+	return g
 }
 
 // Run subscribes to world snapshots and blocks until ctx is cancelled. On
@@ -162,11 +201,16 @@ func (g *Gateway) fanout(b []byte) {
 	}
 }
 
-// Handler returns the HTTP mux exposing /ws and /healthz.
+// Handler returns the HTTP mux exposing /ws, /healthz, and the in-app live-lab
+// endpoints (/lab/generate SSE + /lab/catalog). The lab routes are always mounted;
+// when no LabRunner was injected they answer 503, so the headline path is
+// unaffected by the lab's presence.
 func (g *Gateway) Handler() http.Handler {
 	mux := http.NewServeMux()
 	mux.HandleFunc("/ws", g.serveWS)
 	mux.HandleFunc("/healthz", g.serveHealthz)
+	mux.HandleFunc("/lab/generate", g.serveLabGenerate)
+	mux.HandleFunc("/lab/catalog", g.serveLabCatalog)
 	return mux
 }
 
@@ -188,6 +232,106 @@ func (g *Gateway) serveHealthz(w http.ResponseWriter, _ *http.Request) {
 		Connected: g.bus.Connected(),
 		Clients:   n,
 	})
+}
+
+// labCORS sets permissive CORS headers so the browser dashboard (served from a
+// different origin/port than the gateway — e.g. :5173 vs :8080 under a k8s
+// port-forward or docker-compose) can call the lab endpoints, and answers the
+// preflight. The lab client POSTs application/json, a non-simple request, so the
+// browser sends an OPTIONS preflight first; returning true means the request was
+// a preflight that has been fully handled here.
+func labCORS(w http.ResponseWriter, r *http.Request) bool {
+	w.Header().Set("Access-Control-Allow-Origin", "*")
+	w.Header().Set("Access-Control-Allow-Methods", "POST, GET, OPTIONS")
+	w.Header().Set("Access-Control-Allow-Headers", "Content-Type")
+	if r.Method == http.MethodOptions {
+		w.WriteHeader(http.StatusNoContent)
+		return true
+	}
+	return false
+}
+
+// serveLabCatalog returns the Lab panel's selectable Task-type list as JSON. It
+// 503s when no lab runner is wired (e.g. the key was absent at startup), so the
+// dashboard can show the lab as unavailable rather than guess inputs.
+func (g *Gateway) serveLabCatalog(w http.ResponseWriter, r *http.Request) {
+	if labCORS(w, r) {
+		return
+	}
+	if g.lab == nil {
+		http.Error(w, `{"error":"live lab not enabled (no API key at startup)"}`, http.StatusServiceUnavailable)
+		return
+	}
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(http.StatusOK)
+	_, _ = w.Write(g.lab.CatalogJSON())
+}
+
+// sseWriter adapts an http.ResponseWriter into the LabRunner's SSEWriter sink:
+// each Send writes one `data:` frame and flushes it, so the browser's EventSource
+// renders each refine pass live. A write failure (client gone) is returned so the
+// run aborts promptly.
+type sseWriter struct {
+	w       http.ResponseWriter
+	flusher http.Flusher
+}
+
+func (s *sseWriter) Send(payload []byte) error {
+	if _, err := s.w.Write([]byte("data: ")); err != nil {
+		return err
+	}
+	if _, err := s.w.Write(payload); err != nil {
+		return err
+	}
+	if _, err := s.w.Write([]byte("\n\n")); err != nil {
+		return err
+	}
+	s.flusher.Flush()
+	return nil
+}
+
+// serveLabGenerate runs one LIVE lab generation and streams its events back as
+// Server-Sent Events (bh-07a). This is the "watch it think" surface: the real
+// Generator↔Evaluator loop runs (a live model call) and every emitted spec +
+// verdict is flushed to the browser as it happens. It is strictly OFF the headline
+// path — the snapshot fan-out above never touches this handler, and the World
+// Model is never mutated here. 503s when no lab runner was injected.
+func (g *Gateway) serveLabGenerate(w http.ResponseWriter, r *http.Request) {
+	if labCORS(w, r) {
+		return
+	}
+	if r.Method != http.MethodPost {
+		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
+	if g.lab == nil {
+		http.Error(w, `{"error":"live lab not enabled (no API key at startup)"}`, http.StatusServiceUnavailable)
+		return
+	}
+	flusher, ok := w.(http.Flusher)
+	if !ok {
+		http.Error(w, "streaming unsupported", http.StatusInternalServerError)
+		return
+	}
+
+	// Bound the request body so a hostile client can't stream an unbounded payload.
+	body, err := io.ReadAll(io.LimitReader(r.Body, 4<<10))
+	if err != nil {
+		http.Error(w, "bad request", http.StatusBadRequest)
+		return
+	}
+
+	w.Header().Set("Content-Type", "text/event-stream")
+	w.Header().Set("Cache-Control", "no-cache")
+	w.Header().Set("Connection", "keep-alive")
+	w.WriteHeader(http.StatusOK)
+	flusher.Flush()
+
+	sink := &sseWriter{w: w, flusher: flusher}
+	if err := g.lab.Run(r.Context(), body, sink); err != nil {
+		// The client likely disconnected mid-stream; nothing more to write.
+		slog.Debug("lab run ended", "error", err)
+	}
 }
 
 // serveWS upgrades to WebSocket, immediately sends the latest snapshot

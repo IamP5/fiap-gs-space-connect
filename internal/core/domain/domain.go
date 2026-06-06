@@ -84,6 +84,16 @@ func (a Vec2) Dist(b Vec2) float64 {
 	return math.Hypot(dx, dy)
 }
 
+// Vec3 is a 3D vector used by the Build spec (TECHSPEC §4): a position,
+// rotation (Euler radians), or scale expressed relative to a Task's Build
+// envelope frame. Like Vec2 it carries no JSON tags, so it marshals with
+// capital X/Y/Z — the TS mirror reads it the same way (see web/src/types/wire.ts).
+type Vec3 struct {
+	X float64
+	Y float64
+	Z float64
+}
+
 // Task is the authoritative record of one unit of construction in the World
 // Model (TECHSPEC §4). Zero value is a well-formed UNCLAIMED task with no
 // assignee.
@@ -101,6 +111,16 @@ type Task struct {
 	LeaseExpiry Tick
 	// Version is the Lamport stamp guarding updates to this record.
 	Version Lamport
+
+	// Mode selects how the Rover that wins this Task sources its Build-op stream
+	// (bh-08c): "live" runs the Build harness inline via the injected LiveBuilder
+	// seam; anything else (incl. the empty default) replays the deterministic
+	// cache/primitive stream. It is a PLAIN STRING TAG, deliberately NOT the
+	// agent.Mode type, so this hot-path/core record stays model-free (ADR-0005):
+	// the coordinator threads it from a placeBlueprint control onto each injected
+	// Task, and the winning Rover honours it at award time. Empty ⇒ replay, so
+	// every existing Task (and the whole startup board) is unchanged.
+	Mode string
 }
 
 // RoverState is the snapshot of a rover the Allocation Engine scores a bid

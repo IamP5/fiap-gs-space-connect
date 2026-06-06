@@ -59,6 +59,11 @@ export function computeBounds(points: Vec2[]): Bounds {
 export type SceneMap = {
   scale: number;
   at: (pos: Vec2, height?: number) => ScenePoint;
+  // invert maps a ground-plane scene point (x, z) BACK to world coords — the
+  // exact inverse of `at`. Used by drag-to-place (bh-05) to turn a raycast hit on
+  // the ground into the world origin the user is dropping a Blueprint on, so the
+  // ghost and the emitted placeBlueprint origin share the same projection.
+  invert: (x: number, z: number) => Vec2;
 };
 
 // Build the world→scene mapper from ALL worksite points (rovers + tasks), so the
@@ -83,6 +88,10 @@ export function sceneMap(rovers: Vec2[], tasks: Vec2[]): SceneMap {
       x: (pos.X - cx) * scale,
       y: height,
       z: -(pos.Y - cy) * scale,
+    }),
+    invert: (x: number, z: number): Vec2 => ({
+      X: x / scale + cx,
+      Y: -z / scale + cy,
     }),
   };
 }

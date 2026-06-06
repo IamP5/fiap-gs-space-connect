@@ -1,6 +1,6 @@
 {
   "project": "SwarmBuild",
-  "last_updated": "2026-06-05",
+  "last_updated": "2026-06-06",
   "description": "Machine-readable source of truth for feature status. The scheduler picks the lowest-priority feature that is not 'passing'; the verifier gates the transition to 'passing'. See docs/harness/README.md.",
   "rules": {
     "single_active_feature": true,
@@ -164,15 +164,19 @@
       "area": "build-harness",
       "title": "Build-spec seam + renderer interpreter + fallback (no LLM)",
       "user_visible_behavior": "A Build spec (declarative build operations) is carried in the Task snapshot and the renderer interprets it into geometry; a deterministic fallback spec exists so the scene renders with no LLM in the loop.",
-      "status": "not_started",
+      "status": "passing",
       "depends_on": ["mvp-07"],
       "verification": [
         "go test -race ./... (new build-spec module green)",
         "cd web && npm run build && npm test (renderer interprets a spec, falls back when none)",
         "./deploy/smoke.sh still passes — invariant: no harness call on the award/lease/expiry path; worst failure is 'looks like today', never 'demo breaks'"
       ],
-      "evidence": [],
-      "notes": "First active slice of the build-harness roadmap. Must respect ADR-0005..0007 and ADR-0001..0004. Build spec is declarative DATA, never executed code (ADR-0006)."
+      "evidence": [
+        "TaskView.build_spec + BuildOp/Material/BuildShape + domain.Vec3; internal/harness/spec embedded JSON schema + Validate() (table-driven + round-trip + reject-malformed tests)",
+        "Scene3D + web/src/lib/buildspec.ts interpret box/cylinder/sphere ops with procedural material; absent build_spec ⇒ exact tierOf output (fallback-unchanged web test)",
+        "make check green + web build/test green; PR #4 (bh/01→main); integration: combined-tree gate green (make check + web 100 tests + smoke PASS)"
+      ],
+      "notes": "First active slice. Build spec is declarative DATA, never executed code (ADR-0006). Landed in PR #4; integrated + verified green."
     },
     {
       "id": "bh-02",
@@ -180,11 +184,15 @@
       "area": "build-harness",
       "title": "Streamed, durable, resumable build ops (no LLM)",
       "user_visible_behavior": "Build ops stream into the snapshot and are durable + resumable across a rover outage (ADR-0007), still with no LLM.",
-      "status": "not_started",
+      "status": "passing",
       "depends_on": ["bh-01"],
       "verification": ["go test -race ./... ; ./deploy/smoke.sh still passes; manual: interrupt mid-build and confirm resume from durable ops"],
-      "evidence": [],
-      "notes": ""
+      "evidence": [
+        "Rover streams ops on build.op.<task> (SubjBuildOp, BuildOpMsg); coordinator validates+appends on the single-writer, mirrors spec to NATS KV, ops ride the snapshot",
+        "resume-on-kill: accumulated spec survives lease expiry; replacement resumes appending; kill-mid-build op-set convergence integration test stable across 5× race runs",
+        "forced-empty-ops best-effort invariant test: completion + self-heal byte-for-byte pre-harness; make check + smoke green; PR #5 (bh/02→bh/01)"
+      ],
+      "notes": "Resume-on-kill is the headline beat. Landed in PR #5; integrated + verified green."
     },
     {
       "id": "bh-03",
@@ -192,11 +200,11 @@
       "area": "build-harness",
       "title": "Model seam + one provider; bake one spec",
       "user_visible_behavior": "Behind the Model seam, one LLM provider generates a single Build spec offline ('bake'); swapping the provider is a config change, not a harness change.",
-      "status": "not_started",
+      "status": "passing",
       "depends_on": ["bh-02"],
       "verification": ["go test -race ./... (model seam unit-tested with a fake provider; validate-and-repair + fallback-on-exhaustion)", "go test -race ./... includes an import-graph architecture test asserting internal/harness/model is NOT in the import closure of the hot-path packages (allocation/auction, lease/heartbeat, expiry, tick) — ADR-0005", "manual: bake one spec and render it; confirm no API key reaches the browser"],
-      "evidence": [],
-      "notes": "HITL. The vendor SDK lives behind a single narrow interface (Model seam). The import-graph test mechanically enforces the hot-path invariant (promotes the TECHSPEC §8 grep)."
+      "evidence": ["internal/harness/model: Model interface + openai-go/v3 adapter (provider/base_url/model/key config); FakeModel contract test proves validate-and-repair (re-ask once) and fallback-on-exhaustion (model_test.go, no network)", "internal/harness/archtest: import-graph test asserts internal/harness/model NOT in the closure of allocation/lease/world/planner/coordinator — `go list -deps`, skips if go absent (ADR-0005)", "cmd/bake + internal/harness/bake: live gpt-4o-2024-08-06 bake produced 6-op foundation-1 spec → internal/harness/cache/specs/dome_foundation-1_3ae7e393_gpt-4o-2024-08-06.json (committed, declarative data, no key)", "headline replay: demo Rovers carry BlueprintID; embedded go:embed cache → deterministic replay (cache_test + coordinator/replay_test: hit replays baked spec, forced miss falls back to primitive, Task still DONE)", "smoke (Docker): self-heal fired + dome closed; live WS snapshot foundation-1 carried the exact baked spec, status DONE", "make check green: vet + golangci-lint (0 issues) + go test -race -shuffle=on ./...; go mod tidy clean; .env gitignored (only .env.example committed)"],
+      "notes": "HITL. The vendor SDK lives behind a single narrow interface (Model seam). The import-graph test mechanically enforces the hot-path invariant (promotes the TECHSPEC §8 grep). Done in bh-03 worktree."
     },
     {
       "id": "bh-04",
@@ -204,11 +212,16 @@
       "area": "build-harness",
       "title": "Generator <-> Evaluator loop + layered verdict (hard gate + soft rubric) + trace; bake all",
       "user_visible_behavior": "A Build harness runs a generate->evaluate loop until a contract's 'done' is met, baking specs for all tasks. The Evaluator emits a hard gate (envelope/collision/done — boolean, blocking) plus a soft rubric (done-coverage/coherence, 0-2 + evidence); each bake writes a trace sidecar.",
-      "status": "not_started",
+      "status": "passing",
       "depends_on": ["bh-03"],
       "verification": ["go test -race ./... (generator/evaluator loop; hard gate rejects out-of-envelope/collision/unmet-done with a unit test on each)", "go test -race ./... (a hard-gate-passing but low-scoring spec is cached with quality_flag:low, not withheld; the <spec-key>.trace.json round-trips)", "manual: bake-all produces a coherent dome; operator review lists fell-back UNION quality_flag:low Tasks"],
-      "evidence": [],
-      "notes": "Topology (B): Generator+Evaluator in one harness now. Layered verdict + trace per ADR-0008; the quality_flag:low population is the inspectable trigger for sub-agents (C) later (see memory: build-harness-agent-topology)."
+      "evidence": [
+        "internal/harness/evaluator hard gate (envelope/collision/done — boolean, blocking, unit test on each failure mode) + soft rubric (done_coverage/coherence 0-2 + evidence); internal/harness/loop bounded refine (hard cap 3)",
+        "hard-gate-pass + low-score cached quality_flag:low (not withheld); internal/harness/trace <spec-key>.trace.json round-trips",
+        "live bake-all gpt-4o: all 13 dome Tasks cached quality_flag:ok, 0 fallbacks, 0 low; traces show real refine (foundation-1 iter0 envelope-fail → iter1 pass); full dome replays deterministically (13/13)",
+        "operator REVIEW.md emitted; archtest green (harness loop/bake off the hot path); make check + smoke green; PR #8 (bh/04→bh/03)"
+      ],
+      "notes": "Topology (B). Layered verdict + trace per ADR-0008. Clean bake (0 fell back, 0 low) ⇒ no observed trace gap ⇒ sub-agents (C) NOT triggered. Landed in PR #8; integrated + verified green."
     },
     {
       "id": "bh-05",
@@ -216,11 +229,15 @@
       "area": "build-harness",
       "title": "Drag-to-place + Architect contracts + palette",
       "user_visible_behavior": "An operator drags items from a palette; the Architect authors Build contracts (intent + 'done') per task, within a Build envelope.",
-      "status": "not_started",
+      "status": "passing",
       "depends_on": ["bh-02"],
       "verification": ["cd web && npm run build && npm test ; go test -race ./... ; manual: drag-to-place produces composable, non-overlapping geometry"],
-      "evidence": [],
-      "notes": "Parallel branch off bh-02. Architect authors intent; the Auction still owns who/when (untouched)."
+      "evidence": [
+        "internal/blueprint catalog (dome + solar array + comms mast) with Envelope + Architect Contract DATA; placeBlueprint control cmd; coordinator validates bounds/terrain/no-overlap on the single-writer then injects the pre-baked DAG; Auction/Lease/World/Planner unchanged",
+        "web BlueprintPalette + ghost preview (per-task envelopes) + drag-to-place; multiple concurrent placements; placement integration test (inject→auction→build, multi-placement, invalid rejected, reload-clears) under -race",
+        "make check + web build/test green; PR #6 (bh/05→bh/02); composes with the spine (integration merge: only additive web-import conflicts, resolved; combined gate green)"
+      ],
+      "notes": "Parallel branch off bh-02. Architect authors intent; the Auction still owns who/when (untouched). Landed in PR #6; integrated + verified green."
     },
     {
       "id": "bh-06",
@@ -228,11 +245,15 @@
       "area": "build-harness",
       "title": "Vision evaluator pass + provider-swap proof",
       "user_visible_behavior": "A vision-based evaluator judges rendered output (headless Chrome on the real Scene3D) and a second provider is swapped in to prove the Model seam holds.",
-      "status": "not_started",
+      "status": "passing",
       "depends_on": ["bh-04"],
       "verification": ["go test -race ./... ; manual: vision score populates the silhouette soft-rubric dimension (0-2 + evidence) and lands in the trace; a low score refines within budget but on exhaustion the spec still caches flagged quality_flag:low (never withheld — ADR-0008)", "manual: run the same bake under two providers (GPT-class, Gemini OpenAI-compat) via config only; specs still validate (validate-and-repair retained)"],
-      "evidence": [],
-      "notes": "HITL. The vision pass is the source of the silhouette rubric dimension (couples bh-06 to bh-04's Evaluator). Bake/lab only — zero vision calls on the headline path."
+      "evidence": [
+        "internal/harness/vision: bake-time headless-Chrome render of the REAL Scene3D → screenshot → gpt-4o vision score → silhouette soft-rubric dimension (0-2 + evidence) into the trace; bake/lab only (archtest TestHeadlinePathMakesZeroVisionCalls green)",
+        "live: dome-cap iter0 silhouette 0 ('flat white dot') → refine → iter1 silhouette 2 ('clear dome shape') in the committed trace — the 'passes analytic, looks wrong → refine' lever end-to-end",
+        "Gemini provider-swap config-only (gemini-2.5-flash, strict json_schema held first try, validate-and-repair retained); doc note docs/build-harness/vision-pass-and-provider-swap.md; make check + smoke green; PR #9 (bh/06→bh/04)"
+      ],
+      "notes": "HITL. Vision pass sources the silhouette rubric dimension; bake/lab only — zero vision calls on the headline. Landed in PR #9; integrated + verified green."
     },
     {
       "id": "bh-07",
@@ -240,11 +261,29 @@
       "area": "build-harness",
       "title": "Stretch — live lab mode, sub-agents (C), glTF + textures",
       "user_visible_behavior": "A live lab mode runs the deep generation loop with sub-agents and richer assets (glTF models + textures) without changing the seam.",
-      "status": "not_started",
+      "status": "passing",
       "depends_on": ["bh-06"],
       "verification": ["go test -race ./... ; cd web && npm run build && npm test ; manual: lab-mode generation renders custom models/textures"],
+      "evidence": [
+        "Part A live lab mode: internal/harness/lab.Service runs the real Generator↔Evaluator on the Model seam; gateway /lab/generate SSE via an injected LabRunner interface (gateway imports neither model nor lab — archtest TestGatewayDoesNotImportModelOrLab); web LabPanel + agent console; off the hot path, headline replays cache unchanged",
+        "Part B glTF: Scene3D renders shape:model via GLTFLoader + material.map via TextureLoader with primitive fallback on miss; CC0 assets (Kenney Space Kit CC0 1.0 + Poly Haven CC0 1.0) with provenance in web/public/assets/CREDITS.md",
+        "live: lab SSE streamed started→ops→verdict→done on real OpenAI; headless Chrome rendered the Kenney glTF dome + Poly Haven texture; make check + web 100 tests + smoke green; PR #10 (bh/07→bh/06)"
+      ],
+      "notes": "Stretch — scoped to live lab mode + CC0 glTF per user. Sub-agents (topology C) DEFERRED: no observed trace gap (bh-04 baked 0 fell-back / 0 low), ADR-0008. Landed in PR #10; integrated + verified green."
+    },
+    {
+      "id": "bh-08",
+      "priority": 19,
+      "area": "build-harness",
+      "title": "Live build mode — the Rover runs the harness in the world",
+      "user_visible_behavior": "Dropping a Blueprint in 'live' mode makes the winning Rover run its LLM Build harness as it works: the structure rises and visibly self-corrects in the world step by step. Killing the Rover mid-build hands the half-built patch log to a replacement that continues live. The deterministic 'replay' dome stays the default and can stand beside a live one.",
+      "status": "not_started",
+      "depends_on": ["bh-05", "bh-07"],
+      "verification": [
+        "go test -race ./... (rescoped archtest: harness/model absent from self-heal core; live-mode retry→die→resume + circuit-breaker integration test) ; cd web && npm run build && npm test (patch-op fold: place/move/delete) ; manual: place a live Blueprint, watch it self-correct, kill mid-build, confirm live resume"
+      ],
       "evidence": [],
-      "notes": "Stretch. Deep loop lives in the generation/lab path; the headline replays a cached spec (see memory: build-harness-agent-topology)."
+      "notes": "DESIGN COMPLETE (grill-with-docs, 2026-06-06): ADR-0009 + issues/08-live-build-mode.md + TECHSPEC §4/§5/§6/§7/§8/§9/§10/§11 + CONTEXT.md (Build mode, Build spec patch ops). Decisions: model wired into agent (live only); agent.Config.Mode{replay|live}; per-placement mode on placeBlueprint; per-refine-iteration streaming via append-only patch-op log (place/move/delete) the renderer folds; failure heals (retry→die→resume-live), primitive circuit breaker after ~3 builder deaths; archtest rescoped to the self-heal core. Deliberately scopes ADR-0005's runtime rule (live build path only). NOT YET IMPLEMENTED."
     }
   ]
 }

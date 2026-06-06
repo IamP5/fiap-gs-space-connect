@@ -3,6 +3,12 @@
 .DS_Store
 dist/
 tmp/
+.env
 
 # Throwaway demo screenshots captured during dev-tools runs
 /web/demo-*.png
+
+# Secrets: never commit a real .env. The committed template is .env.example.
+.env
+.env.*
+!.env.example

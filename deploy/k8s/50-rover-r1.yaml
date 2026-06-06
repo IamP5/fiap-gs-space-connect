@@ -37,9 +37,19 @@ spec:
             - --x=-50
             - --y=-70
             - --battery=1.00
-            - --capabilities=foundation,wall,dome-cap
+            - --capabilities=foundation,wall,dome-cap,panel,mast
             - --mode=container
             - --heartbeat-ms=700
           env:
             - name: NATS_URL
               value: nats://nats:4222
+          # Live Build Mode (bh-08): the OPTIONAL swarmbuild-llm Secret (synced by
+          # up.sh from the repo-root .env) gives this rover Pod the API key, making it
+          # LIVE-CAPABLE. cmd/agent injects the LiveBuilder when a key is present but
+          # keeps the rover's default Mode = replay, so only a per-Task live tag (a
+          # Blueprint dropped in "live" mode) builds inline; the headline stays
+          # deterministic. Secret absent => pure replay, Pod still starts.
+          envFrom:
+            - secretRef:
+                name: swarmbuild-llm
+                optional: true

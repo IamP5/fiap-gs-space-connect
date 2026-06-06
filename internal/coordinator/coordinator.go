@@ -21,11 +21,13 @@ import (
 	"log/slog"
 	"slices"
 	"swarmbuild/internal/agent"
+	"swarmbuild/internal/blueprint"
 	"swarmbuild/internal/bus"
 	"swarmbuild/internal/core/domain"
 	"swarmbuild/internal/core/lease"
 	"swarmbuild/internal/core/planner"
 	"swarmbuild/internal/core/world"
+	"swarmbuild/internal/harness/spec"
 	"swarmbuild/internal/wire"
 	"time"
 )
@@ -68,6 +70,65 @@ type Config struct {
 	// KILL — so the heal that follows is entirely genuine. This reproduces the
 	// kill→heal money shot at the same beat every run. Empty in production.
 	ScriptedKills []ScriptedKill
+	// Catalog is the pre-authored Blueprint catalog the placeBlueprint control
+	// draws from (bh-05). Nil ⇒ blueprint.DefaultCatalog() is used, so a placed
+	// Blueprint always resolves against the shipped dome/solar-array/comms-mast.
+	Catalog *blueprint.Catalog
+	// WorldBounds is the half-extent (in worksite units) of the square build area
+	// a placed Blueprint must fit inside, centred on the origin: every injected
+	// task's envelope footprint must lie within [-WorldBounds, +WorldBounds] on
+	// both axes (placement validation). Zero ⇒ defaultWorldBounds.
+	WorldBounds float64
+	// BuilderDeathBreaker is the live-mode circuit-breaker threshold (bh-08g): the
+	// number of times a single Task may be re-auctioned BECAUSE its live builder
+	// DIED (the bh-08f model-failure death, signalled by a wire.Failed stamped
+	// wire.ReasonBuilderDied — distinct from an ordinary expiry/kill) before the
+	// coordinator trips the breaker and finishes the Task with the deterministic
+	// PRIMITIVE op-source as a last resort. This bounds a SYSTEMIC live-mode failure
+	// (bad key, provider outage, rate-limit) that would otherwise cascade — every
+	// rover retrying, dying, and depleting the swarm while the Task never completes
+	// and its dependents stay stuck forever. On trip the coordinator DOWNGRADES the
+	// Task to replay mode (clears its live tag) so the next rover builds it
+	// deterministically with ZERO model calls and the dome still closes; the
+	// coordinator never touches the Model seam (ADR-0005, archtest). Zero ⇒
+	// defaultBuilderDeathBreaker (≈3); a value < 1 is bumped to 1.
+	BuilderDeathBreaker int
+	// BuildSpecs is an OPTIONAL per-Task Build spec (TECHSPEC §4, ADR-0006):
+	// declarative geometry the renderer interprets instead of the primitive
+	// fallback. In bh-01 this carries a single hardcoded SAMPLE spec to prove the
+	// wire seam end-to-end; a later slice replaces it with generated/cached specs
+	// streamed over NATS. It is validated once at Run (off the hot path) and then
+	// attached to the matching TaskView in each snapshot — pure additive data, so
+	// a Task without an entry renders exactly as before.
+	BuildSpecs map[domain.TaskID][]wire.BuildOp
+}
+
+// withDefaults returns a copy of cfg with the unset timing/catalog/bounds knobs
+// filled in to their defaults. Kept off Run so Run stays focused on wiring (and
+// under the cyclomatic-complexity gate); the defaults are a pure data transform.
+func (cfg Config) withDefaults() Config {
+	if cfg.SnapshotHz <= 0 {
+		cfg.SnapshotHz = 10
+	}
+	if cfg.AuctionWindow <= 0 {
+		cfg.AuctionWindow = 400 * time.Millisecond
+	}
+	if cfg.HeartbeatEvery <= 0 {
+		cfg.HeartbeatEvery = 500 * time.Millisecond
+	}
+	if cfg.TTLFactor < 3 {
+		cfg.TTLFactor = 3 // TECHSPEC §8: TTL ≥ 3× heartbeat
+	}
+	if cfg.Catalog == nil {
+		cfg.Catalog = blueprint.DefaultCatalog()
+	}
+	if cfg.WorldBounds <= 0 {
+		cfg.WorldBounds = defaultWorldBounds
+	}
+	if cfg.BuilderDeathBreaker < 1 {
+		cfg.BuilderDeathBreaker = defaultBuilderDeathBreaker
+	}
+	return cfg
 }
 
 // ScriptedKill schedules one reproducible demo kill: once WhenTaskLeased is
@@ -91,6 +152,22 @@ type armedKill struct {
 // promptly after it opens.
 const tickEvery = 50 * time.Millisecond
 
+// defaultWorldBounds is the half-extent (worksite units) of the square build
+// area a placed Blueprint must fit inside when Config.WorldBounds is unset
+// (bh-05). The demo dome's outer ring sits at radius ~46 and its cap envelope
+// reaches ~20 beyond that, so 150 comfortably holds a placed dome plus a couple
+// of satellite structures without colliding off-board.
+const defaultWorldBounds = 150.0
+
+// defaultBuilderDeathBreaker is the live-mode circuit-breaker threshold when
+// Config.BuilderDeathBreaker is left zero (bh-08g): after this many builder deaths
+// re-auction the SAME Task (each a bh-08f model-failure death, distinct from an
+// ordinary expiry/kill), the coordinator stops re-auctioning it live and finishes it
+// with the deterministic primitive op-source so dependents unblock and the dome still
+// closes under a systemic model outage. Small so a genuinely-dead provider is shed
+// quickly, > 1 so a single unlucky death does not abandon live mode prematurely.
+const defaultBuilderDeathBreaker = 3
+
 // inbound events fed to the single-writer goroutine. Each is a closure-free
 // value type so the channel carries plain data; the writer interprets them.
 type (
@@ -99,11 +176,23 @@ type (
 	evFailed    struct{ failed wire.Failed }
 	evHeartbeat struct{ hb wire.Heartbeat }
 	evTelemetry struct{ tel wire.Telemetry }
+	// evBuildOp carries one streamed build op a Rover emitted on build.op.<task>
+	// (bh-02). Like every inbound message it enters the single writer via the
+	// events channel and is NEVER applied on the NATS dispatcher: the writer
+	// validates and appends it to the Task's accumulating Build spec.
+	evBuildOp struct{ msg wire.BuildOpMsg }
 	// evReload resets the demo board IN-PROCESS so the swarm rebuilds the dome
 	// from scratch (reloadDemo control). It MUTATES owned state, so — like every
 	// other event — it flows through the single-writer channel and is never
 	// handled on the NATS dispatcher (TECHSPEC §8).
 	evReload struct{}
+	// evPlaceBlueprint injects a catalog Blueprint's pre-baked task DAG at an
+	// origin (placeBlueprint control, bh-05). Like reloadDemo it MUTATES owned
+	// state (Planner, World Model, positions), so it runs ONLY on the single
+	// writer: the dispatcher merely enqueues it. The writer validates placement
+	// (bounds/terrain/no-overlap) BEFORE the tasks go live and rejects an invalid
+	// placement; the Auction then feeds on any injected tasks exactly as today.
+	evPlaceBlueprint struct{ ctl wire.Control }
 )
 
 // auction is one open auction: the bids received so far for a task during its
@@ -139,6 +228,47 @@ type state struct {
 	blueprint []domain.Task
 	cfgKills  []ScriptedKill
 
+	// catalog is the pre-authored Blueprint catalog placeBlueprint draws from, and
+	// worldBounds the half-extent of the legal build square (bh-05). placedTasks
+	// accumulates every PlacedTask injected so far (the originals' worksite
+	// geometry), used both as live state and for no-overlap validation of the next
+	// placement; placeSeq is a monotonic counter that gives each placement a unique
+	// instance prefix so two placed copies of a Blueprint never share task ids.
+	// onReload clears placedTasks so a demo reload starts from the pristine board.
+	catalog     *blueprint.Catalog
+	worldBounds float64
+	placedTasks []blueprint.PlacedTask
+	placeSeq    int
+	// seedSpecs is a pristine copy of the static per-Task Build specs supplied at
+	// Run, used by onReload to reset buildSpecs back to the seed so a demo reload
+	// rebuilds the structure op-by-op from scratch instead of resuming a stale
+	// half-built spec. Empty unless the caller passed Config.BuildSpecs.
+	seedSpecs map[domain.TaskID][]wire.BuildOp
+
+	// buildSpecs is each Task's accumulating, durable Build spec (TECHSPEC §4,
+	// ADR-0006/0007). It is seeded with any pre-validated static specs at Run, then
+	// GROWS op-by-op as Rovers stream ops on build.op.<task> (bh-02): onBuildOp
+	// appends each validated op here, the writer mirrors it to KV, and
+	// publishSnapshot attaches the matching spec to a TaskView so the structure
+	// rides the real WS snapshot and rises live. The accumulation is the durable
+	// partial state: it is NEVER cleared when a lease expires, so a replacement
+	// Rover resumes appending from the partial structure (the headline resume).
+	// Only the single-writer goroutine touches it (TECHSPEC §8).
+	buildSpecs map[domain.TaskID][]wire.BuildOp
+
+	// builderDeaths counts, PER TASK, how many times the Task has been re-auctioned
+	// because its LIVE builder DIED (bh-08g): a bh-08f model-failure death, reported
+	// as a wire.Failed stamped wire.ReasonBuilderDied — distinct from an ordinary
+	// expiry/kill or a plain cooperative release, neither of which is counted. Once
+	// the count reaches breakerThreshold the coordinator trips the circuit breaker:
+	// it DOWNGRADES the Task to replay mode (clears its live tag) so the next rover
+	// finishes it with the deterministic primitive op-source — bounding a systemic
+	// live-mode outage instead of letting every rover die on it forever. Only the
+	// single-writer goroutine touches it (TECHSPEC §8). onReload clears it so a demo
+	// reload starts the breaker fresh.
+	builderDeaths    map[domain.TaskID]int
+	breakerThreshold int
+
 	conn   *bus.Conn
 	kv     *bus.KV
 	clk    domain.Clock
@@ -157,18 +287,7 @@ type state struct {
 // single-writer coordinator until ctx is cancelled. It returns the first fatal
 // error (or ctx.Err() on shutdown).
 func Run(ctx context.Context, cfg Config) error {
-	if cfg.SnapshotHz <= 0 {
-		cfg.SnapshotHz = 10
-	}
-	if cfg.AuctionWindow <= 0 {
-		cfg.AuctionWindow = 400 * time.Millisecond
-	}
-	if cfg.HeartbeatEvery <= 0 {
-		cfg.HeartbeatEvery = 500 * time.Millisecond
-	}
-	if cfg.TTLFactor < 3 {
-		cfg.TTLFactor = 3 // TECHSPEC §8: TTL ≥ 3× heartbeat
-	}
+	cfg = cfg.withDefaults()
 
 	// --- Load the blueprint into the Planner and seed the World Model. ---
 	tasks := make([]domain.Task, len(cfg.Blueprint))
@@ -197,6 +316,14 @@ func Run(ctx context.Context, cfg Config) error {
 	clk := wallClock{}
 	ttl := domain.Tick(cfg.HeartbeatEvery.Milliseconds() * int64(cfg.TTLFactor))
 
+	// --- Validate any optional Build specs ONCE, off the hot path (ADR-0006: a
+	// malformed spec must never reach a snapshot). A rejected spec fails Run loudly
+	// rather than silently shipping bad geometry to the browser. ---
+	buildSpecs, err := validatedBuildSpecs(cfg.BuildSpecs)
+	if err != nil {
+		return fmt.Errorf("coordinator: invalid build spec: %w", err)
+	}
+
 	st := &state{
 		plan:     plan,
 		model:    model,
@@ -216,10 +343,27 @@ func Run(ctx context.Context, cfg Config) error {
 		// set and an untouched copy of the scripted kills to re-arm from.
 		blueprint: append([]domain.Task(nil), tasks...),
 		cfgKills:  append([]ScriptedKill(nil), cfg.ScriptedKills...),
+		// Blueprint catalog + legal build square for placeBlueprint (bh-05).
+		catalog:     cfg.Catalog,
+		worldBounds: cfg.WorldBounds,
 		// Buffered so publishSnapshot's non-blocking send rarely drops; the shim
 		// owns the channel's receive side.
 		earthCh: make(chan wire.EarthUplink, 64),
+		// Each Task's accumulating Build spec, seeded with any pre-validated static
+		// specs and grown op-by-op by streamed ops (bh-02).
+		buildSpecs: buildSpecs,
+		// Pristine seed copy for onReload to reset the accumulation to.
+		seedSpecs: cloneSpecs(buildSpecs),
+		// Per-Task builder-death counter + the live-mode circuit-breaker threshold
+		// (bh-08g): once a Task's live builder has died this many times it is finished
+		// with the primitive op-source instead of re-auctioned live again.
+		builderDeaths:    make(map[domain.TaskID]int),
+		breakerThreshold: cfg.BuilderDeathBreaker,
 	}
+
+	// Seed any static Build specs into KV so the durable spec key exists from the
+	// start, mirroring how connectBus seeds the task records (bh-02).
+	st.mirrorAllSpecs(ctx)
 
 	// --- Earth-uplink shim (issue 09): a SEPARATE goroutine owns the artificial
 	// delay and the earth.uplink publish. It NEVER touches single-writer state,
@@ -350,6 +494,12 @@ func subscribe(ctx context.Context, conn *bus.Conn, events chan<- any) (func(), 
 	if err = add(unsubTelemetry, err, "telemetry"); err != nil {
 		return nil, err
 	}
+	unsubBuildOp, err := bus.SubscribeJSON(conn, wire.SubjBuildOpWildcard, func(m wire.BuildOpMsg) {
+		enqueue(evBuildOp{msg: m})
+	})
+	if err = add(unsubBuildOp, err, "build ops"); err != nil {
+		return nil, err
+	}
 	return cleanup, nil
 }
 
@@ -362,6 +512,8 @@ func subscribe(ctx context.Context, conn *bus.Conn, events chan<- any) (func(), 
 //     cannot perturb auctions/leases/snapshots (ADR-0002).
 //   - "reloadDemo" MUTATES owned state (Planner, World Model, leases, auctions),
 //     so it must run on the single writer: the dispatcher only enqueues evReload.
+//   - "placeBlueprint" likewise MUTATES owned state (it injects a task DAG after a
+//     validation pass), so it too is enqueued for the single writer (bh-05).
 //
 // "kill" / "killContainer" / "setFailureProb" are handled by the agents and the
 // killer sidecar, not here.
@@ -373,6 +525,14 @@ func subscribeControl(ctx context.Context, conn *bus.Conn, shim *earthShim, even
 		case "reloadDemo":
 			select {
 			case events <- evReload{}:
+			case <-ctx.Done():
+			}
+		case "placeBlueprint":
+			// Drag-to-place (bh-05): MUTATES owned state (Planner, World Model,
+			// positions) after a validation pass, so it must run on the single writer
+			// — the dispatcher only enqueues, never validates or injects here.
+			select {
+			case events <- evPlaceBlueprint{ctl: c}:
 			case <-ctx.Done():
 			}
 		}
@@ -454,8 +614,12 @@ func (st *state) handle(ctx context.Context, e any) {
 		if had && !prev.Alive && ev.tel.Alive {
 			st.emit(wire.Event{Kind: wire.EventRevived, Robot: ev.tel.Robot})
 		}
+	case evBuildOp:
+		st.onBuildOp(ctx, ev.msg)
 	case evReload:
 		st.onReload(ctx)
+	case evPlaceBlueprint:
+		st.onPlaceBlueprint(ctx, ev.ctl)
 	}
 }
 
@@ -482,6 +646,62 @@ func (st *state) onBid(b wire.Bid) {
 // onHeartbeat renews the lease TTL for the holder.
 func (st *state) onHeartbeat(h wire.Heartbeat) {
 	st.leases.Heartbeat(h.TaskID, h.Robot)
+}
+
+// onBuildOp appends one streamed build op to the Task's accumulating Build spec
+// (bh-02), the headline streamed-durable-resumable path. It runs ONLY on the
+// single writer (the dispatcher merely enqueued it), so it freely mutates the
+// owned buildSpecs and World Model without further synchronisation (TECHSPEC §8).
+//
+// Three guards keep the accumulation correct and durable:
+//
+//   - Validate: every op is checked against the Build-spec schema
+//     (internal/harness/spec) BEFORE it is appended, so a malformed op never
+//     reaches a snapshot (ADR-0006 — validated before accepted). A rejected op is
+//     dropped, not appended.
+//   - Idempotent append by Seq: the op is appended only when its Seq equals the
+//     current spec length (the next expected slot). A duplicate or out-of-order
+//     redelivery (Seq < length), or a gap (Seq > length), is a no-op. This is
+//     what makes resume-on-kill converge: a replacement Rover re-emits the same
+//     deterministic stream from Seq 0, the already-present ops dedupe, and it
+//     continues appending from where the killed builder stopped.
+//   - Mirror: the grown spec is written to KV under wire.KVSpecKey so it is
+//     durable and an independent observer can read the partial structure.
+//
+// The op append also bumps the Task's Version and mirrors the Task record, so
+// the monotonic World Model and KV reflect that the structure advanced; the
+// accumulating spec then rides the next snapshot (publishSnapshot reads
+// buildSpecs). It is appended only while the Task is actively LEASED — a stray
+// op for an UNCLAIMED/DONE task is ignored.
+func (st *state) onBuildOp(ctx context.Context, m wire.BuildOpMsg) {
+	cur, ok := st.model.Get(m.TaskID)
+	if !ok || cur.Status != domain.Leased {
+		return // not an actively-built task: drop the stray op
+	}
+	existing := st.buildSpecs[m.TaskID]
+	if m.Seq != len(existing) {
+		return // duplicate, out-of-order, or gap: idempotent no-op (resume dedupe)
+	}
+	// Validate the candidate FOLDED log, not the op in isolation (bh-08a): a
+	// move/delete only makes sense against the accumulated log, so we fold
+	// existing+op and reject if the result is malformed (a move/delete of an
+	// unknown id, or a folded survivor that fails the schema gate). A copy avoids
+	// appending to `existing`'s backing array before the op is accepted.
+	candidate := append(append(make([]wire.BuildOp, 0, len(existing)+1), existing...), m.Op)
+	if err := spec.Validate(candidate); err != nil {
+		slog.Warn("rejected build op", "task", m.TaskID, "seq", m.Seq, "error", err)
+		return // malformed: never appended (ADR-0006)
+	}
+	st.buildSpecs[m.TaskID] = candidate
+	st.mirrorSpec(ctx, m.TaskID)
+
+	// Bump the Task version and re-mirror so the World Model/KV record that the
+	// structure advanced; the grown spec rides the next snapshot.
+	next := cur
+	next.Version = cur.Version + 1
+	if st.model.Apply(next) {
+		st.mirror(ctx, next)
+	}
 }
 
 // onComplete handles a rover reporting its leased task finished: complete the
@@ -528,9 +748,31 @@ func (st *state) onFailed(ctx context.Context, c wire.Failed) {
 	next.Assignee = ""
 	next.LeaseExpiry = 0
 	next.Version = cur.Version + 1
+
+	// Live-mode circuit breaker (bh-08g): a Failed stamped ReasonBuilderDied is a
+	// bh-08f model-failure DEATH (the rover crossed its threshold and went silent),
+	// NOT an ordinary cooperative release. Count it per Task; once the count reaches
+	// the breaker threshold, DOWNGRADE the Task to replay mode (clear its live tag)
+	// so the next rover finishes it with the deterministic primitive op-source — no
+	// model, coordinator stays model-free. This bounds a systemic live outage instead
+	// of re-auctioning the Task live to die on the same bad provider forever. A plain
+	// cooperative release (any other Reason) is untouched: it never counts and never
+	// downgrades, so replay mode and ordinary self-heal are unaffected.
+	if c.Reason == wire.ReasonBuilderDied && cur.Mode == string(agent.ModeLive) {
+		st.builderDeaths[c.TaskID]++
+		deaths := st.builderDeaths[c.TaskID]
+		if deaths >= st.breakerThreshold {
+			next.Mode = "" // downgrade to replay: the next award builds it primitively
+			slog.Warn("live circuit breaker tripped: downgrading task to primitive op-source",
+				"task", c.TaskID, "builder_deaths", deaths, "threshold", st.breakerThreshold)
+		} else {
+			slog.Info("builder death recorded", "task", c.TaskID, "by", c.Robot, "builder_deaths", deaths, "threshold", st.breakerThreshold)
+		}
+	}
+
 	if st.model.Apply(next) {
 		st.mirror(ctx, next)
-		slog.Info("failed", "task", c.TaskID, "by", c.Robot, "version", next.Version, "note", "released for re-auction")
+		slog.Info("failed", "task", c.TaskID, "by", c.Robot, "version", next.Version, "reason", c.Reason, "note", "released for re-auction")
 	}
 }
 
@@ -618,7 +860,7 @@ func (st *state) openAuction(t domain.Task) {
 		bids:     make(map[domain.RobotID]float64),
 		closesAt: time.Now().Add(st.window),
 	}
-	ann := wire.Announce{TaskID: t.ID, Type: t.Type, Pos: pos, Version: t.Version}
+	ann := wire.Announce{TaskID: t.ID, Type: t.Type, Pos: pos, Mode: t.Mode, Version: t.Version}
 	_ = st.conn.PublishJSON(wire.SubjTaskAnnounce, ann)
 	slog.Info("announce", "task", ann.TaskID, "type", ann.Type, "version", ann.Version)
 }
@@ -692,9 +934,19 @@ func (st *state) award(ctx context.Context, t domain.Task, winner domain.RobotID
 	_ = st.conn.PublishJSON(wire.SubjTaskAward, wire.Award{
 		TaskID:   t.ID,
 		Robot:    winner,
+		Type:     t.Type,       // so the winner knows which op stream to emit (bh-02)
+		Mode:     t.Mode,       // per-Task build mode so the winner honours replay/live (bh-08c)
 		Pos:      st.pos[t.ID], // where the winner must drive to (slice 02)
 		LeaseTTL: st.ttl,
 		Version:  next.Version,
+		// Hand the winner the Task's already-accumulated durable patch log (bh-08e):
+		// empty for a fresh Task, non-empty when this is a RE-auction of a Task whose
+		// predecessor was killed/expired mid-build (the patch log was never cleared —
+		// onExpired/onFailed return the Task to UNCLAIMED but leave buildSpecs intact).
+		// A live replacement Rover folds it and CONTINUES the harness loop from the
+		// half-built structure, resuming Seq after these ops. A defensive copy so a
+		// later append to the live accumulation can't mutate what this award shipped.
+		PriorOps: append([]wire.BuildOp(nil), st.buildSpecs[t.ID]...),
 	})
 	st.emit(wire.Event{Kind: wire.EventWon, TaskID: t.ID, Robot: winner})
 	st.armScriptedKills(t.ID, winner)
@@ -771,11 +1023,44 @@ func (st *state) onReload(ctx context.Context) {
 	st.auctions = make(map[domain.TaskID]*auction)
 	st.armedKills = nil
 	st.pendingEvents = nil
+	// Reset the per-Task builder-death counts so the live-mode circuit breaker (bh-08g)
+	// starts fresh on a reloaded board rather than carrying a tripped count into the
+	// rebuild.
+	st.builderDeaths = make(map[domain.TaskID]int)
 
 	// Re-arm the scripted kills from the pristine config copy (fired=false) so the
 	// kill→heal money shot replays in inproc mode. In external/k8s mode cfgKills is
 	// empty, so this is a harmless no-op.
 	st.scriptedKills = append([]ScriptedKill(nil), st.cfgKills...)
+
+	// Drop any drag-placed Blueprints (bh-05): a reload rebuilds the pristine board
+	// only. The Planner was just reloaded from st.blueprint alone (above), so the
+	// placed tasks are no longer scheduled; here we forget their tracking +
+	// positions and bump their lingering World Model records to a terminal DONE at
+	// the winning version so they neither re-auction nor sit as stale UNCLAIMED
+	// work. placeSeq is deliberately NOT reset, so a placement made AFTER a reload
+	// gets a fresh instance id (bp{n+1}) and never collides with the now-terminal
+	// records of a forgotten placement that reused an id.
+	for _, p := range st.placedTasks {
+		done := p.Task
+		done.Status = domain.Done
+		done.Assignee = ""
+		done.LeaseExpiry = 0
+		done.Version = base
+		if st.model.Apply(done) {
+			st.mirror(ctx, done)
+		}
+		delete(st.pos, p.Task.ID)
+	}
+	st.placedTasks = nil
+
+	// Reset the accumulating Build specs back to the pristine seed so the structure
+	// rebuilds op-by-op from scratch rather than resuming a stale half-built spec
+	// (bh-02). Re-mirror each reset spec so an observer sees the cleared structure.
+	st.buildSpecs = cloneSpecs(st.seedSpecs)
+	for _, t := range st.blueprint {
+		st.mirrorSpec(ctx, t.ID)
+	}
 
 	// Return every blueprint task to UNCLAIMED at the winning version and mirror it
 	// to KV so an independent observer sees the reset board immediately.
@@ -806,11 +1091,58 @@ func maxVersion(tasks []domain.Task) domain.Lamport {
 	return highest
 }
 
+// validatedBuildSpecs copies and validates the optional per-Task Build specs
+// against the Build-spec schema (ADR-0006), returning the first rejection so Run
+// fails loudly rather than shipping malformed geometry to the browser. Runs once
+// at startup, never on the hot path. The returned map is always non-nil (the
+// writer appends streamed ops into it, bh-02); a nil/empty input yields an empty
+// map.
+func validatedBuildSpecs(in map[domain.TaskID][]wire.BuildOp) (map[domain.TaskID][]wire.BuildOp, error) {
+	out := make(map[domain.TaskID][]wire.BuildOp, len(in))
+	for id, ops := range in {
+		if err := spec.Validate(ops); err != nil {
+			return nil, fmt.Errorf("task %s: %w", id, err)
+		}
+		// Defensive copy so a caller mutating its slice can't alter what snapshots ship.
+		out[id] = append([]wire.BuildOp(nil), ops...)
+	}
+	return out, nil
+}
+
+// cloneSpecs deep-copies a per-Task spec map so the seed copy and the live
+// accumulation never alias each other's slices.
+func cloneSpecs(in map[domain.TaskID][]wire.BuildOp) map[domain.TaskID][]wire.BuildOp {
+	out := make(map[domain.TaskID][]wire.BuildOp, len(in))
+	for id, ops := range in {
+		out[id] = append([]wire.BuildOp(nil), ops...)
+	}
+	return out
+}
+
 // mirror writes the authoritative task record to NATS KV (the World Model
 // mirror, TECHSPEC §3 / ADR-0002).
 func (st *state) mirror(ctx context.Context, t domain.Task) {
 	if err := st.kv.PutJSON(ctx, string(t.ID), t); err != nil {
 		slog.Warn("kv mirror failed", "task", t.ID, "error", err)
+	}
+}
+
+// mirrorSpec writes a Task's accumulating Build spec to NATS KV under
+// wire.KVSpecKey so the durable partial structure survives independently of the
+// in-memory writer state and a reader can fetch it (bh-02). Best-effort like the
+// task mirror: a transient KV error is logged, not fatal — the authoritative
+// copy is the writer's buildSpecs, which the next snapshot still carries.
+func (st *state) mirrorSpec(ctx context.Context, id domain.TaskID) {
+	if err := st.kv.PutJSON(ctx, wire.KVSpecKey(id), st.buildSpecs[id]); err != nil {
+		slog.Warn("kv spec mirror failed", "task", id, "error", err)
+	}
+}
+
+// mirrorAllSpecs mirrors every currently-known Build spec to KV. Used at startup
+// (seed static specs) and after a demo reload (publish the cleared specs).
+func (st *state) mirrorAllSpecs(ctx context.Context) {
+	for id := range st.buildSpecs {
+		st.mirrorSpec(ctx, id)
 	}
 }
 
@@ -829,6 +1161,9 @@ func (st *state) publishSnapshot() {
 			LeaseExpiry: t.LeaseExpiry,
 			Version:     t.Version,
 			Deps:        t.Deps,
+			// Attach the Task's pre-validated Build spec, if any. Absent ⇒ the field
+			// stays nil and the renderer uses the deterministic primitive fallback.
+			BuildSpec: st.buildSpecs[t.ID],
 		})
 	}
 

@@ -107,6 +107,7 @@ linters:
       - third_party$
       - testutils$
       - examples$
+      - node_modules     # JS deps may vendor stray .go files (e.g. flatted); never our code
 
   settings:
     dupl:
@@ -142,3 +143,4 @@ formatters:
       - third_party$
       - builtin$
       - examples$
+      - node_modules
