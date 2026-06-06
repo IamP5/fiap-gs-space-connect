@@ -43,6 +43,24 @@ const (
 	ModeLive Mode = "live"
 )
 
+// effectiveMode resolves the mode for ONE awarded Task (bh-08c): the per-Task mode
+// tag the coordinator stamped onto the Award (from a placeBlueprint) WINS, so the
+// operator's per-placement choice is honoured even on a rover whose Config.Mode is
+// the replay default. When the Task carries no mode (the empty default — every
+// pre-08c award, the whole startup board), the rover falls back to its Config.Mode,
+// so `cmd/agent --build-mode=live` still drives a whole rover live. Any value other
+// than the explicit ModeLive (incl. "replay" and the empty fallback) is replay, so
+// a malformed tag can never silently start live model calls.
+func effectiveMode(taskMode string, cfgMode Mode) Mode {
+	if taskMode == string(ModeLive) {
+		return ModeLive
+	}
+	if taskMode == "" && cfgMode == ModeLive {
+		return ModeLive
+	}
+	return ModeReplay
+}
+
 // LiveBuilder is the agent's INJECTED seam onto the Build harness (bh-08, live
 // mode). BuildLive runs the Generator↔Evaluator refine loop for one Task via the
 // Model seam and returns the accepted op stream, or ok=false on exhaustion/error
@@ -143,11 +161,17 @@ type Config struct {
 // An explicit Config.BuildOps override (incl. a forced-empty slice) still wins in
 // BOTH modes — it is the tests/invariant path — so the invariant suite stays
 // model-free regardless of Mode.
-func (c Config) workOps(ctx context.Context, task domain.TaskID, t domain.TaskType) []wire.BuildOp {
+//
+// mode is the EFFECTIVE mode for THIS Task (bh-08c): the awarded Task's per-Task
+// mode tag, falling back to Config.Mode when the Task carries none (see
+// effectiveMode). So a single rover replays a replay-tagged Task and builds live
+// for a live-tagged Task in the same world, rather than the mode being fixed
+// per-rover.
+func (c Config) workOps(ctx context.Context, task domain.TaskID, t domain.TaskType, mode Mode) []wire.BuildOp {
 	if c.BuildOps != nil {
 		return c.BuildOps[t] // explicit override (incl. forced-empty) beats every source, both modes
 	}
-	if c.Mode == ModeLive && c.LiveBuilder != nil {
+	if mode == ModeLive && c.LiveBuilder != nil {
 		if ops, ok := c.LiveBuilder.BuildLive(ctx, task, t); ok {
 			slog.Info("live build", "task", task, "type", t, "ops", len(ops))
 			return ops // accepted live spec: emit the generated ops
@@ -878,9 +902,14 @@ func workPhase(ctx context.Context, cfg Config, conn *bus.Conn, st *rover, heart
 // On exhaustion/error workOps already degrades to the replay/primitive stream, so
 // a non-phaseDone result here is only an outage/fault, never a model failure.
 func resolveWorkOps(ctx context.Context, cfg Config, conn *bus.Conn, st *rover, heart, fault *time.Ticker, down <-chan struct{}, aw wire.Award) ([]wire.BuildOp, phaseResult) {
+	// Resolve the EFFECTIVE mode for THIS Task (bh-08c): the awarded Task's per-Task
+	// tag wins, falling back to Config.Mode when the Task carries none. So a single
+	// rover replays a replay-tagged Task and builds live for a live-tagged Task.
+	mode := effectiveMode(aw.Mode, cfg.Mode)
+
 	// Replay mode (the default): no model call, resolve inline and return at once so
 	// the path stays byte-for-byte the pre-08 behaviour.
-	if cfg.Mode != ModeLive || cfg.LiveBuilder == nil {
+	if mode != ModeLive || cfg.LiveBuilder == nil {
 		return cfg.opsFor(aw.TaskID, aw.Type), phaseDone
 	}
 
@@ -891,7 +920,7 @@ func resolveWorkOps(ctx context.Context, cfg Config, conn *bus.Conn, st *rover, 
 	type genResult struct{ ops []wire.BuildOp }
 	resCh := make(chan genResult, 1)
 	go func() {
-		resCh <- genResult{ops: cfg.workOps(genCtx, aw.TaskID, aw.Type)}
+		resCh <- genResult{ops: cfg.workOps(genCtx, aw.TaskID, aw.Type, mode)}
 	}()
 
 	for {

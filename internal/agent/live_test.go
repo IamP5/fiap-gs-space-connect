@@ -133,15 +133,35 @@ func newLiveHarness(t *testing.T, id domain.RobotID, cfg Config) *liveHarness {
 
 func (h *liveHarness) award(t *testing.T, task domain.TaskID) {
 	t.Helper()
+	h.awardMode(t, task, "")
+}
+
+// awardMode publishes an Award carrying a per-Task build mode tag (bh-08c), so a
+// test can prove the WINNING rover honours the Task's mode (not just its Config).
+func (h *liveHarness) awardMode(t *testing.T, task domain.TaskID, mode string) {
+	t.Helper()
 	if err := h.conn.PublishJSON(wire.SubjTaskAward, wire.Award{
 		TaskID: task,
 		Robot:  h.roverID,
 		Type:   typeFoundation,
+		Mode:   mode,
 		Pos:    domain.Vec2{X: 1, Y: 0},
 	}); err != nil {
 		t.Fatalf("publish award: %v", err)
 	}
 	_ = h.conn.Flush()
+}
+
+func (h *liveHarness) awaitComplete(t *testing.T) {
+	t.Helper()
+	deadline := time.Now().Add(4 * time.Second)
+	for time.Now().Before(deadline) {
+		if h.completes() > 0 {
+			return
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
+	t.Fatalf("rover did not complete the task")
 }
 
 // TestLiveMode_BuildsFromGeneratedOps: a live-mode rover with a LiveBuilder that
@@ -214,6 +234,81 @@ func TestLiveMode_ForcedErrorDegradesToPrimitive(t *testing.T) {
 	}
 	if len(got) > 0 && got[0].Op.Shape != want[0].Shape {
 		t.Fatalf("fallback stream mismatch: got %v, want %v", got[0].Op.Shape, want[0].Shape)
+	}
+}
+
+// TestPerTaskLive_ReplayConfigRoverBuildsLive is the bh-08c headline: a rover whose
+// Config.Mode is the REPLAY default still builds LIVE when it wins a Task whose
+// award carries mode="live". The per-Task tag wins over the per-rover Config, so the
+// operator's per-placement choice is honoured. The rover streams the GENERATED ops.
+func TestPerTaskLive_ReplayConfigRoverBuildsLive(t *testing.T) {
+	builder := &fakeLiveBuilder{ops: liveSpec()}
+	// Config.Mode left at the replay default; the award carries the live tag.
+	h := newLiveHarness(t, "R-pertask-live", Config{LiveBuilder: builder})
+
+	h.awardMode(t, "foundation-live", string(ModeLive))
+	h.awaitComplete(t)
+
+	if builder.callCount() == 0 {
+		t.Fatalf("a live-tagged Task must reach the LiveBuilder even on a replay-config rover")
+	}
+	got := h.ops()
+	if len(got) != len(liveSpec()) {
+		t.Fatalf("expected %d generated ops streamed, got %d", len(liveSpec()), len(got))
+	}
+	for i, m := range got {
+		if m.Op.Shape != wire.ShapeSphere {
+			t.Fatalf("op %d: per-task live must stream the GENERATED ops (sphere), got %v", i, m.Op.Shape)
+		}
+	}
+}
+
+// TestPerTaskReplay_LiveConfigRoverReplays is the converse: a rover whose
+// Config.Mode is LIVE still REPLAYS (never reaches the LiveBuilder) when it wins a
+// Task whose award carries mode="replay". So a replay-tagged placement always
+// replays, even on a live-configured rover.
+func TestPerTaskReplay_LiveConfigRoverReplays(t *testing.T) {
+	builder := &fakeLiveBuilder{ops: liveSpec()}
+	h := newLiveHarness(t, "R-pertask-replay", Config{Mode: ModeLive, LiveBuilder: builder})
+
+	h.awardMode(t, "foundation-live", string(ModeReplay))
+	h.awaitComplete(t)
+
+	if builder.callCount() != 0 {
+		t.Fatalf("a replay-tagged Task must NEVER reach the LiveBuilder; got %d calls", builder.callCount())
+	}
+	got := h.ops()
+	want := buildOpsFor(typeFoundation)
+	if len(got) != len(want) {
+		t.Fatalf("replay-tagged Task must stream the primitive stream: got %d ops, want %d", len(got), len(want))
+	}
+	if len(got) > 0 && got[0].Op.Shape != want[0].Shape {
+		t.Fatalf("replay stream mismatch: got %v, want %v", got[0].Op.Shape, want[0].Shape)
+	}
+}
+
+// TestEffectiveMode is the pure routing table for the per-Task/per-rover mode
+// resolution (bh-08c): the Task tag wins; an empty tag falls back to Config.Mode;
+// any non-"live" value is replay.
+func TestEffectiveMode(t *testing.T) {
+	cases := []struct {
+		taskMode string
+		cfgMode  Mode
+		want     Mode
+	}{
+		{"live", ModeReplay, ModeLive},   // task tag wins over replay config
+		{"live", ModeLive, ModeLive},     // both live
+		{"replay", ModeLive, ModeReplay}, // explicit replay tag beats live config
+		{"replay", ModeReplay, ModeReplay},
+		{"", ModeLive, ModeLive},        // empty tag falls back to live config (cmd/agent)
+		{"", ModeReplay, ModeReplay},    // empty tag, replay config: replay default
+		{"", "", ModeReplay},            // both empty: replay default
+		{"bogus", ModeLive, ModeReplay}, // unknown tag never opts into live
+	}
+	for _, c := range cases {
+		if got := effectiveMode(c.taskMode, c.cfgMode); got != c.want {
+			t.Errorf("effectiveMode(%q, %q) = %q, want %q", c.taskMode, c.cfgMode, got, c.want)
+		}
 	}
 }
 

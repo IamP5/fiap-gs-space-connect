@@ -1109,6 +1109,44 @@
   color: var(--signal-down, #e74c3c);
 }
 
+/* Per-placement build-mode toggle (bh-08c): two segmented buttons, replay vs
+   live, styled like the renderer toggle so the active mode reads at a glance. */
+.bp-mode {
+  display: flex;
+  gap: 0;
+}
+
+.bp-mode-btn {
+  flex: 1;
+  padding: var(--s-sm) var(--s-md);
+  font-family: var(--ui);
+  font-size: 0.78rem;
+  letter-spacing: 0.4px;
+  color: var(--ink-mute);
+  background: transparent;
+  border: 1px solid var(--hairline-on-dark);
+  cursor: pointer;
+}
+
+.bp-mode-btn:first-child {
+  border-radius: var(--r-xs) 0 0 var(--r-xs);
+}
+
+.bp-mode-btn:last-child {
+  border-radius: 0 var(--r-xs) var(--r-xs) 0;
+  border-left: none;
+}
+
+.bp-mode-btn.is-active {
+  color: var(--canvas-night, #0b0b0f);
+  background: var(--on-primary);
+  border-color: var(--on-primary);
+}
+
+.bp-mode-btn:hover:not(.is-active) {
+  color: var(--on-primary-mute);
+}
+
 .bp-actions {
   display: flex;
   gap: var(--s-md);

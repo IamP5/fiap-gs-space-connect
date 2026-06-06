@@ -9,6 +9,7 @@ import { describe, expect, it } from "vitest";
 import {
   footprintOf,
   ghostTasks,
+  placeBlueprintControl,
   placeRel,
   placementValid,
   type CatalogTask,
@@ -119,5 +120,25 @@ describe("placementValid — client mirror of the server gate", () => {
   it("allows a placement clear of a distant obstacle", () => {
     const farObstacle: Footprint = { cx: 120, cy: 120, halfX: 6, halfY: 6 };
     expect(placementValid(solarGhosts(v(0, 0)), [farObstacle])).toBeNull();
+  });
+});
+
+describe("placeBlueprintControl — per-placement build mode (bh-08c)", () => {
+  it("threads the chosen LIVE mode into the placeBlueprint control", () => {
+    const ctl = placeBlueprintControl("dome", v(10, -5), Math.PI / 4, "live");
+    expect(ctl).toEqual({
+      cmd: "placeBlueprint",
+      blueprint_id: "dome",
+      origin: v(10, -5),
+      rotation: Math.PI / 4,
+      mode: "live",
+    });
+  });
+
+  it("carries REPLAY as the default mode, leaving existing placements unchanged", () => {
+    const ctl = placeBlueprintControl("solar-array", v(0, 0), 0, "replay");
+    expect(ctl.mode).toBe("replay");
+    expect(ctl.cmd).toBe("placeBlueprint");
+    expect(ctl.blueprint_id).toBe("solar-array");
   });
 });

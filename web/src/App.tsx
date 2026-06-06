@@ -29,11 +29,12 @@ import { WorldCanvas } from "./components/WorldCanvas";
 import { blueprintById } from "./lib/blueprintCatalog";
 import {
   ghostTasks,
+  placeBlueprintControl,
   placementValid,
   type Footprint,
   type Ghost,
 } from "./lib/placement";
-import type { Vec2 } from "./types/wire";
+import type { BuildMode, Vec2 } from "./types/wire";
 import "./styles/dashboard.css";
 
 // The 3D scene drags in three.js + drei + postprocessing (~300 kB gzipped), so
@@ -118,6 +119,7 @@ export default function App() {
     blueprintId: string;
     origin: Vec2 | null;
     rotation: number;
+    mode: BuildMode; // per-placement build mode (bh-08c): "replay" (default) | "live"
   } | null>(null);
 
   const startPlacement = useCallback((blueprintId: string) => {
@@ -126,12 +128,16 @@ export default function App() {
       // Clicking the active blueprint again cancels; clicking another switches.
       prev?.blueprintId === blueprintId
         ? null
-        : { blueprintId, origin: null, rotation: 0 },
+        : { blueprintId, origin: null, rotation: 0, mode: "replay" },
     );
   }, []);
 
   const rotatePlacement = useCallback((rotation: number) => {
     setPlacement((p) => (p ? { ...p, rotation } : p));
+  }, []);
+
+  const setPlacementMode = useCallback((mode: BuildMode) => {
+    setPlacement((p) => (p ? { ...p, mode } : p));
   }, []);
 
   const movePlacement = useCallback((origin: Vec2) => {
@@ -165,12 +171,14 @@ export default function App() {
     if (!placement || !placement.origin || placementInvalidReason) return;
     // Browser → server control frame; the gateway relays it onto NATS
     // `control.command` and the coordinator validates + injects the DAG.
-    send({
-      cmd: "placeBlueprint",
-      blueprint_id: placement.blueprintId,
-      origin: placement.origin,
-      rotation: placement.rotation,
-    });
+    send(
+      placeBlueprintControl(
+        placement.blueprintId,
+        placement.origin,
+        placement.rotation,
+        placement.mode, // per-placement replay/live choice (bh-08c)
+      ),
+    );
     setPlacement(null);
   }, [placement, placementInvalidReason, send]);
 
@@ -244,11 +252,12 @@ export default function App() {
         <BlueprintPalette
           placement={
             placement
-              ? { blueprintId: placement.blueprintId, rotation: placement.rotation, invalidReason: placementInvalidReason }
+              ? { blueprintId: placement.blueprintId, rotation: placement.rotation, mode: placement.mode, invalidReason: placementInvalidReason }
               : null
           }
           onStart={startPlacement}
           onRotate={rotatePlacement}
+          onModeChange={setPlacementMode}
           onConfirm={confirmPlacement}
           onCancel={cancelPlacement}
         />

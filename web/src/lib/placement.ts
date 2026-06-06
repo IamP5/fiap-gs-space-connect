@@ -12,7 +12,7 @@
 // types/wire.ts). Rotation is radians about the origin, matching the Go
 // blueprint.Place transform exactly: rx = x·cos − y·sin, ry = x·sin + y·cos.
 
-import type { Vec2, Vec3 } from "../types/wire";
+import type { BuildMode, Control, Vec2, Vec3 } from "../types/wire";
 
 // An Envelope mirrors Go's blueprint.Envelope: a center offset (relative to the
 // task position) and full size (extent) in worksite units. Only the XY footprint
@@ -150,4 +150,26 @@ export function placementValid(
     }
   }
   return null;
+}
+
+// placeBlueprintControl builds the placeBlueprint control frame the dashboard
+// sends on confirm (bh-05 + bh-08c). It threads the per-placement build MODE
+// alongside the blueprint id, origin and rotation, mirroring wire.go's Control
+// (snake_case json). It is the single source of the frame's shape, so the App
+// dispatcher and the tests can't drift: an omitted/replay mode keeps the placement
+// on the deterministic replay path (back-compat), and "live" opts THIS placement
+// into the Build harness.
+export function placeBlueprintControl(
+  blueprintId: string,
+  origin: Vec2,
+  rotation: number,
+  mode: BuildMode,
+): Control {
+  return {
+    cmd: "placeBlueprint",
+    blueprint_id: blueprintId,
+    origin,
+    rotation,
+    mode,
+  };
 }
