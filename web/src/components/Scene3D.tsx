@@ -156,6 +156,167 @@ function roverHaloColor(r: RoverView): string {
   return SIGNAL_IDLE; // idle — alive, unassigned
 }
 
+// ---- the realistic rover model (#54) ---------------------------------------
+//
+// The worker-entity render: every Rover swaps its PRIMITIVE body (box + mast +
+// wheels) for ONE configured, self-hosted NASA-PD glTF (RASSOR). This is NOT a
+// Build-spec catalog Asset — it never goes through the Asset catalog; the model
+// is fixed for all rovers. It loads via the module-level loadGLTF helper (DRACO +
+// meshopt wired, raycast suppressed on the cached source) and FALLS BACK to the
+// primitives forever if the asset is missing/slow/fails, so the scene is never
+// blank (ADR-0004). The loaded tree is raycast-suppressed so the rover's
+// invisible hit-proxy sphere stays the SOLE pickable surface (click-to-kill
+// determinism, #48).
+
+// The one configured rover model. Self-hosted, conditioned + Draco-compressed by
+// scripts/condition-asset.mjs (recentered, fit-to-unit). A missing file just
+// keeps the primitive fallback below.
+const ROVER_MODEL_REF = "/assets/models/rassor_rover.glb";
+// Target world size for the model's LARGEST bbox dimension. Matches the visible
+// footprint of the primitive fallback (~1 unit), so the realistic body and the
+// fallback read at the same scale under the same hit-proxy/halos.
+const ROVER_MODEL_FIT = 1.15;
+
+// fitAndSeatRover normalizes a loaded model in place (mirrors LaunchScenery's
+// fitAndSeat): scale its largest dimension to `fit`, recenter on x/z, and seat
+// its base on y=0 — so the wrapping rover group drops it cleanly onto the
+// ground. NASA glbs have arbitrary native units + off-origin pivots, so a fixed
+// scalar is meaningless; we fit at load instead of baking each asset.
+function fitAndSeatRover(obj: THREE.Object3D, fit: number) {
+  obj.updateMatrixWorld(true);
+  const box = new THREE.Box3().setFromObject(obj);
+  if (box.isEmpty()) return;
+  const size = box.getSize(new THREE.Vector3());
+  const center = box.getCenter(new THREE.Vector3());
+  const maxDim = Math.max(size.x, size.y, size.z) || 1;
+  const s = fit / maxDim;
+  obj.scale.setScalar(s);
+  obj.position.set(-center.x * s, -box.min.y * s, -center.z * s);
+}
+
+// dimRoverModel darkens a cloned rover model's materials so a DEAD rover reads as
+// dimmed, mirroring the primitive fallback (which drops the body to #2a2a2e). The
+// clone shares the cached source's materials, so we MUST clone each material
+// before mutating it — otherwise dimming one dead rover would dim every rover
+// (and the cached source) that shares those materials. The cloned materials are
+// owned by this placement and disposed on unmount (see RoverBody cleanup). When
+// the rover is alive this is a no-op, so live rovers keep the shared materials.
+const DIM_ROVER_MULTIPLIER = 0.18;
+function dimRoverModel(obj: THREE.Object3D): THREE.Material[] {
+  const owned: THREE.Material[] = [];
+  obj.traverse((o) => {
+    const mesh = o as THREE.Mesh;
+    if (!mesh.isMesh || !mesh.material) return;
+    const mats = Array.isArray(mesh.material) ? mesh.material : [mesh.material];
+    const cloned = mats.map((m) => {
+      const c = m.clone();
+      // Darken whatever standard PBR channels the material exposes; guard each
+      // field so this works across MeshStandard/Physical/Basic without assuming a
+      // type. multiplyScalar dims the base + emissive so the dead rover goes dark.
+      const cc = c as THREE.MeshStandardMaterial;
+      cc.color?.multiplyScalar(DIM_ROVER_MULTIPLIER);
+      cc.emissive?.multiplyScalar(DIM_ROVER_MULTIPLIER);
+      owned.push(c);
+      return c;
+    });
+    mesh.material = Array.isArray(mesh.material) ? cloned : cloned[0];
+  });
+  return owned;
+}
+
+// RoverBody renders the realistic rover glTF, falling back to the PRIMITIVE body
+// (box + sensor mast + 4 wheels) until — and FOREVER if — the model fails to
+// load. The primitives are exactly the prior fallback geometry, so a gone/slow
+// asset never breaks the rover. The `dim` flag (dead rover) dims BOTH paths: the
+// primitives via their material color, the loaded model via dimRoverModel (which
+// clones + darkens the model's materials), so a dead rover always reads as dark.
+function RoverBody({ geo, dim }: { geo: SceneGeo; dim: boolean }) {
+  const [scene, setScene] = useState<THREE.Group | null>(null);
+  const invalidate = useThree((s) => s.invalidate);
+  const bodyColor = dim ? "#2a2a2e" : "#f0f0fa";
+
+  useEffect(() => {
+    let disposed = false;
+    // Materials we clone for the dead-rover dim tint are owned by this placement;
+    // dispose them on unmount/reload (the shared cached materials are NOT ours).
+    let ownedMats: THREE.Material[] = [];
+    loadGLTF(ROVER_MODEL_REF)
+      .then((g) => {
+        if (disposed) return;
+        // clone(true) SHARES the cached source's geometry + materials (Object3D
+        // .clone does not deep-copy them), so the clone owns nothing disposable;
+        // disposing them would free the cached original and break later rovers.
+        // Re-suppress raycast: clone(true) does NOT carry over the own-property
+        // raycast override on the cached source, so every placement must re-apply
+        // it to keep the model unpickable (the hit-proxy is the SOLE pick target).
+        const obj = suppressRaycast(g.clone(true));
+        // Normalize the raw NASA model (arbitrary units / off-origin pivot) to a
+        // predictable rover size, centered on x/z and seated on y=0.
+        fitAndSeatRover(obj, ROVER_MODEL_FIT);
+        // Dead rover ⇒ darken this placement's materials (clones, so the shared
+        // cached materials and live rovers are untouched). Alive ⇒ no-op.
+        if (dim) ownedMats = dimRoverModel(obj);
+        setScene(obj);
+        invalidate(); // wake the demand loop once so the model shows when loaded
+      })
+      .catch(() => {
+        // Missing/failed glTF ⇒ keep the primitive fallback below (never crash).
+      });
+    return () => {
+      disposed = true;
+      // Free only the materials WE cloned for the dim tint; never the shared
+      // cached geometry/materials the clone references.
+      for (const m of ownedMats) m.dispose();
+    };
+  }, [invalidate, dim]);
+
+  if (scene) {
+    // The model is pre-normalized (centered x/z, base at y=0), so it just sits at
+    // the group origin. It is raycast-suppressed, so it never steals a pick.
+    return <primitive object={scene} />;
+  }
+
+  // PRIMITIVE fallback (ADR-0004): a low-poly box body on four short cylinder
+  // wheels with a sensor mast, monochrome white, dimmed when dead. Every mesh is
+  // raycast-suppressed so only the hit-proxy is pickable.
+  return (
+    <group>
+      {/* Body — low-poly box. */}
+      <mesh geometry={geo.body} position={[0, 0.42, 0]} raycast={() => null}>
+        <meshStandardMaterial
+          color={bodyColor}
+          metalness={0.2}
+          roughness={0.7}
+          emissive={dim ? "#000000" : "#101014"}
+        />
+      </mesh>
+      {/* Sensor mast block, so the rover reads as front-facing. */}
+      <mesh geometry={geo.mast} position={[0, 0.66, -0.18]} raycast={() => null}>
+        <meshStandardMaterial color={bodyColor} metalness={0.2} roughness={0.7} />
+      </mesh>
+      {/* Four cylinder wheels. */}
+      {(
+        [
+          [-0.38, -0.42],
+          [0.38, -0.42],
+          [-0.38, 0.42],
+          [0.38, 0.42],
+        ] as const
+      ).map(([wx, wz], i) => (
+        <mesh
+          key={i}
+          geometry={geo.wheel}
+          position={[wx, 0.2, wz]}
+          rotation={[0, 0, Math.PI / 2]}
+          raycast={() => null}
+        >
+          <meshStandardMaterial color={dim ? "#141416" : "#3a3a3f"} roughness={0.9} />
+        </mesh>
+      ))}
+    </group>
+  );
+}
+
 // ---- a single rover --------------------------------------------------------
 
 type Rover3DProps = {
@@ -180,7 +341,6 @@ type Rover3DProps = {
 function Rover3D({ rover, map, geo, selected, beats, onPick }: Rover3DProps) {
   const p = map.at(rover.pos);
   const dim = !rover.alive;
-  const bodyColor = dim ? "#2a2a2e" : "#f0f0fa";
   const haloColor = roverHaloColor(rover);
 
   const haloRef = useRef<THREE.Mesh>(null);
@@ -287,38 +447,10 @@ function Rover3D({ rover, map, geo, selected, beats, onPick }: Rover3DProps) {
         <meshBasicMaterial transparent opacity={0} depthWrite={false} />
       </mesh>
 
-      {/* Body — low-poly box (PRIMITIVE fallback per ADR-0004). */}
-      <mesh geometry={geo.body} position={[0, 0.42, 0]} raycast={() => null}>
-        <meshStandardMaterial
-          color={bodyColor}
-          metalness={0.2}
-          roughness={0.7}
-          emissive={dim ? "#000000" : "#101014"}
-        />
-      </mesh>
-      {/* Sensor mast block, so the rover reads as front-facing. */}
-      <mesh geometry={geo.mast} position={[0, 0.66, -0.18]} raycast={() => null}>
-        <meshStandardMaterial color={bodyColor} metalness={0.2} roughness={0.7} />
-      </mesh>
-      {/* Four cylinder wheels (PRIMITIVE). */}
-      {(
-        [
-          [-0.38, -0.42],
-          [0.38, -0.42],
-          [-0.38, 0.42],
-          [0.38, 0.42],
-        ] as const
-      ).map(([wx, wz], i) => (
-        <mesh
-          key={i}
-          geometry={geo.wheel}
-          position={[wx, 0.2, wz]}
-          rotation={[0, 0, Math.PI / 2]}
-          raycast={() => null}
-        >
-          <meshStandardMaterial color={dim ? "#141416" : "#3a3a3f"} roughness={0.9} />
-        </mesh>
-      ))}
+      {/* Body — the realistic rover glTF (#54), with the PRIMITIVE box + mast +
+          wheels as the FOREVER fallback until/if the model loads. Both are
+          raycast-suppressed so the hit-proxy above stays the SOLE pick target. */}
+      <RoverBody geo={geo} dim={dim} />
 
       {/* Status halo — a thin ring on the ground under the rover. This is the
           ONLY rover element on the bloom layer, so the glow is confined to it.
