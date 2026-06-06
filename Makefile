@@ -54,7 +54,8 @@ tidy: ## Tidy module dependencies
 check: vet lint test ## Run vet, lint, and the race suite (pre-commit gate)
 
 .PHONY: demo
-demo: ## Bring up the full stack in Docker (dashboard at :5173)
+demo: ## Bring up the full stack in Docker (dashboard at :5173). Sources ./.env if present, so an API key enables Live Build Mode (bh-08); no .env ⇒ pure replay.
+	if [ -f .env ]; then set -a; . ./.env; set +a; fi; \
 	docker compose -f deploy/docker-compose.yml up --build
 
 .PHONY: smoke
