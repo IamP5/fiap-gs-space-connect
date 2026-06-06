@@ -8,6 +8,7 @@ package main
 import (
 	"context"
 	"flag"
+	"fmt"
 	"log/slog"
 	"os"
 	"os/signal"
@@ -68,18 +69,25 @@ func run() error {
 		SettleAfterRevive: time.Duration(*settleMS) * time.Millisecond,
 	}
 
-	// Live Build Mode (bh-08): opt-in inline generation. The composition root reads
-	// the API key SERVER-SIDE (env-sourced via model.Config.APIKey) and constructs
-	// the model-backed LiveBuilder; the agent package never imports the Model seam.
-	// Replay (the default) is byte-for-byte the pre-08 path with ZERO model calls.
-	if strings.EqualFold(*buildMode, string(agent.ModeLive)) {
-		builder, err := buildLive()
-		if err != nil {
-			return err
-		}
-		cfg.Mode = agent.ModeLive
+	// Live Build Mode (bh-08): the rover is LIVE-CAPABLE whenever an API key is
+	// configured SERVER-SIDE (env-sourced via model.Config.APIKey) — the injected
+	// LiveBuilder lets a per-Task live tag (bh-08c) drive an inline harness build
+	// while the rover's own default Mode stays replay, so the deterministic headline
+	// is untouched and only live-placed Blueprints generate. --build-mode=live
+	// ADDITIONALLY makes the WHOLE rover default to live (every task it wins, tagged
+	// or not). With no key the rover is pure replay. The key never reaches the
+	// browser; the agent package never imports the Model seam (ADR-0005).
+	wantLive := strings.EqualFold(*buildMode, string(agent.ModeLive))
+	if builder, ok := buildLiveFromEnv(); ok {
 		cfg.LiveBuilder = builder
-		slog.Info("rover build mode: live", "rover", cfg.ID)
+		if wantLive {
+			cfg.Mode = agent.ModeLive
+			slog.Info("rover build mode: live (whole-rover default)", "rover", cfg.ID)
+		} else {
+			slog.Info("rover live-capable: a per-Task live tag opts in (default replay)", "rover", cfg.ID)
+		}
+	} else if wantLive {
+		return fmt.Errorf("--build-mode=live requires an API key (set OPENAI_API_KEY or GEMINI_API_KEY, optionally LAB_PROVIDER)")
 	}
 
 	ctx, stop := signal.NotifyContext(context.Background(), syscall.SIGINT, syscall.SIGTERM)
@@ -102,18 +110,19 @@ func run() error {
 	return nil
 }
 
-// buildLive constructs the live Build harness seam from the environment. The API
-// key is read SERVER-SIDE ONLY (env-sourced via model.Config.APIKey) and never
-// logged or shipped to the browser (ADR-0005 / bh-08). It mirrors cmd/{bake,
+// buildLiveFromEnv constructs the live Build harness seam from the environment, or
+// returns ok=false when no API key is configured — in which case the rover gets no
+// LiveBuilder and stays pure replay (bh-08). It mirrors cmd/{coordinator,bake,
 // gateway}'s provider swap: LAB_PROVIDER / LAB_MODEL select the provider + model,
-// and the matching *_API_KEY authenticates it. A missing key is a hard error
-// here (live mode was explicitly requested), unlike the gateway where the lab is
-// optional.
-func buildLive() (*live.Builder, error) {
+// the matching *_API_KEY authenticates it. The key is read SERVER-SIDE ONLY
+// (model.Config.APIKey) and never logged or shipped to the browser (ADR-0005).
+func buildLiveFromEnv() (*live.Builder, bool) {
 	provider := strings.ToLower(getenv("LAB_PROVIDER", "openai"))
 	modelID := getenv("LAB_MODEL", "gpt-4o-2024-08-06")
 	apiKey, baseURL := keyAndBaseURL(provider)
-
+	if apiKey == "" {
+		return nil, false // no key ⇒ stay pure replay
+	}
 	m, err := model.NewOpenAI(model.Config{
 		Provider: provider,
 		BaseURL:  baseURL,
@@ -121,9 +130,10 @@ func buildLive() (*live.Builder, error) {
 		APIKey:   apiKey, // server-side only; never reaches the browser
 	})
 	if err != nil {
-		return nil, err
+		slog.Warn("live build requested but Model seam init failed; staying replay", "error", err)
+		return nil, false
 	}
-	return live.NewBuilder(m, provider, modelID), nil
+	return live.NewBuilder(m, provider, modelID), true
 }
 
 // keyAndBaseURL resolves the API key + OpenAI-compatible base_url for a provider
