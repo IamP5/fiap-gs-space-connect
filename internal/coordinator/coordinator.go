@@ -710,6 +710,20 @@ func (st *state) onBuildOp(ctx context.Context, m wire.BuildOpMsg) {
 	// unknown id, or a folded survivor that fails the schema gate). A copy avoids
 	// appending to `existing`'s backing array before the op is accepted.
 	candidate := append(append(make([]wire.BuildOp, 0, len(existing)+1), existing...), m.Op)
+	// Catalog-membership gate (ADR-0010, issue #60): the single-writer fold is the
+	// chokepoint where a hallucinated/unknown Asset KEY must be rejected so it never
+	// becomes durable Build spec. An op that references an Asset by key is dropped
+	// when the key is absent from this Task's closed catalog OR the entry does not
+	// suit the Task's type. spec.Validate stays catalog-agnostic by design, so this
+	// check lives here, before it. Procedural ops (no AssetKey) skip the gate.
+	if m.Op.AssetKey != "" {
+		entry, ok := st.assetCatalog.Get(m.Op.AssetKey)
+		if !ok || !entry.SuitsType(cur.Type) {
+			slog.Warn("rejected build op: asset key not in catalog",
+				"task", m.TaskID, "seq", m.Seq, "asset_key", m.Op.AssetKey, "task_type", cur.Type)
+			return // unknown/type-unsuited key: never appended (ADR-0010)
+		}
+	}
 	if err := spec.Validate(candidate); err != nil {
 		slog.Warn("rejected build op", "task", m.TaskID, "seq", m.Seq, "error", err)
 		return // malformed: never appended (ADR-0006)
