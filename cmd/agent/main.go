@@ -7,8 +7,8 @@ package main
 
 import (
 	"context"
+	"errors"
 	"flag"
-	"fmt"
 	"log/slog"
 	"os"
 	"os/signal"
@@ -87,7 +87,7 @@ func run() error {
 			slog.Info("rover live-capable: a per-Task live tag opts in (default replay)", "rover", cfg.ID)
 		}
 	} else if wantLive {
-		return fmt.Errorf("--build-mode=live requires an API key (set OPENAI_API_KEY or GEMINI_API_KEY, optionally LAB_PROVIDER)")
+		return errors.New("--build-mode=live requires an API key (set OPENAI_API_KEY or GEMINI_API_KEY, optionally LAB_PROVIDER)")
 	}
 
 	ctx, stop := signal.NotifyContext(context.Background(), syscall.SIGINT, syscall.SIGTERM)
