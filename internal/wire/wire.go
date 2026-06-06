@@ -245,13 +245,18 @@ const (
 )
 
 // Material is a BuildOp's procedural surface. Color/roughness/metalness drive a
-// standard PBR material today; Map (a texture reference) is a reserved
-// forward-compatible slot, ignored by current renderers.
+// standard PBR material; Map is the diffuse/albedo texture (sRGB). NormalMap,
+// RoughnessMap and AOMap extend it to a full PBR set (all linear colorspace,
+// applied best-effort by the renderer): a missing/failed map falls back silently
+// to the flat color, so the scene never depends on any texture (ADR-0004).
 type Material struct {
-	Color     string   `json:"color"`               // CSS/hex color, e.g. "#cfcfd6"
-	Roughness *float64 `json:"roughness,omitempty"` // 0..1; nil ⇒ renderer default
-	Metalness *float64 `json:"metalness,omitempty"` // 0..1; nil ⇒ renderer default
-	Map       string   `json:"map,omitempty"`       // future texture reference; no-op today
+	Color        string   `json:"color"`                   // CSS/hex color, e.g. "#cfcfd6"
+	Roughness    *float64 `json:"roughness,omitempty"`     // 0..1; nil ⇒ renderer default
+	Metalness    *float64 `json:"metalness,omitempty"`     // 0..1; nil ⇒ renderer default
+	Map          string   `json:"map,omitempty"`           // diffuse/albedo texture (sRGB)
+	NormalMap    string   `json:"normal_map,omitempty"`    // tangent-space normal map (linear)
+	RoughnessMap string   `json:"roughness_map,omitempty"` // roughness map (linear, R channel)
+	AOMap        string   `json:"ao_map,omitempty"`        // ambient-occlusion map (linear; needs uv2)
 }
 
 // BuildOp is a single declarative build step in the append-only patch log

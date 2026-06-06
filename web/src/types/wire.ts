@@ -28,7 +28,10 @@ export type Material = {
   color: string;
   roughness?: number; // 0..1; omitted ⇒ renderer default
   metalness?: number; // 0..1; omitted ⇒ renderer default
-  map?: string; // future texture reference; no-op today
+  map?: string; // diffuse/albedo texture reference (sRGB); falls back to color
+  normal_map?: string; // tangent-space normal map (linear); best-effort
+  roughness_map?: string; // roughness map (linear, R channel); best-effort
+  ao_map?: string; // ambient-occlusion map (linear); needs uv2, best-effort
 };
 
 // A single patch-log op. `op` is the kind; `id` is the stable piece key the
