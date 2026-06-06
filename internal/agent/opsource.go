@@ -30,6 +30,10 @@ func buildOpsFor(t domain.TaskType) []wire.BuildOp {
 		return withIDs(wallOps())
 	case "dome-cap":
 		return withIDs(domeCapOps())
+	case "panel":
+		return withIDs(panelOps())
+	case "mast":
+		return withIDs(mastOps())
 	default:
 		return nil
 	}
@@ -120,5 +124,30 @@ func domeCapOps() []wire.BuildOp {
 	return []wire.BuildOp{
 		placeCyl(0, 0.4, 0, 1.2, 0.8, 1.2, "#b8b8c2"),
 		placeSphere(0, 1.4, 0, 1.0, "#e0e0ea"),
+	}
+}
+
+// panelOps builds a photovoltaic array (solar-array catalog Blueprint): a mounting
+// base and post carrying three sun-facing PV slats — richer than a single block,
+// rising op-by-op. Stays within the "panel" demo envelope (demo.go).
+func panelOps() []wire.BuildOp {
+	return []wire.BuildOp{
+		placeBox(0, 0.15, 0, 1.4, 0.3, 1.0, "#b8b8c2"),      // mounting base
+		placeCyl(0, 0.8, 0, 0.18, 1.0, 0.18, "#a4aab4"),     // support post
+		placeBox(-0.55, 1.3, 0, 0.45, 0.12, 1.5, "#1f3a6b"), // PV slat
+		placeBox(0, 1.34, 0, 0.45, 0.12, 1.5, "#24417a"),    // PV slat
+		placeBox(0.55, 1.3, 0, 0.45, 0.12, 1.5, "#1f3a6b"),  // PV slat
+	}
+}
+
+// mastOps raises a comms mast (comms-mast catalog Blueprint): a footing, two
+// tapering lattice segments, and an antenna seat at the top. Stays within the
+// "mast" demo envelope (demo.go).
+func mastOps() []wire.BuildOp {
+	return []wire.BuildOp{
+		placeBox(0, 0.2, 0, 0.9, 0.4, 0.9, "#9aa0aa"),   // footing
+		placeCyl(0, 1.1, 0, 0.22, 1.4, 0.22, "#a4aab4"), // lower segment
+		placeCyl(0, 2.3, 0, 0.15, 1.0, 0.15, "#b8b8c2"), // upper segment
+		placeSphere(0, 3.1, 0, 0.32, "#e0e0ea"),         // antenna seat
 	}
 }

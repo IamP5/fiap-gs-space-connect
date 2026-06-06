@@ -37,7 +37,7 @@ spec:
             - --x=50
             - --y=-70
             - --battery=0.75
-            - --capabilities=foundation,wall,dome-cap
+            - --capabilities=foundation,wall,dome-cap,panel,mast
             - --mode=container
             - --heartbeat-ms=700
           env:

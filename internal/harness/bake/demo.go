@@ -26,6 +26,9 @@ var demoEnvelopes = map[domain.TaskType]Envelope{
 	typeFoundation: {Center: Vec3{}, Size: Vec3{X: 3.0, Y: 2.4, Z: 3.0}},
 	typeWall:       {Center: Vec3{}, Size: Vec3{X: 3.0, Y: 3.6, Z: 2.0}},
 	typeDomeCap:    {Center: Vec3{}, Size: Vec3{X: 3.6, Y: 3.6, Z: 3.6}},
+	// Drag-to-place catalog Blueprints (solar-array, comms-mast) add two more types.
+	"panel": {Center: Vec3{}, Size: Vec3{X: 4.0, Y: 3.0, Z: 3.6}},
+	"mast":  {Center: Vec3{}, Size: Vec3{X: 2.4, Y: 7.0, Z: 2.4}},
 }
 
 // demoDone is the measurable "done" per task type: human guidance PLUS the
@@ -48,6 +51,16 @@ var demoDone = map[domain.TaskType]Done{
 		Description: "a keystone ring topped by a cap, closing the dome",
 		MinOps:      3,
 		MinCoverage: 0.015,
+	},
+	"panel": {
+		Description: "a photovoltaic array: a mounting frame carrying sun-facing panel slats, clearly richer than a single block",
+		MinOps:      3,
+		MinCoverage: 0.02,
+	},
+	"mast": {
+		Description: "a slender comms mast rising in tapering segments to an antenna seat at the top",
+		MinOps:      3,
+		MinCoverage: 0.012,
 	},
 }
 
