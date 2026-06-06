@@ -57,6 +57,32 @@ Poly Haven publishes all of its assets under CC0 1.0
 (https://polyhaven.com/license); the asset's authors are confirmed via the Poly
 Haven API (`https://api.polyhaven.com/info/rock_boulder_dry`).
 
+## Launch scenery (NASA-PD)
+
+Static, non-diegetic launch-infrastructure set-pieces rendered as decorative
+**Scenery** by `web/src/components/LaunchScenery.tsx` (Issue #56) — a crawler, a
+mobile launcher, a gantry, and a lander parked at the edge of the worksite. They
+are NOT snapshot-driven Assets; they are knowingly decorative. Each `.glb` is
+self-hosted in `models/` and verified as real glTF (`head -c 4` prints `glTF`).
+All four are from NASA's official 3D Resources, which NASA releases into the
+**public domain** (NASA media usage guidelines). No NASA insignia is displayed
+and no endorsement is implied.
+
+| File | Source asset | Author | Source URL | License |
+|------|--------------|--------|-----------|---------|
+| `models/nasa_crawler.glb` | NASA 3D Resources → `3D Models/Crawler/Crawler.glb` | NASA | https://github.com/nasa/NASA-3D-Resources/tree/master/3D%20Models/Crawler | Public Domain (NASA-PD) |
+| `models/nasa_mobile_launcher.glb` | NASA 3D Resources → `3D Models/Mobile Launcher/Mobile Launcher (assembled).glb` | NASA | https://github.com/nasa/NASA-3D-Resources/tree/master/3D%20Models/Mobile%20Launcher | Public Domain (NASA-PD) |
+| `models/nasa_gantry.glb` | NASA 3D Resources → `3D Models/Gantry/Gantry.glb` | NASA | https://github.com/nasa/NASA-3D-Resources/tree/master/3D%20Models/Gantry | Public Domain (NASA-PD) |
+| `models/nasa_lunar_module.glb` | NASA 3D Resources → `3D Models/Apollo Lunar Module/Apollo Lunar Module.glb` | NASA | https://github.com/nasa/NASA-3D-Resources/tree/master/3D%20Models/Apollo%20Lunar%20Module | Public Domain (NASA-PD) |
+
+Source repository (the `.glb` files above are fetched verbatim from branch
+`master`, unmodified): `https://github.com/nasa/NASA-3D-Resources`.
+
+NASA's image and media usage guidelines state NASA content is generally not
+copyrighted and may be used for educational/informational purposes; the NASA
+insignia/logo and flags are excluded and are NOT used here. See
+https://www.nasa.gov/nasa-brand-center/images-and-media/.
+
 ## PBR texture sets — regolith (CC0)
 
 The lunar terrain (and the PBR `SpecPrimitive` slot) is clothed with Poly Haven's
