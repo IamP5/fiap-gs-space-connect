@@ -5,7 +5,15 @@
 // state; everything else is derived from the snapshot and pushed into small
 // memoized presentational components (StatusIndicator, TaskLedger, KillPanel).
 
-import { Suspense, lazy, useCallback, useEffect, useRef, useState } from "react";
+import {
+  Suspense,
+  lazy,
+  useCallback,
+  useEffect,
+  useMemo,
+  useRef,
+  useState,
+} from "react";
 import { useSnapshot } from "./hooks/useSnapshot";
 import { connectionStatus } from "./lib/connection";
 import { StatusIndicator } from "./components/StatusIndicator";
@@ -16,7 +24,16 @@ import { EarthPanel } from "./components/EarthPanel";
 import { PartitionPanel } from "./components/PartitionPanel";
 import { EncorePanel } from "./components/EncorePanel";
 import { LabPanel } from "./components/LabPanel";
+import { BlueprintPalette } from "./components/BlueprintPalette";
 import { WorldCanvas } from "./components/WorldCanvas";
+import { blueprintById } from "./lib/blueprintCatalog";
+import {
+  ghostTasks,
+  placementValid,
+  type Footprint,
+  type Ghost,
+} from "./lib/placement";
+import type { Vec2 } from "./types/wire";
 import "./styles/dashboard.css";
 
 // The 3D scene drags in three.js + drei + postprocessing (~300 kB gzipped), so
@@ -92,11 +109,89 @@ export default function App() {
     [],
   );
 
+  // --- Drag-to-place (bh-05). The active placement is transient CLIENT state —
+  // it never enters the snapshot re-render path; placed tasks appear via the next
+  // snapshot once the coordinator validates + injects (ADR-0004). App owns the
+  // blueprint id + cursor origin + rotation; the scene raycasts the origin and
+  // draws the ghost. Confirm emits a placeBlueprint control. ---
+  const [placement, setPlacement] = useState<{
+    blueprintId: string;
+    origin: Vec2 | null;
+    rotation: number;
+  } | null>(null);
+
+  const startPlacement = useCallback((blueprintId: string) => {
+    setSelected(null); // placing and rover-selection are mutually exclusive modes
+    setPlacement((prev) =>
+      // Clicking the active blueprint again cancels; clicking another switches.
+      prev?.blueprintId === blueprintId
+        ? null
+        : { blueprintId, origin: null, rotation: 0 },
+    );
+  }, []);
+
+  const rotatePlacement = useCallback((rotation: number) => {
+    setPlacement((p) => (p ? { ...p, rotation } : p));
+  }, []);
+
+  const movePlacement = useCallback((origin: Vec2) => {
+    setPlacement((p) => (p ? { ...p, origin } : p));
+  }, []);
+
+  const cancelPlacement = useCallback(() => setPlacement(null), []);
+
+  // Existing structures' footprints, derived from the snapshot's task positions,
+  // so the client can mirror the server's no-overlap gate. Each task gets a small
+  // default footprint (the server uses a like default for tasks without an
+  // envelope). Pure read of the snapshot.
+  const obstacles = useMemo<Footprint[]>(() => {
+    const ts = snapshot?.tasks ?? [];
+    return ts.map((t) => ({ cx: t.pos.X, cy: t.pos.Y, halfX: 6, halfY: 6 }));
+  }, [snapshot]);
+
+  // The live validity of the current placement (client mirror of the server gate),
+  // recomputed as the cursor/rotation move. Null origin ⇒ "move the cursor" hint
+  // (treated as not-yet-valid). Pure derivation, never world state.
+  const placementInvalidReason = useMemo<string | null>(() => {
+    if (!placement) return null;
+    if (!placement.origin) return "move the cursor onto the worksite";
+    const bp = blueprintById(placement.blueprintId);
+    if (!bp) return "unknown blueprint";
+    const ghosts = ghostTasks(bp.tasks, placement.origin, placement.rotation);
+    return placementValid(ghosts, obstacles);
+  }, [placement, obstacles]);
+
+  const confirmPlacement = useCallback(() => {
+    if (!placement || !placement.origin || placementInvalidReason) return;
+    // Browser → server control frame; the gateway relays it onto NATS
+    // `control.command` and the coordinator validates + injects the DAG.
+    send({
+      cmd: "placeBlueprint",
+      blueprint_id: placement.blueprintId,
+      origin: placement.origin,
+      rotation: placement.rotation,
+    });
+    setPlacement(null);
+  }, [placement, placementInvalidReason, send]);
+
   // The header indicator: green ONLY when the WebSocket is open AND the latest
   // snapshot reports the coordinator's bus is healthy (pure derivation).
   const status = connectionStatus(wsOpen, snapshot?.connected === true);
 
   const tasks = snapshot?.tasks ?? [];
+
+  // The ghost the scene draws while placing: the catalog blueprint's tasks
+  // instantiated at the cursor origin + rotation, with validity, threaded to the
+  // active renderer. Null when not placing or before the cursor hits the ground.
+  const ghost = useMemo<Ghost | null>(() => {
+    if (!placement || !placement.origin) return null;
+    const bp = blueprintById(placement.blueprintId);
+    if (!bp) return null;
+    return {
+      tasks: ghostTasks(bp.tasks, placement.origin, placement.rotation),
+      invalid: placementInvalidReason !== null,
+    };
+  }, [placement, placementInvalidReason]);
 
   return (
     <div className="app">
@@ -141,6 +236,21 @@ export default function App() {
           tasks={tasks}
           roverCount={snapshot?.rovers.length ?? 0}
           hasSnapshot={snapshot !== null}
+        />
+
+        {/* Drag-to-place authoring (bh-05): list catalog Blueprints; a click
+            starts a placement, the 3D scene previews the ghost, confirm emits a
+            placeBlueprint control. */}
+        <BlueprintPalette
+          placement={
+            placement
+              ? { blueprintId: placement.blueprintId, rotation: placement.rotation, invalidReason: placementInvalidReason }
+              : null
+          }
+          onStart={startPlacement}
+          onRotate={rotatePlacement}
+          onConfirm={confirmPlacement}
+          onCancel={cancelPlacement}
         />
 
         {selectedRover ? (
@@ -188,6 +298,10 @@ export default function App() {
               snapshot={snapshot}
               selected={selectedRover ? selected : null}
               onPick={setSelected}
+              placing={placement !== null}
+              ghost={ghost}
+              onPlaceMove={movePlacement}
+              onPlaceConfirm={confirmPlacement}
             />
           </Suspense>
         ) : (

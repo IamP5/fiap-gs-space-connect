@@ -75,6 +75,16 @@ describe("sceneMap", () => {
     expect(m.scale).toBeGreaterThan(0);
   });
 
+  it("invert is the exact inverse of at on the ground plane (round-trip)", () => {
+    const m = sceneMap([v(0, 0), v(10, 20)], [v(-5, 8)]);
+    for (const p of [v(3, 7), v(-4, 12), v(0, 0), v(10, 20)]) {
+      const s = m.at(p);
+      const back = m.invert(s.x, s.z);
+      expect(back.X).toBeCloseTo(p.X, 6);
+      expect(back.Y).toBeCloseTo(p.Y, 6);
+    }
+  });
+
   it("includes both rovers and tasks in the framing", () => {
     // A task far out widens the box, so a rover at the old edge is no longer at
     // the scene edge — proving tasks participate in the shared framing.

@@ -21,6 +21,7 @@ import (
 	"log/slog"
 	"slices"
 	"swarmbuild/internal/agent"
+	"swarmbuild/internal/blueprint"
 	"swarmbuild/internal/bus"
 	"swarmbuild/internal/core/domain"
 	"swarmbuild/internal/core/lease"
@@ -69,6 +70,15 @@ type Config struct {
 	// KILL — so the heal that follows is entirely genuine. This reproduces the
 	// kill→heal money shot at the same beat every run. Empty in production.
 	ScriptedKills []ScriptedKill
+	// Catalog is the pre-authored Blueprint catalog the placeBlueprint control
+	// draws from (bh-05). Nil ⇒ blueprint.DefaultCatalog() is used, so a placed
+	// Blueprint always resolves against the shipped dome/solar-array/comms-mast.
+	Catalog *blueprint.Catalog
+	// WorldBounds is the half-extent (in worksite units) of the square build area
+	// a placed Blueprint must fit inside, centred on the origin: every injected
+	// task's envelope footprint must lie within [-WorldBounds, +WorldBounds] on
+	// both axes (placement validation). Zero ⇒ defaultWorldBounds.
+	WorldBounds float64
 	// BuildSpecs is an OPTIONAL per-Task Build spec (TECHSPEC §4, ADR-0006):
 	// declarative geometry the renderer interprets instead of the primitive
 	// fallback. In bh-01 this carries a single hardcoded SAMPLE spec to prove the
@@ -77,6 +87,31 @@ type Config struct {
 	// attached to the matching TaskView in each snapshot — pure additive data, so
 	// a Task without an entry renders exactly as before.
 	BuildSpecs map[domain.TaskID][]wire.BuildOp
+}
+
+// withDefaults returns a copy of cfg with the unset timing/catalog/bounds knobs
+// filled in to their defaults. Kept off Run so Run stays focused on wiring (and
+// under the cyclomatic-complexity gate); the defaults are a pure data transform.
+func (cfg Config) withDefaults() Config {
+	if cfg.SnapshotHz <= 0 {
+		cfg.SnapshotHz = 10
+	}
+	if cfg.AuctionWindow <= 0 {
+		cfg.AuctionWindow = 400 * time.Millisecond
+	}
+	if cfg.HeartbeatEvery <= 0 {
+		cfg.HeartbeatEvery = 500 * time.Millisecond
+	}
+	if cfg.TTLFactor < 3 {
+		cfg.TTLFactor = 3 // TECHSPEC §8: TTL ≥ 3× heartbeat
+	}
+	if cfg.Catalog == nil {
+		cfg.Catalog = blueprint.DefaultCatalog()
+	}
+	if cfg.WorldBounds <= 0 {
+		cfg.WorldBounds = defaultWorldBounds
+	}
+	return cfg
 }
 
 // ScriptedKill schedules one reproducible demo kill: once WhenTaskLeased is
@@ -100,6 +135,13 @@ type armedKill struct {
 // promptly after it opens.
 const tickEvery = 50 * time.Millisecond
 
+// defaultWorldBounds is the half-extent (worksite units) of the square build
+// area a placed Blueprint must fit inside when Config.WorldBounds is unset
+// (bh-05). The demo dome's outer ring sits at radius ~46 and its cap envelope
+// reaches ~20 beyond that, so 150 comfortably holds a placed dome plus a couple
+// of satellite structures without colliding off-board.
+const defaultWorldBounds = 150.0
+
 // inbound events fed to the single-writer goroutine. Each is a closure-free
 // value type so the channel carries plain data; the writer interprets them.
 type (
@@ -118,6 +160,13 @@ type (
 	// other event — it flows through the single-writer channel and is never
 	// handled on the NATS dispatcher (TECHSPEC §8).
 	evReload struct{}
+	// evPlaceBlueprint injects a catalog Blueprint's pre-baked task DAG at an
+	// origin (placeBlueprint control, bh-05). Like reloadDemo it MUTATES owned
+	// state (Planner, World Model, positions), so it runs ONLY on the single
+	// writer: the dispatcher merely enqueues it. The writer validates placement
+	// (bounds/terrain/no-overlap) BEFORE the tasks go live and rejects an invalid
+	// placement; the Auction then feeds on any injected tasks exactly as today.
+	evPlaceBlueprint struct{ ctl wire.Control }
 )
 
 // auction is one open auction: the bids received so far for a task during its
@@ -152,6 +201,18 @@ type state struct {
 	// re-arms from this pristine copy instead).
 	blueprint []domain.Task
 	cfgKills  []ScriptedKill
+
+	// catalog is the pre-authored Blueprint catalog placeBlueprint draws from, and
+	// worldBounds the half-extent of the legal build square (bh-05). placedTasks
+	// accumulates every PlacedTask injected so far (the originals' worksite
+	// geometry), used both as live state and for no-overlap validation of the next
+	// placement; placeSeq is a monotonic counter that gives each placement a unique
+	// instance prefix so two placed copies of a Blueprint never share task ids.
+	// onReload clears placedTasks so a demo reload starts from the pristine board.
+	catalog     *blueprint.Catalog
+	worldBounds float64
+	placedTasks []blueprint.PlacedTask
+	placeSeq    int
 	// seedSpecs is a pristine copy of the static per-Task Build specs supplied at
 	// Run, used by onReload to reset buildSpecs back to the seed so a demo reload
 	// rebuilds the structure op-by-op from scratch instead of resuming a stale
@@ -187,18 +248,7 @@ type state struct {
 // single-writer coordinator until ctx is cancelled. It returns the first fatal
 // error (or ctx.Err() on shutdown).
 func Run(ctx context.Context, cfg Config) error {
-	if cfg.SnapshotHz <= 0 {
-		cfg.SnapshotHz = 10
-	}
-	if cfg.AuctionWindow <= 0 {
-		cfg.AuctionWindow = 400 * time.Millisecond
-	}
-	if cfg.HeartbeatEvery <= 0 {
-		cfg.HeartbeatEvery = 500 * time.Millisecond
-	}
-	if cfg.TTLFactor < 3 {
-		cfg.TTLFactor = 3 // TECHSPEC §8: TTL ≥ 3× heartbeat
-	}
+	cfg = cfg.withDefaults()
 
 	// --- Load the blueprint into the Planner and seed the World Model. ---
 	tasks := make([]domain.Task, len(cfg.Blueprint))
@@ -254,6 +304,9 @@ func Run(ctx context.Context, cfg Config) error {
 		// set and an untouched copy of the scripted kills to re-arm from.
 		blueprint: append([]domain.Task(nil), tasks...),
 		cfgKills:  append([]ScriptedKill(nil), cfg.ScriptedKills...),
+		// Blueprint catalog + legal build square for placeBlueprint (bh-05).
+		catalog:     cfg.Catalog,
+		worldBounds: cfg.WorldBounds,
 		// Buffered so publishSnapshot's non-blocking send rarely drops; the shim
 		// owns the channel's receive side.
 		earthCh: make(chan wire.EarthUplink, 64),
@@ -415,6 +468,8 @@ func subscribe(ctx context.Context, conn *bus.Conn, events chan<- any) (func(), 
 //     cannot perturb auctions/leases/snapshots (ADR-0002).
 //   - "reloadDemo" MUTATES owned state (Planner, World Model, leases, auctions),
 //     so it must run on the single writer: the dispatcher only enqueues evReload.
+//   - "placeBlueprint" likewise MUTATES owned state (it injects a task DAG after a
+//     validation pass), so it too is enqueued for the single writer (bh-05).
 //
 // "kill" / "killContainer" / "setFailureProb" are handled by the agents and the
 // killer sidecar, not here.
@@ -426,6 +481,14 @@ func subscribeControl(ctx context.Context, conn *bus.Conn, shim *earthShim, even
 		case "reloadDemo":
 			select {
 			case events <- evReload{}:
+			case <-ctx.Done():
+			}
+		case "placeBlueprint":
+			// Drag-to-place (bh-05): MUTATES owned state (Planner, World Model,
+			// positions) after a validation pass, so it must run on the single writer
+			// — the dispatcher only enqueues, never validates or injects here.
+			select {
+			case events <- evPlaceBlueprint{ctl: c}:
 			case <-ctx.Done():
 			}
 		}
@@ -511,6 +574,8 @@ func (st *state) handle(ctx context.Context, e any) {
 		st.onBuildOp(ctx, ev.msg)
 	case evReload:
 		st.onReload(ctx)
+	case evPlaceBlueprint:
+		st.onPlaceBlueprint(ctx, ev.ctl)
 	}
 }
 
@@ -882,6 +947,27 @@ func (st *state) onReload(ctx context.Context) {
 	// kill→heal money shot replays in inproc mode. In external/k8s mode cfgKills is
 	// empty, so this is a harmless no-op.
 	st.scriptedKills = append([]ScriptedKill(nil), st.cfgKills...)
+
+	// Drop any drag-placed Blueprints (bh-05): a reload rebuilds the pristine board
+	// only. The Planner was just reloaded from st.blueprint alone (above), so the
+	// placed tasks are no longer scheduled; here we forget their tracking +
+	// positions and bump their lingering World Model records to a terminal DONE at
+	// the winning version so they neither re-auction nor sit as stale UNCLAIMED
+	// work. placeSeq is deliberately NOT reset, so a placement made AFTER a reload
+	// gets a fresh instance id (bp{n+1}) and never collides with the now-terminal
+	// records of a forgotten placement that reused an id.
+	for _, p := range st.placedTasks {
+		done := p.Task
+		done.Status = domain.Done
+		done.Assignee = ""
+		done.LeaseExpiry = 0
+		done.Version = base
+		if st.model.Apply(done) {
+			st.mirror(ctx, done)
+		}
+		delete(st.pos, p.Task.ID)
+	}
+	st.placedTasks = nil
 
 	// Reset the accumulating Build specs back to the pristine seed so the structure
 	// rebuilds op-by-op from scratch rather than resuming a stale half-built spec
