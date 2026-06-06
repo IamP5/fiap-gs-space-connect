@@ -1,0 +1,176 @@
+{
+  "blueprint_id": "dome",
+  "task_id": "foundation-1",
+  "task_type": "foundation",
+  "contract_hash": "3ae7e393",
+  "model": "gpt-4o-2024-08-06",
+  "provider": "openai",
+  "ops": [
+    {
+      "op": "place",
+      "shape": "box",
+      "pos": {
+        "X": 0,
+        "Y": -0.8,
+        "Z": 0
+      },
+      "rot": {
+        "X": 0,
+        "Y": 0,
+        "Z": 0
+      },
+      "scale": {
+        "X": 2,
+        "Y": 0.2,
+        "Z": 2
+      },
+      "material": {
+        "color": "#D3D3D3",
+        "roughness": 0.8,
+        "metalness": 0
+      }
+    },
+    {
+      "op": "place",
+      "shape": "cylinder",
+      "pos": {
+        "X": -0.9,
+        "Y": 0.1,
+        "Z": -0.9
+      },
+      "rot": {
+        "X": 0,
+        "Y": 0,
+        "Z": 0
+      },
+      "scale": {
+        "X": 0.2,
+        "Y": 0.9,
+        "Z": 0.2
+      },
+      "material": {
+        "color": "#C0C0C0",
+        "roughness": 0.5,
+        "metalness": 0.3
+      }
+    },
+    {
+      "op": "place",
+      "shape": "cylinder",
+      "pos": {
+        "X": 0.9,
+        "Y": 0.1,
+        "Z": -0.9
+      },
+      "rot": {
+        "X": 0,
+        "Y": 0,
+        "Z": 0
+      },
+      "scale": {
+        "X": 0.2,
+        "Y": 0.9,
+        "Z": 0.2
+      },
+      "material": {
+        "color": "#C0C0C0",
+        "roughness": 0.5,
+        "metalness": 0.3
+      }
+    },
+    {
+      "op": "place",
+      "shape": "cylinder",
+      "pos": {
+        "X": -0.9,
+        "Y": 0.1,
+        "Z": 0.9
+      },
+      "rot": {
+        "X": 0,
+        "Y": 0,
+        "Z": 0
+      },
+      "scale": {
+        "X": 0.2,
+        "Y": 0.9,
+        "Z": 0.2
+      },
+      "material": {
+        "color": "#C0C0C0",
+        "roughness": 0.5,
+        "metalness": 0.3
+      }
+    },
+    {
+      "op": "place",
+      "shape": "cylinder",
+      "pos": {
+        "X": 0.9,
+        "Y": 0.1,
+        "Z": 0.9
+      },
+      "rot": {
+        "X": 0,
+        "Y": 0,
+        "Z": 0
+      },
+      "scale": {
+        "X": 0.2,
+        "Y": 0.9,
+        "Z": 0.2
+      },
+      "material": {
+        "color": "#C0C0C0",
+        "roughness": 0.5,
+        "metalness": 0.3
+      }
+    },
+    {
+      "op": "place",
+      "shape": "sphere",
+      "pos": {
+        "X": 0,
+        "Y": 0.9,
+        "Z": 0
+      },
+      "rot": {
+        "X": 0,
+        "Y": 0,
+        "Z": 0
+      },
+      "scale": {
+        "X": 0.5,
+        "Y": 0.2,
+        "Z": 0.5
+      },
+      "material": {
+        "color": "#808080",
+        "roughness": 0.6,
+        "metalness": 0.2
+      }
+    }
+  ],
+  "repaired": false,
+  "contract": {
+    "blueprint_id": "dome",
+    "task_id": "foundation-1",
+    "type": "foundation",
+    "envelope": {
+      "center": {
+        "X": 0,
+        "Y": 0,
+        "Z": 0
+      },
+      "size": {
+        "X": 2,
+        "Y": 1.6,
+        "Z": 2
+      }
+    },
+    "done": {
+      "description": "a stable plinth: a slab base with supporting pillars and a small finial, clearly richer than a single block"
+    },
+    "style": "moon-base habitat, pale prefab panels, brushed metal accents"
+  }
+}

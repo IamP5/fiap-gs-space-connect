@@ -192,11 +192,11 @@
       "area": "build-harness",
       "title": "Model seam + one provider; bake one spec",
       "user_visible_behavior": "Behind the Model seam, one LLM provider generates a single Build spec offline ('bake'); swapping the provider is a config change, not a harness change.",
-      "status": "not_started",
+      "status": "passing",
       "depends_on": ["bh-02"],
       "verification": ["go test -race ./... (model seam unit-tested with a fake provider; validate-and-repair + fallback-on-exhaustion)", "go test -race ./... includes an import-graph architecture test asserting internal/harness/model is NOT in the import closure of the hot-path packages (allocation/auction, lease/heartbeat, expiry, tick) — ADR-0005", "manual: bake one spec and render it; confirm no API key reaches the browser"],
-      "evidence": [],
-      "notes": "HITL. The vendor SDK lives behind a single narrow interface (Model seam). The import-graph test mechanically enforces the hot-path invariant (promotes the TECHSPEC §8 grep)."
+      "evidence": ["internal/harness/model: Model interface + openai-go/v3 adapter (provider/base_url/model/key config); FakeModel contract test proves validate-and-repair (re-ask once) and fallback-on-exhaustion (model_test.go, no network)", "internal/harness/archtest: import-graph test asserts internal/harness/model NOT in the closure of allocation/lease/world/planner/coordinator — `go list -deps`, skips if go absent (ADR-0005)", "cmd/bake + internal/harness/bake: live gpt-4o-2024-08-06 bake produced 6-op foundation-1 spec → internal/harness/cache/specs/dome_foundation-1_3ae7e393_gpt-4o-2024-08-06.json (committed, declarative data, no key)", "headline replay: demo Rovers carry BlueprintID; embedded go:embed cache → deterministic replay (cache_test + coordinator/replay_test: hit replays baked spec, forced miss falls back to primitive, Task still DONE)", "smoke (Docker): self-heal fired + dome closed; live WS snapshot foundation-1 carried the exact baked spec, status DONE", "make check green: vet + golangci-lint (0 issues) + go test -race -shuffle=on ./...; go mod tidy clean; .env gitignored (only .env.example committed)"],
+      "notes": "HITL. The vendor SDK lives behind a single narrow interface (Model seam). The import-graph test mechanically enforces the hot-path invariant (promotes the TECHSPEC §8 grep). Done in bh-03 worktree."
     },
     {
       "id": "bh-04",
