@@ -54,7 +54,7 @@ func TestKillControl_DeterministicHealing(t *testing.T) {
 			})
 
 			// Kill R1 over the dashboard control path (in-process flag-flip).
-			if err := h.conn.PublishJSON(wire.SubjControl, wire.Control{Cmd: "kill", Robot: "R1"}); err != nil {
+			if err := h.conn.PublishJSON(wire.SubjControl, wire.Control{Cmd: cmdKill, Robot: "R1"}); err != nil {
 				t.Fatalf("publish kill R1: %v", err)
 			}
 			_ = h.conn.Flush()

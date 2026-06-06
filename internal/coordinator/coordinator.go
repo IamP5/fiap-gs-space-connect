@@ -108,6 +108,11 @@ type (
 	evFailed    struct{ failed wire.Failed }
 	evHeartbeat struct{ hb wire.Heartbeat }
 	evTelemetry struct{ tel wire.Telemetry }
+	// evBuildOp carries one streamed build op a Rover emitted on build.op.<task>
+	// (bh-02). Like every inbound message it enters the single writer via the
+	// events channel and is NEVER applied on the NATS dispatcher: the writer
+	// validates and appends it to the Task's accumulating Build spec.
+	evBuildOp struct{ msg wire.BuildOpMsg }
 	// evReload resets the demo board IN-PROCESS so the swarm rebuilds the dome
 	// from scratch (reloadDemo control). It MUTATES owned state, so — like every
 	// other event — it flows through the single-writer channel and is never
@@ -147,11 +152,21 @@ type state struct {
 	// re-arms from this pristine copy instead).
 	blueprint []domain.Task
 	cfgKills  []ScriptedKill
+	// seedSpecs is a pristine copy of the static per-Task Build specs supplied at
+	// Run, used by onReload to reset buildSpecs back to the seed so a demo reload
+	// rebuilds the structure op-by-op from scratch instead of resuming a stale
+	// half-built spec. Empty unless the caller passed Config.BuildSpecs.
+	seedSpecs map[domain.TaskID][]wire.BuildOp
 
-	// buildSpecs holds pre-validated, optional per-Task Build specs (TECHSPEC §4,
-	// ADR-0006). publishSnapshot attaches the matching spec to a TaskView so it
-	// rides the real WS snapshot; a Task with no entry renders the primitive
-	// fallback unchanged. Read-only after Run (validated once, off the hot path).
+	// buildSpecs is each Task's accumulating, durable Build spec (TECHSPEC §4,
+	// ADR-0006/0007). It is seeded with any pre-validated static specs at Run, then
+	// GROWS op-by-op as Rovers stream ops on build.op.<task> (bh-02): onBuildOp
+	// appends each validated op here, the writer mirrors it to KV, and
+	// publishSnapshot attaches the matching spec to a TaskView so the structure
+	// rides the real WS snapshot and rises live. The accumulation is the durable
+	// partial state: it is NEVER cleared when a lease expires, so a replacement
+	// Rover resumes appending from the partial structure (the headline resume).
+	// Only the single-writer goroutine touches it (TECHSPEC §8).
 	buildSpecs map[domain.TaskID][]wire.BuildOp
 
 	conn   *bus.Conn
@@ -242,9 +257,16 @@ func Run(ctx context.Context, cfg Config) error {
 		// Buffered so publishSnapshot's non-blocking send rarely drops; the shim
 		// owns the channel's receive side.
 		earthCh: make(chan wire.EarthUplink, 64),
-		// Optional, pre-validated per-Task Build specs (bh-01: a hardcoded sample).
+		// Each Task's accumulating Build spec, seeded with any pre-validated static
+		// specs and grown op-by-op by streamed ops (bh-02).
 		buildSpecs: buildSpecs,
+		// Pristine seed copy for onReload to reset the accumulation to.
+		seedSpecs: cloneSpecs(buildSpecs),
 	}
+
+	// Seed any static Build specs into KV so the durable spec key exists from the
+	// start, mirroring how connectBus seeds the task records (bh-02).
+	st.mirrorAllSpecs(ctx)
 
 	// --- Earth-uplink shim (issue 09): a SEPARATE goroutine owns the artificial
 	// delay and the earth.uplink publish. It NEVER touches single-writer state,
@@ -375,6 +397,12 @@ func subscribe(ctx context.Context, conn *bus.Conn, events chan<- any) (func(), 
 	if err = add(unsubTelemetry, err, "telemetry"); err != nil {
 		return nil, err
 	}
+	unsubBuildOp, err := bus.SubscribeJSON(conn, wire.SubjBuildOpWildcard, func(m wire.BuildOpMsg) {
+		enqueue(evBuildOp{msg: m})
+	})
+	if err = add(unsubBuildOp, err, "build ops"); err != nil {
+		return nil, err
+	}
 	return cleanup, nil
 }
 
@@ -479,6 +507,8 @@ func (st *state) handle(ctx context.Context, e any) {
 		if had && !prev.Alive && ev.tel.Alive {
 			st.emit(wire.Event{Kind: wire.EventRevived, Robot: ev.tel.Robot})
 		}
+	case evBuildOp:
+		st.onBuildOp(ctx, ev.msg)
 	case evReload:
 		st.onReload(ctx)
 	}
@@ -507,6 +537,56 @@ func (st *state) onBid(b wire.Bid) {
 // onHeartbeat renews the lease TTL for the holder.
 func (st *state) onHeartbeat(h wire.Heartbeat) {
 	st.leases.Heartbeat(h.TaskID, h.Robot)
+}
+
+// onBuildOp appends one streamed build op to the Task's accumulating Build spec
+// (bh-02), the headline streamed-durable-resumable path. It runs ONLY on the
+// single writer (the dispatcher merely enqueued it), so it freely mutates the
+// owned buildSpecs and World Model without further synchronisation (TECHSPEC §8).
+//
+// Three guards keep the accumulation correct and durable:
+//
+//   - Validate: every op is checked against the Build-spec schema
+//     (internal/harness/spec) BEFORE it is appended, so a malformed op never
+//     reaches a snapshot (ADR-0006 — validated before accepted). A rejected op is
+//     dropped, not appended.
+//   - Idempotent append by Seq: the op is appended only when its Seq equals the
+//     current spec length (the next expected slot). A duplicate or out-of-order
+//     redelivery (Seq < length), or a gap (Seq > length), is a no-op. This is
+//     what makes resume-on-kill converge: a replacement Rover re-emits the same
+//     deterministic stream from Seq 0, the already-present ops dedupe, and it
+//     continues appending from where the killed builder stopped.
+//   - Mirror: the grown spec is written to KV under wire.KVSpecKey so it is
+//     durable and an independent observer can read the partial structure.
+//
+// The op append also bumps the Task's Version and mirrors the Task record, so
+// the monotonic World Model and KV reflect that the structure advanced; the
+// accumulating spec then rides the next snapshot (publishSnapshot reads
+// buildSpecs). It is appended only while the Task is actively LEASED — a stray
+// op for an UNCLAIMED/DONE task is ignored.
+func (st *state) onBuildOp(ctx context.Context, m wire.BuildOpMsg) {
+	cur, ok := st.model.Get(m.TaskID)
+	if !ok || cur.Status != domain.Leased {
+		return // not an actively-built task: drop the stray op
+	}
+	if err := spec.Validate([]wire.BuildOp{m.Op}); err != nil {
+		slog.Warn("rejected build op", "task", m.TaskID, "seq", m.Seq, "error", err)
+		return // malformed: never appended (ADR-0006)
+	}
+	existing := st.buildSpecs[m.TaskID]
+	if m.Seq != len(existing) {
+		return // duplicate, out-of-order, or gap: idempotent no-op (resume dedupe)
+	}
+	st.buildSpecs[m.TaskID] = append(existing, m.Op)
+	st.mirrorSpec(ctx, m.TaskID)
+
+	// Bump the Task version and re-mirror so the World Model/KV record that the
+	// structure advanced; the grown spec rides the next snapshot.
+	next := cur
+	next.Version = cur.Version + 1
+	if st.model.Apply(next) {
+		st.mirror(ctx, next)
+	}
 }
 
 // onComplete handles a rover reporting its leased task finished: complete the
@@ -717,6 +797,7 @@ func (st *state) award(ctx context.Context, t domain.Task, winner domain.RobotID
 	_ = st.conn.PublishJSON(wire.SubjTaskAward, wire.Award{
 		TaskID:   t.ID,
 		Robot:    winner,
+		Type:     t.Type,       // so the winner knows which op stream to emit (bh-02)
 		Pos:      st.pos[t.ID], // where the winner must drive to (slice 02)
 		LeaseTTL: st.ttl,
 		Version:  next.Version,
@@ -802,6 +883,14 @@ func (st *state) onReload(ctx context.Context) {
 	// empty, so this is a harmless no-op.
 	st.scriptedKills = append([]ScriptedKill(nil), st.cfgKills...)
 
+	// Reset the accumulating Build specs back to the pristine seed so the structure
+	// rebuilds op-by-op from scratch rather than resuming a stale half-built spec
+	// (bh-02). Re-mirror each reset spec so an observer sees the cleared structure.
+	st.buildSpecs = cloneSpecs(st.seedSpecs)
+	for _, t := range st.blueprint {
+		st.mirrorSpec(ctx, t.ID)
+	}
+
 	// Return every blueprint task to UNCLAIMED at the winning version and mirror it
 	// to KV so an independent observer sees the reset board immediately.
 	for _, t := range st.blueprint {
@@ -834,11 +923,10 @@ func maxVersion(tasks []domain.Task) domain.Lamport {
 // validatedBuildSpecs copies and validates the optional per-Task Build specs
 // against the Build-spec schema (ADR-0006), returning the first rejection so Run
 // fails loudly rather than shipping malformed geometry to the browser. Runs once
-// at startup, never on the hot path. A nil/empty input yields a nil map.
+// at startup, never on the hot path. The returned map is always non-nil (the
+// writer appends streamed ops into it, bh-02); a nil/empty input yields an empty
+// map.
 func validatedBuildSpecs(in map[domain.TaskID][]wire.BuildOp) (map[domain.TaskID][]wire.BuildOp, error) {
-	if len(in) == 0 {
-		return nil, nil
-	}
 	out := make(map[domain.TaskID][]wire.BuildOp, len(in))
 	for id, ops := range in {
 		if err := spec.Validate(ops); err != nil {
@@ -850,11 +938,40 @@ func validatedBuildSpecs(in map[domain.TaskID][]wire.BuildOp) (map[domain.TaskID
 	return out, nil
 }
 
+// cloneSpecs deep-copies a per-Task spec map so the seed copy and the live
+// accumulation never alias each other's slices.
+func cloneSpecs(in map[domain.TaskID][]wire.BuildOp) map[domain.TaskID][]wire.BuildOp {
+	out := make(map[domain.TaskID][]wire.BuildOp, len(in))
+	for id, ops := range in {
+		out[id] = append([]wire.BuildOp(nil), ops...)
+	}
+	return out
+}
+
 // mirror writes the authoritative task record to NATS KV (the World Model
 // mirror, TECHSPEC §3 / ADR-0002).
 func (st *state) mirror(ctx context.Context, t domain.Task) {
 	if err := st.kv.PutJSON(ctx, string(t.ID), t); err != nil {
 		slog.Warn("kv mirror failed", "task", t.ID, "error", err)
+	}
+}
+
+// mirrorSpec writes a Task's accumulating Build spec to NATS KV under
+// wire.KVSpecKey so the durable partial structure survives independently of the
+// in-memory writer state and a reader can fetch it (bh-02). Best-effort like the
+// task mirror: a transient KV error is logged, not fatal — the authoritative
+// copy is the writer's buildSpecs, which the next snapshot still carries.
+func (st *state) mirrorSpec(ctx context.Context, id domain.TaskID) {
+	if err := st.kv.PutJSON(ctx, wire.KVSpecKey(id), st.buildSpecs[id]); err != nil {
+		slog.Warn("kv spec mirror failed", "task", id, "error", err)
+	}
+}
+
+// mirrorAllSpecs mirrors every currently-known Build spec to KV. Used at startup
+// (seed static specs) and after a demo reload (publish the cleared specs).
+func (st *state) mirrorAllSpecs(ctx context.Context) {
+	for id := range st.buildSpecs {
+		st.mirrorSpec(ctx, id)
 	}
 }
 

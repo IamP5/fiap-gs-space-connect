@@ -53,6 +53,26 @@ type Config struct {
 	// it rejoins the swarm and drives off to the next task. Zero means
 	// defaultSettleAfterRevive.
 	SettleAfterRevive time.Duration
+
+	// BuildOps OVERRIDES the deterministic per-task-type op stream (opsource.go)
+	// this rover emits while working a Task (bh-02). nil ⇒ use buildOpsFor(type),
+	// the normal path. A non-nil EMPTY slice forces the rover to emit ZERO ops,
+	// which the invariant test uses to prove that with no Build spec the Task
+	// completion + self-heal behaviour is byte-for-byte the pre-harness path
+	// (the work phase falls back to the fixed work timer). Keyed by task type so
+	// one swarm config can drive a mixed blueprint deterministically.
+	BuildOps map[domain.TaskType][]wire.BuildOp
+}
+
+// opsFor resolves the op stream this rover emits for a Task of type t: the
+// Config override when present (including a forced-empty slice), else the
+// deterministic standalone stream. A nil result means "no ops" — the work phase
+// then runs the fixed work timer exactly as the pre-harness rover did.
+func (c Config) opsFor(t domain.TaskType) []wire.BuildOp {
+	if c.BuildOps != nil {
+		return c.BuildOps[t] // may be nil/empty: caller forced no ops for this type
+	}
+	return buildOpsFor(t)
 }
 
 // Movement and work tuning. Movement is visual interpolation only — the rover
@@ -82,9 +102,18 @@ const (
 	// a task costs a little charge even when stationary.
 	drainPerWorkSec = 0.05
 
-	// workDuration is how long the rover "works" the task after arriving,
-	// before reporting completion.
+	// workDuration is how long the rover "works" the task after arriving, before
+	// reporting completion, WHEN it has no build ops to emit (the pre-harness
+	// fallback and the forced-empty-ops invariant path). When the rover does emit
+	// ops, the work phase instead lasts until every op has been streamed.
 	workDuration = 600 * time.Millisecond
+
+	// opEvery is the build-op pacing: the rover emits at most one op per interval
+	// so the structure rises at a watchable speed rather than all ops landing in a
+	// single tick (ADR-0007 — paced by the Choreography cadence, derived from real
+	// emission). It is brisk enough that a handful of ops still completes inside a
+	// test budget. A heartbeat still goes out on its own cadence throughout.
+	opEvery = 120 * time.Millisecond
 
 	// minBattery floors the charge so 1/battery (used by the cost function for
 	// bidding) stays finite — the rover never bricks itself in the demo.
@@ -610,6 +639,12 @@ func execute(ctx context.Context, cfg Config, conn *bus.Conn, st *rover, hb time
 		return // random fault mid-work: silently abandon, lease TTL-expires
 	}
 
+	// Flush the build-op stream to the server BEFORE reporting completion so the
+	// final op is durably appended ahead of the Complete (bh-02). Complete and
+	// build.op ride different subjects; without this, a Complete could overtake the
+	// last op on a loaded bus and the coordinator would drop that op as arriving
+	// for an already-DONE task — losing the keystone of the structure.
+	_ = conn.Flush()
 	_ = conn.PublishJSON(wire.SubjTaskComplete, wire.Complete{
 		TaskID: aw.TaskID,
 		Robot:  cfg.ID,
@@ -675,27 +710,52 @@ func drive(ctx context.Context, cfg Config, conn *bus.Conn, st *rover, heart, fa
 	}
 }
 
-// workPhase holds the rover at the worksite for workDuration, draining battery
-// over time and heartbeating the lease. It returns phaseDone on completion,
-// phaseAbort if ctx is cancelled or the rover is killed first, and phaseFault
-// if the random-failure roll fires (issue 08). On anything but phaseDone the
-// caller must NOT complete the task — the rover goes silent and the coordinator
+// workPhase holds the rover at the worksite while it WORKS the task, draining
+// battery over time and heartbeating the lease. Its duration is now driven by
+// the Task's build-op stream (bh-02): the rover emits one op per opEvery tick on
+// wire.SubjBuildOp(task) — the structure rising op-by-op IS the work — and
+// completes once the whole stream has been streamed. When the rover has no ops
+// to emit (the pre-harness fallback, or the forced-empty-ops invariant path) it
+// instead holds for the fixed workDuration, byte-for-byte the old behaviour.
+//
+// Op emission is idempotent by Seq: the rover always emits from Seq 0, and the
+// coordinator appends an op only when its Seq is the next expected slot, so a
+// replacement Rover resuming a partially-built Task re-confirms the ops already
+// appended (deduped) and continues from where its predecessor stopped. The op
+// stream is a pure function of the Task, so the final op-set converges whether
+// or not a kill interrupted the build.
+//
+// It returns phaseDone on completion, phaseAbort if ctx is cancelled or the
+// rover is killed first, and phaseFault if the random-failure roll fires (issue
+// 08). On anything but phaseDone the caller must NOT complete the task — the
+// rover goes silent, its partial ops stay durable, and the coordinator
 // self-heals the lease.
 func workPhase(ctx context.Context, cfg Config, conn *bus.Conn, st *rover, heart, fault *time.Ticker, down <-chan struct{}, aw wire.Award) phaseResult {
+	ops := cfg.opsFor(aw.Type)
+	if len(ops) == 0 {
+		// No ops to stream: hold for the fixed work timer (pre-harness fallback) —
+		// the path the forced-empty-ops invariant test exercises.
+		return workTimer(ctx, cfg, conn, st, heart, fault, down, aw)
+	}
+	return streamOps(ctx, cfg, conn, st, heart, fault, down, aw, ops)
+}
+
+// workTimer is the pre-harness work phase: hold at the worksite for the fixed
+// workDuration, draining battery and heartbeating, with no build ops emitted.
+func workTimer(ctx context.Context, cfg Config, conn *bus.Conn, st *rover, heart, fault *time.Ticker, down <-chan struct{}, aw wire.Award) phaseResult {
 	done := time.NewTimer(workDuration)
 	defer done.Stop()
 	tick := time.NewTicker(moveStep)
 	defer tick.Stop()
-
 	for {
 		select {
 		case <-ctx.Done():
 			return phaseAbort
 		case <-down:
-			return phaseAbort // killed mid-work: abandon without heartbeating or completing
+			return phaseAbort
 		case <-fault.C:
 			if rollFault(st) {
-				return phaseFault // random fault mid-work: silently abandon
+				return phaseFault
 			}
 		case <-heart.C:
 			sendHeartbeat(conn, cfg.ID, aw.TaskID)
@@ -705,6 +765,52 @@ func workPhase(ctx context.Context, cfg Config, conn *bus.Conn, st *rover, heart
 			return phaseDone
 		}
 	}
+}
+
+// streamOps is the build-harness work phase: emit one op per opEvery tick on
+// wire.SubjBuildOp(task) until the whole stream is out, draining battery and
+// heartbeating meanwhile. Op emission starts at Seq 0 every time, so a
+// replacement Rover resuming a partial Task re-confirms appended ops (deduped by
+// the coordinator) and continues from where its predecessor stopped.
+func streamOps(ctx context.Context, cfg Config, conn *bus.Conn, st *rover, heart, fault *time.Ticker, down <-chan struct{}, aw wire.Award, ops []wire.BuildOp) phaseResult {
+	op := time.NewTicker(opEvery)
+	defer op.Stop()
+	tick := time.NewTicker(moveStep)
+	defer tick.Stop()
+	next := 0
+	for {
+		select {
+		case <-ctx.Done():
+			return phaseAbort
+		case <-down:
+			return phaseAbort // killed mid-work: abandon; the partial ops stay durable
+		case <-fault.C:
+			if rollFault(st) {
+				return phaseFault // random fault mid-work: silently abandon
+			}
+		case <-heart.C:
+			sendHeartbeat(conn, cfg.ID, aw.TaskID)
+		case <-tick.C:
+			st.drainOverTime(drainPerWorkSec * moveStep.Seconds())
+		case <-op.C:
+			sendBuildOp(conn, aw.TaskID, next, ops[next])
+			next++
+			if next >= len(ops) {
+				return phaseDone // whole op stream emitted: the structure is complete
+			}
+		}
+	}
+}
+
+// sendBuildOp publishes one streamed build op on wire.SubjBuildOp(task). Seq is
+// the op's zero-based slot; the coordinator appends it only when Seq is the next
+// expected position, so re-emitted ops dedupe (bh-02).
+func sendBuildOp(conn *bus.Conn, task domain.TaskID, seq int, b wire.BuildOp) {
+	_ = conn.PublishJSON(wire.SubjBuildOp(task), wire.BuildOpMsg{
+		TaskID: task,
+		Seq:    seq,
+		Op:     b,
+	})
 }
 
 func sendHeartbeat(conn *bus.Conn, id domain.RobotID, task domain.TaskID) {

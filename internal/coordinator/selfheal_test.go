@@ -20,6 +20,10 @@ const typeFoundation = "foundation"
 // blueprints that exercise one task through the auction→lease→heal arc.
 const taskX domain.TaskID = "task-x"
 
+// cmdKill is the dashboard control command the tests publish to take a rover out
+// of service (the soft, in-proc death whose lease then TTL-expires).
+const cmdKill = "kill"
+
 // selfHealHarness boots an embedded NATS server, runs a coordinator with the
 // given config, and returns an independent observer's getTask (reading the
 // KV-mirrored World Model) plus a poll helper bounded by a generous deadline.
@@ -27,6 +31,7 @@ const taskX domain.TaskID = "task-x"
 // through the authoritative KV mirror, never through coordinator internals.
 type selfHealHarness struct {
 	getTask func(id domain.TaskID) (domain.Task, bool)
+	getSpec func(id domain.TaskID) []wire.BuildOp
 	poll    func(desc string, cond func() bool)
 	conn    *bus.Conn
 }
@@ -63,6 +68,19 @@ func newSelfHealHarness(t *testing.T, cfg coordinator.Config, ids ...domain.Task
 		return tk, ok
 	}
 
+	// getSpec reads a Task's accumulating Build spec from the KV mirror (bh-02),
+	// the durable partial structure. Absent ⇒ nil (no ops accumulated yet).
+	getSpec := func(id domain.TaskID) []wire.BuildOp {
+		ops, ok, gerr := bus.GetJSON[[]wire.BuildOp](ctx, kv, wire.KVSpecKey(id))
+		if gerr != nil {
+			t.Fatalf("kv get spec %s: %v", id, gerr)
+		}
+		if !ok {
+			return nil
+		}
+		return ops
+	}
+
 	// Self-heal end-to-end takes real wall time (auction windows + drive + work +
 	// a TTL expiry or a reported failure + a re-auction + a second drive/work).
 	// Budget generously so a loaded -race run is never flaky.
@@ -82,7 +100,7 @@ func newSelfHealHarness(t *testing.T, cfg coordinator.Config, ids ...domain.Task
 		t.Fatalf("timed out waiting for %s", desc)
 	}
 
-	return &selfHealHarness{getTask: getTask, poll: poll, conn: conn}
+	return &selfHealHarness{getTask: getTask, getSpec: getSpec, poll: poll, conn: conn}
 }
 
 // TestSelfHeal_TTLExpiryReassigns covers the SILENT-DEATH path: the winning
@@ -125,7 +143,7 @@ func TestSelfHeal_TTLExpiryReassigns(t *testing.T) {
 	// 2) KILL R1 via the dashboard control path: it stops heartbeating, so the
 	//    lease TTL-expires and the task self-heals. Publish from the observer
 	//    connection; the agent subscribes to SubjControl and dies (silent death).
-	if err := h.conn.PublishJSON(wire.SubjControl, wire.Control{Cmd: "kill", Robot: "R1"}); err != nil {
+	if err := h.conn.PublishJSON(wire.SubjControl, wire.Control{Cmd: cmdKill, Robot: "R1"}); err != nil {
 		t.Fatalf("publish kill R1: %v", err)
 	}
 	_ = h.conn.Flush()
