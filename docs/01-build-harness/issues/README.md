@@ -37,7 +37,7 @@ is decomposed into seven grabbable tracer bullets; GitHub parent
 | [08g](./08g-circuit-breaker.md) | Circuit breaker: primitive after ≈3 builder deaths | AFK | 08c, 08f | [#38](https://github.com/IamP5/fiap-gs-space-connect/issues/38) |
 
 > No issue tracker is configured for this project; these files are the issue backlog.
-> Decisions they must respect: [ADR-0005..0009](../adr/) and [ADR-0001..0004](../../mvp/adr/).
+> Decisions they must respect: [ADR-0005..0009](../adr/) and [ADR-0001..0004](../../00-mvp/adr/).
 > Domain vocabulary (load-bearing): [CONTEXT.md](../../../CONTEXT.md).
 >
 > **The invariant slices 01–07 protect:** no harness call sits on the path of an award, a

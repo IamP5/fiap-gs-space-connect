@@ -25,7 +25,7 @@ _Last full scan: 2026-06-05 (Session 001). Backend graded against a green `make 
 | Failure / latency sliders + Earth telemetry | B | Backend tested; slider behavior manual | Clear | Stable | Manual-only end behavior | 2026-06-05 |
 | CRDT partition (stretch) | B | Tested module (ADR-0003); narrative manual | Clear | Stable | Stretch; reconciliation demoed manually | 2026-06-05 |
 | Container / k8s encore (stretch) | B | Manual (kubectl-delete); compose via smoke.sh | Clear | n/a (infra) | Stretch; no automated k8s assertion | 2026-06-05 |
-| Build harness (AI construction layer) | D | None yet — docs/specs only | Spec'd in CONTEXT.md + docs/build-harness | n/a | Entire layer unimplemented (`bh-01..07`) | 2026-06-05 |
+| Build harness (AI construction layer) | D | None yet — docs/specs only | Spec'd in CONTEXT.md + docs/01-build-harness | n/a | Entire layer unimplemented (`bh-01..07`) | 2026-06-05 |
 
 ## Architectural Layers
 

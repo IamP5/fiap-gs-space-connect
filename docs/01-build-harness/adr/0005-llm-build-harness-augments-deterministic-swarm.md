@@ -10,8 +10,8 @@ or timing. The harness is **best-effort** and the deterministic core never block
 ## Context
 
 The entire product thesis is `self-heal = expiry + re-auction`, provable in a ~30-second
-deterministic money shot (PRD; [ADR-0001](../../mvp/adr/0001-in-process-rovers-with-container-encore.md),
-[ADR-0003](../../mvp/adr/0003-single-writer-live-path-crdt-as-tested-module.md)). The new
+deterministic money shot (PRD; [ADR-0001](../../00-mvp/adr/0001-in-process-rovers-with-container-encore.md),
+[ADR-0003](../../00-mvp/adr/0003-single-writer-live-path-crdt-as-tested-module.md)). The new
 ask — "agents that really *work and create* things" — could be read as putting an LLM in
 the allocation loop (a leader that plans and *delegates*). That reading collides head-on
 with the codebase: there is no delegation, there is an **Auction** where Rovers *bid* and
