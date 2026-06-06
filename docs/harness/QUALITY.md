@@ -9,7 +9,7 @@ periodic (weekly-ish) scan, distinct from the per-session clean-state checklist.
 **B** = working, minor gaps · **C** = partial verification or legibility/stability issues ·
 **D** = not working / major structural problems.
 
-_Last full scan: 2026-06-05 (Session 001). Backend graded against a green `make check` and web against a green `WEB=1 ./init.sh` (vitest 7 files / 60 tests) @ `fedd919`; e2e (`smoke.sh`) graded from code + history, not a fresh Docker run this session._
+_Last full scan: 2026-06-05 (Session 001). Backend graded against a green `make check`, web against a green `WEB=1 ./init.sh` (vitest 7 files / 60 tests), and end-to-end against a green `./deploy/smoke.sh` (gateway healthy, self-heal fired, dome closed) @ `fedd919`._
 
 ## Product Domains
 
@@ -44,5 +44,5 @@ _Last full scan: 2026-06-05 (Session 001). Backend graded against a green `make 
 - **Changes:** Established the harness operating system (State + Lifecycle subsystems); first full quality scan.
 - **Domains promoted:** all MVP domains graded A/B against green `make check`.
 - **Demoted:** none.
-- **New gaps identified:** build-harness layer is D (unimplemented); e2e (`smoke.sh`) grade still rests on history, not a fresh Docker run.
-- **Gaps closed:** repo previously had no machine-readable feature state or session-continuity artifacts — now present; web baseline verified green (Dashboard + Web layer promoted to A).
+- **New gaps identified:** build-harness layer is D (unimplemented).
+- **Gaps closed:** repo previously had no machine-readable feature state or session-continuity artifacts — now present; backend, web, and end-to-end (`smoke.sh`) baselines all verified green this session (Dashboard + Web layer promoted to A).

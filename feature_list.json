@@ -34,7 +34,7 @@
         "make check (backend suite green)",
         "./deploy/smoke.sh reaches a connected gateway and the stack runs end-to-end"
       ],
-      "evidence": ["make check green @ fedd919 (vet ok, golangci-lint 0 issues, go test -race ./... all ok, go1.25.5)"],
+      "evidence": ["make check green @ fedd919 (vet ok, golangci-lint 0 issues, go test -race ./... all ok, go1.25.5)", "./deploy/smoke.sh PASS — stack healthy, runs end-to-end"],
       "notes": "Built and merged. E2E path is asserted by deploy/smoke.sh."
     },
     {
@@ -58,7 +58,7 @@
       "status": "passing",
       "depends_on": ["mvp-02"],
       "verification": ["go test -race ./internal/core/lease/... ./internal/coordinator/...", "smoke.sh asserts 'msg=expiry task=wall-1 ... returned to UNCLAIMED'"],
-      "evidence": ["make check green @ fedd919 (internal/core/lease, internal/coordinator tests ok)"],
+      "evidence": ["make check green @ fedd919 (internal/core/lease, internal/coordinator tests ok)", "./deploy/smoke.sh PASS — 'msg=expiry task=wall-1 ... returned to UNCLAIMED' then dome-cap complete"],
       "notes": "The entire product pitch. Self-heal = expiry + re-auction."
     },
     {
@@ -82,7 +82,7 @@
       "status": "passing",
       "depends_on": ["mvp-04"],
       "verification": ["go test -race ./internal/core/planner/... ./internal/core/world/...", "smoke.sh asserts 'msg=complete task=dome-cap'"],
-      "evidence": ["make check green @ fedd919 (internal/core/planner, internal/core/world tests ok)"],
+      "evidence": ["make check green @ fedd919 (internal/core/planner, internal/core/world tests ok)", "./deploy/smoke.sh PASS — 'msg=complete task=dome-cap' (dome closed)"],
       "notes": ""
     },
     {

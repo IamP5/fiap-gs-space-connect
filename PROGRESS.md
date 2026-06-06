@@ -12,7 +12,7 @@ stop. `feature_list.json` is the per-feature source of truth; this file is the n
 - **Standard verification path:** `make check` (vet + lint + race tests); `./deploy/smoke.sh` for end-to-end self-heal
 - **Backend baseline:** ✅ green @ `fedd919` — `go vet` ok, `golangci-lint` 0 issues, `go test -race -shuffle=on ./...` all pass (go1.25.5)
 - **Web baseline:** ✅ green @ `fedd919` — `tsc -b && vite build` TS-clean, `vitest` 7 files / 60 tests pass (`WEB=1 ./init.sh`)
-- **End-to-end (smoke.sh):** not re-run this session (requires Docker; last known-good on `main`)
+- **End-to-end (smoke.sh):** ✅ green this session — gateway connected, `wall-1` self-heal (expiry → re-auction) fired, `dome-cap` complete (dome closed end-to-end)
 - **MVP (issues 01–11):** implemented and merged — all `passing` in `feature_list.json`
 - **Current highest-priority unfinished feature:** `bh-01` — Build-spec seam + renderer interpreter + fallback (no LLM)
 - **Current blocker:** none
@@ -28,8 +28,8 @@ stop. `feature_list.json` is the per-feature source of truth; this file is the n
 ### Session 001 — 2026-06-05
 - **Goal:** Evolve the repo harness and agentic workflows per the Harness Engineering course.
 - **Completed:** Added the State + Lifecycle subsystems the harness was missing — `feature_list.json` (full MVP + build-harness backlog), this `PROGRESS.md`, `init.sh` (canonical startup/verify), `docs/harness/` (README, clean-state checklist, session-handoff, evaluator rubric, QUALITY.md). Evolved `AGENTS.md` with a Startup Workflow, Definition of Done, WIP=1 work rule, and an End-of-Session routine.
-- **Verification run:** `make check` → exit 0 (vet ok, lint 0 issues, all backend tests pass); `WEB=1 ./init.sh` → exit 0 (web build TS-clean, vitest 7 files / 60 tests pass).
+- **Verification run:** `make check` → exit 0 (vet ok, lint 0 issues, all backend tests pass); `WEB=1 ./init.sh` → exit 0 (web build TS-clean, vitest 7 files / 60 tests pass); `./deploy/smoke.sh` → exit 0 (full end-to-end: gateway healthy, self-heal fired, dome closed).
 - **Evidence captured:** baseline recorded above and in `feature_list.json` (@ `fedd919`).
 - **Files/artifacts updated:** `AGENTS.md`, `README.md`, `init.sh`, `feature_list.json`, `PROGRESS.md`, `docs/harness/*`.
-- **Known risk / unresolved:** `smoke.sh` (end-to-end) not re-run this session (requires Docker); MVP `passing` statuses rest on the green backend + web suites + git history, not a fresh full e2e.
+- **Known risk / unresolved:** none — backend, web, and end-to-end baselines all verified green this session.
 - **Next best step:** `bh-01` (see Next Steps).
