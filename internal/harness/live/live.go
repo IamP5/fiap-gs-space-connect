@@ -27,6 +27,7 @@ package live
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
 	"log/slog"
 	"swarmbuild/internal/core/domain"
@@ -34,6 +35,7 @@ import (
 	"swarmbuild/internal/harness/evaluator"
 	"swarmbuild/internal/harness/loop"
 	"swarmbuild/internal/harness/model"
+	"swarmbuild/internal/harness/spec"
 	"swarmbuild/internal/wire"
 )
 
@@ -85,7 +87,7 @@ func NewBuilderWithGenerator(gen Generator, provider, modelID string) *Builder {
 // failure-heal is slice 08f). When ok=false nothing was emitted, so the Rover's
 // fallback starts from a clean op stream. It makes a LIVE model call and so must run
 // ONLY off the hot path, reached through the injected agent.LiveBuilder seam.
-func (b *Builder) BuildLive(ctx context.Context, task domain.TaskID, taskType domain.TaskType, emit func(iterationOps []wire.BuildOp)) bool {
+func (b *Builder) BuildLive(ctx context.Context, task domain.TaskID, taskType domain.TaskType, priorOps []wire.BuildOp, emit func(iterationOps []wire.BuildOp)) bool {
 	contract, err := bake.DemoContract(task, taskType)
 	if err != nil {
 		slog.Warn("live build: no contract for task", "task", task, "type", taskType, "error", err)
@@ -98,17 +100,32 @@ func (b *Builder) BuildLive(ctx context.Context, task domain.TaskID, taskType do
 		return false
 	}
 
-	world := bake.WorldContext{Note: "live build mode: rover builds inline in the Task envelope frame"}
+	// RESUME SEED (bh-08e): fold the Task's prior durable patch log to its current
+	// geometry. On a re-auction of a Task whose predecessor was killed/expired
+	// mid-live-build, this is the half-built structure; the loop continues from it
+	// rather than restarting. Empty/nil on a fresh Task. A malformed prior log (it was
+	// schema-validated before it was ever appended, so this is defensive) degrades to a
+	// clean start rather than aborting the build.
+	priorGeom := foldPrior(task, priorOps)
+
+	world := bake.WorldContext{Note: resumeNote(len(priorGeom))}
 	messages, err := bake.BuildPrompt(contract, contractJSON, world)
 	if err != nil {
 		slog.Warn("live build: prompt build failed", "task", task, "error", err)
 		return false
 	}
+	// When resuming, append the folded prior geometry to the prompt so the Generator
+	// EXTENDS/REFINES the half-built structure rather than authoring a fresh one.
+	messages = seedResume(messages, priorGeom)
 
 	// streamer diffs each accepted iteration against the last and turns it into a
 	// patch batch (place/move/delete) on stable per-slot ids, so successive passes
 	// move/recolour/remove pieces IN PLACE rather than re-placing the whole world.
+	// On a resume it is SEEDED with the prior geometry as its starting `prev`, so the
+	// first accepted iteration diffs against the half-built structure and streams only
+	// the patches that GROW it onward — the durable prior ops are never re-placed.
 	stream := &streamer{emit: emit}
+	stream.seedPrev(priorGeom)
 
 	eval := evaluator.New(evaluator.Config{})
 	out := loop.Run(ctx, b.gen, eval, loop.Request{
@@ -137,6 +154,65 @@ func (b *Builder) BuildLive(ctx context.Context, task domain.TaskID, taskType do
 	return true
 }
 
+// foldPrior reduces a Task's prior durable patch log to its current geometry
+// (bh-08e resume seed). The log was schema-validated op-by-op before it was ever
+// appended (the coordinator validates the folded candidate per op), so a fold error
+// here is not expected; it is handled defensively by logging and returning nil, so a
+// corrupt/odd log degrades the build to a clean start rather than aborting it. An
+// empty/nil log yields nil — a fresh start, byte-identical to the pre-08e path.
+func foldPrior(task domain.TaskID, priorOps []wire.BuildOp) []wire.BuildOp {
+	if len(priorOps) == 0 {
+		return nil
+	}
+	geom, err := spec.Fold(priorOps)
+	if err != nil {
+		slog.Warn("live resume: prior patch log did not fold; starting clean",
+			"task", task, "ops", len(priorOps), "error", err)
+		return nil
+	}
+	return geom
+}
+
+// resumeNote is the world-context note handed to the prompt: a plain inline build
+// for a fresh Task, or a RESUME note when there is folded prior geometry, so the log
+// records whether this build picked up a half-built structure (bh-08e).
+func resumeNote(priorPieces int) string {
+	if priorPieces == 0 {
+		return "live build mode: rover builds inline in the Task envelope frame"
+	}
+	return fmt.Sprintf("live build mode (RESUME): a prior rover was interrupted mid-build; "+
+		"%d piece(s) are already in place (listed below). Continue from the half-built structure, "+
+		"extending/refining it into the complete structure — do not restart from scratch.", priorPieces)
+}
+
+// seedResume appends the folded prior geometry to the prompt as an extra user
+// message so the Generator EXTENDS the half-built structure rather than authoring a
+// fresh one (bh-08e). The streamer still diffs each accepted iteration against the
+// seeded prior geometry, so even if the Generator re-emits an identical prior piece
+// no redundant op is streamed; the prompt seed simply biases it toward continuation.
+// No prior geometry ⇒ the messages are returned unchanged (the fresh-start path).
+func seedResume(messages []model.Message, priorGeom []wire.BuildOp) []model.Message {
+	if len(priorGeom) == 0 {
+		return messages
+	}
+	priorJSON, err := json.Marshal(struct {
+		Ops []wire.BuildOp `json:"ops"`
+	}{Ops: priorGeom})
+	if err != nil {
+		// A marshal failure on already-validated geometry is not expected; fall back to
+		// the un-seeded prompt (the streamer's seeded prev still keeps the stream
+		// correct — the seed only biases the Generator).
+		return messages
+	}
+	seed := model.Message{
+		Role: "user",
+		Content: "The structure is ALREADY PARTIALLY BUILT. These pieces exist " +
+			"(in the same envelope-relative coordinates you must use); continue the build by " +
+			"returning the COMPLETE intended structure that extends/refines them:\n" + string(priorJSON),
+	}
+	return append(append(make([]model.Message, 0, len(messages)+1), messages...), seed)
+}
+
 // streamer turns the refine loop's per-iteration accepted specs into an append-only
 // patch log: the FIRST accepted spec is emitted as place ops (stable per-slot ids);
 // each later spec is diffed against the previous one into move/delete/place patches,
@@ -151,6 +227,28 @@ type streamer struct {
 // slotID is the stable key for the i-th piece across iterations. Diffing on slot
 // index lets a later pass MOVE/RECOLOUR the same piece instead of re-placing it.
 func slotID(i int) string { return fmt.Sprintf("p%d", i) }
+
+// seedPrev primes the streamer's starting geometry from a Task's already-streamed,
+// folded patch log so a RESUMING builder (bh-08e) diffs its first accepted iteration
+// against the half-built structure and emits only the patches that GROW it onward —
+// the durable prior ops are NEVER re-placed. The seeded slots are re-keyed by index
+// (slotID(i)) to match exactly what diff emits, which is also what the predecessor's
+// streamer streamed: each iteration re-keys every slot by index and only ever
+// deletes the tail, so a folded durable log is contiguously keyed p0..p(k-1). That
+// index alignment is what keeps the renderer fold updating the right piece in place
+// across the kill→replacement handoff. An empty/nil log is a no-op (a fresh start).
+func (s *streamer) seedPrev(priorGeom []wire.BuildOp) {
+	if len(priorGeom) == 0 {
+		return
+	}
+	prev := make([]wire.BuildOp, len(priorGeom))
+	for i := range priorGeom {
+		prev[i] = priorGeom[i]
+		prev[i].Op = wire.BuildOpPlace
+		prev[i].ID = slotID(i)
+	}
+	s.prev = prev
+}
 
 // onIteration streams one accepted iteration. The first becomes place ops; later
 // iterations become a diff patch against the previously-streamed geometry.

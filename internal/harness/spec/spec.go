@@ -90,10 +90,22 @@ func Fold(ops []wire.BuildOp) ([]wire.BuildOp, error) {
 				i, op.Op, wire.BuildOpPlace, wire.BuildOpMove, wire.BuildOpDelete)
 		}
 	}
+	// Emit each surviving id ONCE, at its first surviving order position. An id can
+	// appear in `order` more than once — a place → delete → re-place sequence removes
+	// it from byID (so the delete drops it) but the re-place re-appends the key to
+	// `order`. Without this dedupe the survivor would be emitted twice (a duplicate
+	// piece). This is reachable across the bh-08e kill→resume handoff: a predecessor
+	// that deleted then re-placed a slot, or a replacement re-placing a slot its
+	// predecessor had deleted, must still fold to ONE piece per id.
 	out := make([]wire.BuildOp, 0, len(byID))
+	emitted := make(map[string]bool, len(byID))
 	for _, id := range order {
+		if emitted[id] {
+			continue
+		}
 		if op, ok := byID[id]; ok {
 			out = append(out, op)
+			emitted[id] = true
 		}
 	}
 	return out, nil

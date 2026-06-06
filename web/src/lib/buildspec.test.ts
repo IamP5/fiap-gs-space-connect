@@ -136,6 +136,20 @@ describe("fold", () => {
     expect(out[0].pos).toEqual(v3(9, 9, 9));
   });
 
+  // Mirrors the Go TestFold_PlaceAfterDeleteDeduped: a place → delete → re-place of
+  // the same id folds to ONE surviving piece at its original slot (the re-place must
+  // not duplicate the order entry). Reachable across the bh-08e kill→resume handoff.
+  it("folds a place → delete → re-place of the same id to a single piece", () => {
+    const out = fold([
+      placeAt("a", 0, 0, 0),
+      placeAt("b", 1, 0, 0),
+      { op: "delete", id: "a", shape: "box", pos: v3(0, 0, 0), rot: v3(0, 0, 0), scale: v3(1, 1, 1), material: { color: "#000" } },
+      placeAt("a", 9, 9, 9),
+    ]);
+    expect(out.map((o) => o.id)).toEqual(["a", "b"]);
+    expect(out[0].pos).toEqual(v3(9, 9, 9));
+  });
+
   it("treats a move/delete of an unknown id as a defensive no-op", () => {
     const ops: BuildOp[] = [
       placeAt("a", 0, 0, 0),

@@ -872,6 +872,14 @@ func (st *state) award(ctx context.Context, t domain.Task, winner domain.RobotID
 		Pos:      st.pos[t.ID], // where the winner must drive to (slice 02)
 		LeaseTTL: st.ttl,
 		Version:  next.Version,
+		// Hand the winner the Task's already-accumulated durable patch log (bh-08e):
+		// empty for a fresh Task, non-empty when this is a RE-auction of a Task whose
+		// predecessor was killed/expired mid-build (the patch log was never cleared —
+		// onExpired/onFailed return the Task to UNCLAIMED but leave buildSpecs intact).
+		// A live replacement Rover folds it and CONTINUES the harness loop from the
+		// half-built structure, resuming Seq after these ops. A defensive copy so a
+		// later append to the live accumulation can't mutate what this award shipped.
+		PriorOps: append([]wire.BuildOp(nil), st.buildSpecs[t.ID]...),
 	})
 	st.emit(wire.Event{Kind: wire.EventWon, TaskID: t.ID, Robot: winner})
 	st.armScriptedKills(t.ID, winner)

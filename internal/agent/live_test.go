@@ -23,13 +23,15 @@ type fakeLiveBuilder struct {
 	iters [][]wire.BuildOp // multi-iteration script: one emit per batch
 	fail  bool
 
-	mu    sync.Mutex
-	calls int
+	mu        sync.Mutex
+	calls     int
+	priorSeen []wire.BuildOp // the priorOps the LAST BuildLive call received (bh-08e)
 }
 
-func (f *fakeLiveBuilder) BuildLive(_ context.Context, _ domain.TaskID, _ domain.TaskType, emit func([]wire.BuildOp)) bool {
+func (f *fakeLiveBuilder) BuildLive(_ context.Context, _ domain.TaskID, _ domain.TaskType, priorOps []wire.BuildOp, emit func([]wire.BuildOp)) bool {
 	f.mu.Lock()
 	f.calls++
+	f.priorSeen = append([]wire.BuildOp(nil), priorOps...)
 	f.mu.Unlock()
 	if f.fail {
 		return false // nothing emitted: the rover degrades to replay/primitive
@@ -42,6 +44,13 @@ func (f *fakeLiveBuilder) BuildLive(_ context.Context, _ domain.TaskID, _ domain
 	}
 	emit(f.ops)
 	return true
+}
+
+// prior returns the priorOps the last BuildLive call received (bh-08e resume seed).
+func (f *fakeLiveBuilder) prior() []wire.BuildOp {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	return append([]wire.BuildOp(nil), f.priorSeen...)
 }
 
 func (f *fakeLiveBuilder) callCount() int {
@@ -144,11 +153,20 @@ func newLiveHarness(t *testing.T, id domain.RobotID, cfg Config) *liveHarness {
 
 func (h *liveHarness) award(t *testing.T, task domain.TaskID) {
 	t.Helper()
+	h.awardWithPrior(t, task, nil)
+}
+
+// awardWithPrior publishes an Award carrying a durable prior patch log (bh-08e), as
+// the coordinator does when re-auctioning a Task whose predecessor was killed
+// mid-live-build. nil priorOps is the fresh-start award.
+func (h *liveHarness) awardWithPrior(t *testing.T, task domain.TaskID, priorOps []wire.BuildOp) {
+	t.Helper()
 	if err := h.conn.PublishJSON(wire.SubjTaskAward, wire.Award{
-		TaskID: task,
-		Robot:  h.roverID,
-		Type:   typeFoundation,
-		Pos:    domain.Vec2{X: 1, Y: 0},
+		TaskID:   task,
+		Robot:    h.roverID,
+		Type:     typeFoundation,
+		Pos:      domain.Vec2{X: 1, Y: 0},
+		PriorOps: priorOps,
 	}); err != nil {
 		t.Fatalf("publish award: %v", err)
 	}
@@ -295,6 +313,56 @@ func streamedKind(msgs []wire.BuildOpMsg, kind string) bool {
 		}
 	}
 	return false
+}
+
+// TestLiveMode_ResumeSeedsBuilderAndContinuesSeq (bh-08e): when a live-mode rover
+// is awarded a Task that ALREADY carries a durable prior patch log (the predecessor
+// was killed mid-build), the rover (1) hands the prior ops to the LiveBuilder as the
+// resume seed and (2) continues Seq numbering AFTER the prior ops, so the
+// coordinator's append-by-Seq stays monotonic and gap-free across the handoff. It
+// emits only the NEW ops — never re-placing the durable prior ops — and completes.
+func TestLiveMode_ResumeSeedsBuilderAndContinuesSeq(t *testing.T) {
+	// The predecessor streamed 3 ops (Seq 0..2) before it was killed; the Task came
+	// back UNCLAIMED with this patch log intact.
+	prior := []wire.BuildOp{
+		{Op: wire.BuildOpPlace, ID: "p0", Shape: wire.ShapeBox, Pos: domain.Vec3{X: 0, Y: -1, Z: 0}, Scale: domain.Vec3{X: 1.8, Y: 0.3, Z: 1.8}, Material: wire.Material{Color: "#cfcfd6"}},
+		{Op: wire.BuildOpPlace, ID: "p1", Shape: wire.ShapeCylinder, Pos: domain.Vec3{X: -0.6, Y: -0.2, Z: -0.6}, Scale: domain.Vec3{X: 0.2, Y: 0.9, Z: 0.2}, Material: wire.Material{Color: "#b8b8c2"}},
+		{Op: wire.BuildOpPlace, ID: "p2", Shape: wire.ShapeCylinder, Pos: domain.Vec3{X: 0.6, Y: -0.2, Z: 0.6}, Scale: domain.Vec3{X: 0.2, Y: 0.9, Z: 0.2}, Material: wire.Material{Color: "#b8b8c2"}},
+	}
+	// The replacement's builder continues the structure with two more pieces.
+	builder := &fakeLiveBuilder{ops: liveSpec()}
+	h := newLiveHarness(t, "R-resume", Config{Mode: ModeLive, LiveBuilder: builder})
+
+	h.awardWithPrior(t, "foundation-live", prior)
+
+	deadline := time.Now().Add(4 * time.Second)
+	for time.Now().Before(deadline) {
+		if h.completes() > 0 && len(h.ops()) >= len(liveSpec()) {
+			break
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
+	if h.completes() == 0 {
+		t.Fatalf("resuming rover did not complete the task")
+	}
+
+	// (1) The prior patch log reached the builder as the resume seed.
+	if seen := builder.prior(); len(seen) != len(prior) {
+		t.Fatalf("resume must hand the prior patch log to the builder: got %d ops, want %d", len(seen), len(prior))
+	}
+
+	// (2) The rover streamed only the NEW ops, with Seq continuing AFTER the prior
+	// ops (3,4,...) — never restarting at 0, so the coordinator append stays monotonic.
+	got := h.ops()
+	if len(got) != len(liveSpec()) {
+		t.Fatalf("resume must stream only the NEW ops, got %d want %d", len(got), len(liveSpec()))
+	}
+	for i, m := range got {
+		wantSeq := len(prior) + i
+		if m.Seq != wantSeq {
+			t.Fatalf("resumed op %d: expected Seq %d (continuing after %d prior ops), got %d", i, wantSeq, len(prior), m.Seq)
+		}
+	}
 }
 
 // TestLiveMode_ForcedErrorDegradesToPrimitive: a LiveBuilder that returns ok=false

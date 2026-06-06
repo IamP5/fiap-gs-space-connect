@@ -160,10 +160,20 @@ export function fold(ops: readonly BuildOp[]): BuildOp[] {
       }
     }
   });
+  // Emit each surviving id ONCE, at its first surviving order position. A
+  // place → delete → re-place sequence pushes the key to `order` twice (the
+  // delete drops it from byId, the re-place re-pushes), so without this dedupe
+  // the survivor would render twice. Mirrors Go spec.Fold exactly; reachable
+  // across the bh-08e kill→resume handoff (a slot deleted then re-placed).
   const out: BuildOp[] = [];
+  const emitted = new Set<string>();
   for (const key of order) {
+    if (emitted.has(key)) continue;
     const op = byId.get(key);
-    if (op) out.push(op);
+    if (op) {
+      out.push(op);
+      emitted.add(key);
+    }
   }
   return out;
 }
