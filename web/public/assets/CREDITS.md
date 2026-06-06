@@ -146,3 +146,56 @@ metallic glTFs. Loaded via `files=` (self-hosted in `/public`), never a CDN
 Poly Haven publishes all of its assets under CC0 1.0
 (https://polyhaven.com/license); the asset's author is confirmed via the Poly
 Haven API (`https://api.polyhaven.com/info/moonless_golf`).
+
+## Construction props & PBR skins (NASA-PD + CC0)
+
+Construction-prop Assets the swarm assembles, wired into the closed Asset catalog
+(`internal/harness/asset`, ADR-0010, issue #57) and resolved server-side to these
+self-hosted `model_ref` URLs; a missing/failed load falls back to the primitive,
+so the scene never depends on them (ADR-0004). Each prop is a NASA 3D Resources
+public-domain work, conditioned OFFLINE by `scripts/condition-asset.mjs` (up-axis
+fix → recenter → fit-to-unit → insignia strip → `gltf-transform optimize
+--compress draco`) and verified as real glTF (`head -c 4` prints `glTF`). No NASA
+insignia is displayed and no endorsement is implied; credited `NASA / <author>`
+as a courtesy. Downloaded: 2026-06-06.
+
+| File | Catalog key | Source asset | Author | Source URL | License | Conditioning |
+|------|-------------|--------------|--------|-----------|---------|--------------|
+| `models/solar-panel.glb` | `solar-panel` | NASA 3D Resources → `3D Models/Solar Sail Concept/Solar Sail Concept.glb` | NASA / NASA 3D Resources | https://github.com/nasa/NASA-3D-Resources/tree/master/3D%20Models/Solar%20Sail%20Concept | NASA / US-gov public domain | up=z + recenter + fit-to-unit + `--compress draco` (238 KB → 54 KB) |
+| `models/comms-mast.glb` | `comms-mast` | NASA 3D Resources → `3D Models/Tether/Tether.glb` | NASA / NASA 3D Resources | https://github.com/nasa/NASA-3D-Resources/tree/master/3D%20Models/Tether | NASA / US-gov public domain | up=z + recenter + fit-to-unit + `--compress draco` (492 KB → 14 KB) |
+| `models/comms-dish.glb` | `comms-dish` | NASA 3D Resources → `3D Models/70-meter Dish/70 meter dish.glb` | NASA / NASA 3D Resources | https://github.com/nasa/NASA-3D-Resources/tree/master/3D%20Models/70-meter%20Dish | NASA / US-gov public domain | textures detached (no embedded images at runtime) + up=z + recenter + fit-to-unit + `--compress draco` (2.2 MB → 90 KB) |
+
+Source repository (the `.glb` files above are fetched verbatim from branch
+`master`, then conditioned offline as noted): `https://github.com/nasa/NASA-3D-Resources`.
+
+NASA's image and media usage guidelines state NASA content is generally not
+copyrighted and may be used for educational/informational purposes; the NASA
+insignia/logo and flags are excluded and are NOT used here. See
+https://www.nasa.gov/nasa-brand-center/images-and-media/.
+
+### PBR skins on the deterministic panel/mast build ops (CC0)
+
+The deterministic panel/mast build ops (`internal/agent/opsource.go`, issue #57)
+carry these self-hosted CC0 PBR skins via the `material.map` / `normal_map` /
+`roughness_map` wire slots — solar-panel cells get the solar set, metal mast
+segments and the panel mount get the metal set. The renderer's `SpecPrimitive`
+loads them with the correct colorSpace and falls back SILENTLY to the flat base
+color if any map is missing/fails (ADR-0004). From ambientCG; downloaded as 1K
+JPG and **resized to 512×512** for bundle size (otherwise unmodified). The OpenGL
+(`NormalGL`) normal map is used.
+
+| File | Source map | Author | Source URL | License |
+|------|-----------|--------|-----------|---------|
+| `textures/solar_diff_512.jpg` | "Solar Panel 002" — 1K Color, resized to 512 | ambientCG (Lennart Demes) | https://ambientcg.com/view?id=SolarPanel002 | CC0 1.0 |
+| `textures/solar_nor_gl_512.jpg` | "Solar Panel 002" — 1K NormalGL, resized to 512 | ambientCG (Lennart Demes) | https://ambientcg.com/view?id=SolarPanel002 | CC0 1.0 |
+| `textures/solar_rough_512.jpg` | "Solar Panel 002" — 1K Roughness, resized to 512 | ambientCG (Lennart Demes) | https://ambientcg.com/view?id=SolarPanel002 | CC0 1.0 |
+| `textures/metal_diff_512.jpg` | "Metal Plates 006" — 1K Color, resized to 512 | ambientCG (Lennart Demes) | https://ambientcg.com/view?id=MetalPlates006 | CC0 1.0 |
+| `textures/metal_nor_gl_512.jpg` | "Metal Plates 006" — 1K NormalGL, resized to 512 | ambientCG (Lennart Demes) | https://ambientcg.com/view?id=MetalPlates006 | CC0 1.0 |
+| `textures/metal_rough_512.jpg` | "Metal Plates 006" — 1K Roughness, resized to 512 | ambientCG (Lennart Demes) | https://ambientcg.com/view?id=MetalPlates006 | CC0 1.0 |
+
+Original 1K downloads (resized down to 512; otherwise unmodified):
+
+- `https://ambientcg.com/get?file=SolarPanel002_1K-JPG.zip`
+- `https://ambientcg.com/get?file=MetalPlates006_1K-JPG.zip`
+
+ambientCG publishes all of its assets under CC0 1.0 (https://ambientcg.com/license).

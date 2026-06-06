@@ -60,6 +60,69 @@ func opMat(color string) wire.Material {
 	return wire.Material{Color: color, Roughness: &rough, Metalness: &metal}
 }
 
+// Self-hosted CC0 PBR skin URLs (#57, see web/public/assets/CREDITS.md). Each set
+// is a diffuse/albedo (sRGB) + tangent-space normal (GL) + roughness map; the
+// renderer's SpecPrimitive loads them with the correct colorSpace and falls back
+// SILENTLY to the flat base color if any map is missing/fails (ADR-0004), so the
+// scene never depends on a texture.
+const (
+	solarDiff  = "/assets/textures/solar_diff_512.jpg"
+	solarNorGL = "/assets/textures/solar_nor_gl_512.jpg"
+	solarRough = "/assets/textures/solar_rough_512.jpg"
+
+	metalDiff  = "/assets/textures/metal_diff_512.jpg"
+	metalNorGL = "/assets/textures/metal_nor_gl_512.jpg"
+	metalRough = "/assets/textures/metal_rough_512.jpg"
+)
+
+// opMatSolar dresses a PV/solar-array op in the CC0 solar-panel PBR skin (diffuse
+// + normal + roughness). A glossy, near-conductive surface (low roughness, high
+// metalness) reads like a photovoltaic cell. The base color is kept sane so a
+// missing texture still reads as a dark-blue panel (flat-color fallback).
+func opMatSolar(color string) wire.Material {
+	rough := 0.35
+	metal := 0.7
+	return wire.Material{
+		Color:        color,
+		Roughness:    &rough,
+		Metalness:    &metal,
+		Map:          solarDiff,
+		NormalMap:    solarNorGL,
+		RoughnessMap: solarRough,
+	}
+}
+
+// opMatMetal dresses a metal op (mast segments, struts) in the CC0 metal-plates
+// PBR skin (diffuse + normal + roughness). The base color is kept sane so a
+// missing texture still reads as brushed metal (flat-color fallback).
+func opMatMetal(color string) wire.Material {
+	rough := 0.5
+	metal := 0.9
+	return wire.Material{
+		Color:        color,
+		Roughness:    &rough,
+		Metalness:    &metal,
+		Map:          metalDiff,
+		NormalMap:    metalNorGL,
+		RoughnessMap: metalRough,
+	}
+}
+
+// placeBoxMat / placeCylMat / placeSphereMat mirror placeBox/placeCyl/placeSphere
+// but take an explicit Material so an op can carry a PBR skin instead of the
+// shared flat opMat surface.
+func placeBoxMat(x, y, z, sx, sy, sz float64, mat wire.Material) wire.BuildOp {
+	op := placeBox(x, y, z, sx, sy, sz, mat.Color)
+	op.Material = mat
+	return op
+}
+
+func placeCylMat(x, y, z, sx, sy, sz float64, mat wire.Material) wire.BuildOp {
+	op := placeCyl(x, y, z, sx, sy, sz, mat.Color)
+	op.Material = mat
+	return op
+}
+
 func placeBox(x, y, z, sx, sy, sz float64, color string) wire.BuildOp {
 	return wire.BuildOp{
 		Op:       wire.BuildOpPlace,
@@ -132,11 +195,13 @@ func domeCapOps() []wire.BuildOp {
 // rising op-by-op. Stays within the "panel" demo envelope (demo.go).
 func panelOps() []wire.BuildOp {
 	return []wire.BuildOp{
-		placeBox(0, 0.15, 0, 1.4, 0.3, 1.0, "#b8b8c2"),      // mounting base
-		placeCyl(0, 0.8, 0, 0.18, 1.0, 0.18, "#a4aab4"),     // support post
-		placeBox(-0.55, 1.3, 0, 0.45, 0.12, 1.5, "#1f3a6b"), // PV slat
-		placeBox(0, 1.34, 0, 0.45, 0.12, 1.5, "#24417a"),    // PV slat
-		placeBox(0.55, 1.3, 0, 0.45, 0.12, 1.5, "#1f3a6b"),  // PV slat
+		// Metal mounting base + support post carry the metal-plates skin.
+		placeBoxMat(0, 0.15, 0, 1.4, 0.3, 1.0, opMatMetal("#b8b8c2")),  // mounting base
+		placeCylMat(0, 0.8, 0, 0.18, 1.0, 0.18, opMatMetal("#a4aab4")), // support post
+		// PV slats carry the solar-panel skin.
+		placeBoxMat(-0.55, 1.3, 0, 0.45, 0.12, 1.5, opMatSolar("#1f3a6b")), // PV slat
+		placeBoxMat(0, 1.34, 0, 0.45, 0.12, 1.5, opMatSolar("#24417a")),    // PV slat
+		placeBoxMat(0.55, 1.3, 0, 0.45, 0.12, 1.5, opMatSolar("#1f3a6b")),  // PV slat
 	}
 }
 
@@ -145,9 +210,10 @@ func panelOps() []wire.BuildOp {
 // "mast" demo envelope (demo.go).
 func mastOps() []wire.BuildOp {
 	return []wire.BuildOp{
-		placeBox(0, 0.2, 0, 0.9, 0.4, 0.9, "#9aa0aa"),   // footing
-		placeCyl(0, 1.1, 0, 0.22, 1.4, 0.22, "#a4aab4"), // lower segment
-		placeCyl(0, 2.3, 0, 0.15, 1.0, 0.15, "#b8b8c2"), // upper segment
-		placeSphere(0, 3.1, 0, 0.32, "#e0e0ea"),         // antenna seat
+		// Footing and the two lattice segments are metal — metal-plates skin.
+		placeBoxMat(0, 0.2, 0, 0.9, 0.4, 0.9, opMatMetal("#9aa0aa")),   // footing
+		placeCylMat(0, 1.1, 0, 0.22, 1.4, 0.22, opMatMetal("#a4aab4")), // lower segment
+		placeCylMat(0, 2.3, 0, 0.15, 1.0, 0.15, opMatMetal("#b8b8c2")), // upper segment
+		placeSphere(0, 3.1, 0, 0.32, "#e0e0ea"),                        // antenna seat
 	}
 }
