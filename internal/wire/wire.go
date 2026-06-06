@@ -308,11 +308,28 @@ type EarthUplink struct {
 // the kill→heal money shot replays. It works in both the in-proc compose mode and
 // the external (k8s pod-per-rover) mode. Consumed ONLY by the coordinator.
 //
+// "placeBlueprint" is the game-like authoring command (bh-05): the dashboard
+// drags a pre-authored Blueprint from the palette into the world and confirms an
+// origin + rotation. The gateway relays it generically onto control.command; the
+// coordinator VALIDATES placement (world bounds, terrain, no-overlap with
+// existing structures) on its single writer and, on success, injects the
+// Blueprint's pre-baked task DAG (translated to the origin and rotated) so the
+// Auction picks the new tasks up exactly as it does the startup blueprint.
+// Multiple blueprints may be placed — each is just another DAG the Auction feeds
+// on. Invalid placement is rejected (logged for the UI) and injects nothing.
+// BlueprintID names a catalog entry (internal/blueprint); Origin is the worksite
+// anchor the DAG is translated onto; Rotation is radians about the origin.
+//
 // Robot carries the target rover for both "kill" and "killContainer".
 type Control struct {
-	Cmd   string         `json:"cmd"`             // "kill" | "killContainer" | "setLatency" | "setFailureProb" | "reloadDemo"
+	Cmd   string         `json:"cmd"`             // "kill" | "killContainer" | "setLatency" | "setFailureProb" | "reloadDemo" | "placeBlueprint"
 	Robot domain.RobotID `json:"robot,omitempty"` // target rover for "kill" / "killContainer"
 	Value float64        `json:"value,omitempty"` // slider value for latency/failure
+
+	// placeBlueprint fields (bh-05). Empty/zero for every other command.
+	BlueprintID string      `json:"blueprint_id,omitempty"` // catalog Blueprint to place
+	Origin      domain.Vec2 `json:"origin,omitzero"`        // worksite anchor for the injected DAG
+	Rotation    float64     `json:"rotation,omitempty"`     // radians, about the origin
 }
 
 // SubjControl is the bus subject the gateway relays browser Control messages onto.
