@@ -41,6 +41,7 @@ import { KernelSize } from "postprocessing";
 import * as THREE from "three";
 import type { RoverView, Snapshot, TaskView, Vec2 } from "../types/wire";
 import { batteryPercent } from "../lib/format";
+import { suppressRaycast } from "../lib/suppressRaycast";
 import {
   GROUND_SPAN,
   type SceneMap,
@@ -453,7 +454,19 @@ function loadGLTF(url: string): Promise<THREE.Group> {
     p = new Promise<THREE.Group>((resolve, reject) => {
       gltfLoader.load(
         url,
-        (g) => resolve(g.scene),
+        (g) => {
+          // Suppress raycast on every child of the CACHED SOURCE once. This keeps
+          // the source itself non-pickable and documents the asset-wide intent.
+          // NOTE: Object3D.clone(true) does NOT copy this own-property override
+          // onto clones (raycast is normally a prototype method), so each
+          // placement must ALSO re-suppress its clone — see suppressRaycast() use
+          // in SpecModel. Doing both keeps glTF child meshes unpickable so only a
+          // rover's invisible hit-proxy sphere stays pickable, keeping
+          // click-to-kill deterministic and letting onPointerMissed deselect on
+          // empty space.
+          suppressRaycast(g.scene);
+          resolve(g.scene);
+        },
         undefined,
         (err) => reject(err instanceof Error ? err : new Error(String(err))),
       );
@@ -572,7 +585,10 @@ function SpecModel({
         // original and break every later placement of the same asset. The cached
         // glTF lives for the session and is reclaimed on page unload; we only
         // clone so each placement gets its own transform node.
-        setScene(g.clone(true));
+        // Re-suppress raycast on this clone: clone(true) does not carry over the
+        // own-property override applied to the cached source, so every placement
+        // must re-apply it to stay non-pickable (see suppressRaycast / loadGLTF).
+        setScene(suppressRaycast(g.clone(true)));
         invalidate();
       })
       .catch(() => {
