@@ -188,10 +188,18 @@ const (
 	ShapeModel    BuildShape = "model" // future glTF; not rendered yet
 )
 
-// BuildOpPlace is the only op kind today: place one primitive in the Task's
-// Build-envelope frame. Kept as a const (not an enum type) so the JSON value is
-// the literal string "place".
-const BuildOpPlace = "place"
+// Build op kinds (bh-08a). The Build spec is an append-only PATCH LOG that the
+// renderer FOLDS into current geometry: a `place` adds a piece keyed by its Id;
+// a `move` updates the pos/rot/scale of an existing Id; a `delete` removes an
+// Id. Folding applies the ops in order, last-write-wins per Id. A place-only log
+// (today's cache + primitive op stream) is a degenerate patch log that folds to
+// itself, so existing replay renders pixel-identically. Kept as consts (not an
+// enum type) so the JSON value is the literal string.
+const (
+	BuildOpPlace  = "place"  // add a piece keyed by Id
+	BuildOpMove   = "move"   // update an existing Id's pos/rot/scale
+	BuildOpDelete = "delete" // remove an existing Id
+)
 
 // Material is a BuildOp's procedural surface. Color/roughness/metalness drive a
 // standard PBR material today; Map (a texture reference) is a reserved
@@ -203,12 +211,18 @@ type Material struct {
 	Map       string   `json:"map,omitempty"`       // future texture reference; no-op today
 }
 
-// BuildOp is a single declarative build step. pos/rot/scale are expressed
-// relative to the Task's Build-envelope frame (TECHSPEC §4). ModelRef is the
-// future glTF reference, populated only when Shape is "model".
+// BuildOp is a single declarative build step in the append-only patch log
+// (bh-08a). pos/rot/scale are expressed relative to the Task's Build-envelope
+// frame (TECHSPEC §4). ModelRef is the future glTF reference, populated only
+// when Shape is "model".
+//
+// Id is the stable key the renderer folds on: a `place` introduces an Id; a
+// later `move`/`delete` targets that earlier Id. A place-only log gives every
+// op a distinct Id, so it folds to itself (pixel-identical replay, ADR-0006).
 type BuildOp struct {
-	Op       string      `json:"op"`    // always "place" today (BuildOpPlace)
-	Shape    BuildShape  `json:"shape"` // box | cylinder | sphere | model
+	Op       string      `json:"op"`    // place | move | delete (BuildOpPlace/Move/Delete)
+	ID       string      `json:"id"`    // stable piece key; move/delete target an earlier place's ID
+	Shape    BuildShape  `json:"shape"` // box | cylinder | sphere | model (place only)
 	Pos      domain.Vec3 `json:"pos"`
 	Rot      domain.Vec3 `json:"rot"`
 	Scale    domain.Vec3 `json:"scale"`

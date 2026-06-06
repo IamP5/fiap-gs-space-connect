@@ -30,6 +30,7 @@ export const MOCK_SNAPSHOT: Snapshot = {
       build_spec: [
         {
           op: "place",
+          id: "slab",
           shape: "box",
           pos: { X: 0, Y: 0.15, Z: 0 },
           rot: { X: 0, Y: 0, Z: 0 },
@@ -43,6 +44,7 @@ export const MOCK_SNAPSHOT: Snapshot = {
         },
         {
           op: "place",
+          id: "dome",
           shape: "model",
           pos: { X: 0, Y: 0.3, Z: 0 },
           rot: { X: 0, Y: 0, Z: 0 },

@@ -14,13 +14,14 @@ export type Vec3 = { X: number; Y: number; Z: number };
 
 export type TaskStatus = "UNCLAIMED" | "LEASED" | "DONE";
 
-// --- Build spec (TECHSPEC §4, ADR-0006) — forward-compatible geometry-as-data.
+// --- Build spec (TECHSPEC §4, ADR-0006, bh-08a) — forward-compatible
+// geometry-as-data.
 //
-// An ordered list of declarative BuildOps the renderer INTERPRETS into meshes,
-// never executes. Mirrors wire.go's BuildOp/Material exactly (snake_case JSON
-// field names) so the two round-trip. box|cylinder|sphere render today; "model"
-// (with model_ref) and material `map` are reserved future glTF/texture slots the
-// current renderer treats as no-ops.
+// An append-only PATCH LOG of declarative BuildOps the renderer FOLDS into
+// current geometry, never executes. Mirrors wire.go's BuildOp/Material exactly
+// (snake_case JSON field names) so the two round-trip. box|cylinder|sphere render
+// today; "model" (with model_ref) and material `map` are reserved future
+// glTF/texture slots the current renderer treats as no-ops.
 export type BuildShape = "box" | "cylinder" | "sphere" | "model";
 
 export type Material = {
@@ -30,8 +31,14 @@ export type Material = {
   map?: string; // future texture reference; no-op today
 };
 
+// A single patch-log op. `op` is the kind; `id` is the stable piece key the
+// renderer folds on — a `place` introduces an id, a later `move`/`delete` targets
+// it. A place-only log gives every op a distinct id and folds to itself (today's
+// cache + primitive stream, pixel-identical replay). move/delete carry only the
+// fields the fold needs (id, and pos/rot/scale for move).
 export type BuildOp = {
-  op: "place";
+  op: "place" | "move" | "delete";
+  id: string;
   shape: BuildShape;
   pos: Vec3;
   rot: Vec3;

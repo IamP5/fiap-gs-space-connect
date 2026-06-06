@@ -2,7 +2,7 @@
   "$schema": "https://json-schema.org/draft/2020-12/schema",
   "$id": "https://swarmbuild/internal/harness/spec/build-spec.schema.json",
   "title": "BuildSpec",
-  "description": "An ordered, append-only list of declarative Build ops (TECHSPEC §4, ADR-0006). Interpreted by the renderer, never executed.",
+  "description": "An ordered, append-only PATCH LOG of declarative Build ops (TECHSPEC §4, ADR-0006, bh-08a). The renderer FOLDS the log into current geometry: a place adds a piece keyed by id, a move updates an existing id's transform, a delete removes an id (last-write-wins). Interpreted, never executed.",
   "type": "array",
   "items": { "$ref": "#/$defs/buildOp" },
   "$defs": {
@@ -30,8 +30,10 @@
     },
     "buildOp": {
       "type": "object",
+      "description": "One patch-log op. A place introduces a piece keyed by id; a move/delete targets an earlier place's id. Validation runs on the FOLDED result, not per op.",
       "properties": {
-        "op": { "type": "string", "const": "place" },
+        "op": { "type": "string", "enum": ["place", "move", "delete"] },
+        "id": { "type": "string", "description": "Stable piece key; move/delete target an earlier place's id." },
         "shape": { "type": "string", "enum": ["box", "cylinder", "sphere", "model"] },
         "pos": { "$ref": "#/$defs/vec3" },
         "rot": { "$ref": "#/$defs/vec3" },
@@ -39,7 +41,7 @@
         "material": { "$ref": "#/$defs/material" },
         "model_ref": { "type": "string" }
       },
-      "required": ["op", "shape", "pos", "rot", "scale", "material"],
+      "required": ["op", "pos", "rot", "scale"],
       "additionalProperties": false
     }
   }

@@ -111,6 +111,7 @@ func TestRoundTrip(t *testing.T) {
 	original := []wire.BuildOp{
 		{
 			Op:       wire.BuildOpPlace,
+			ID:       "slab",
 			Shape:    wire.ShapeBox,
 			Pos:      domain.Vec3{X: 1, Y: 2, Z: 3},
 			Rot:      domain.Vec3{X: 0, Y: math.Pi, Z: 0},
@@ -119,6 +120,7 @@ func TestRoundTrip(t *testing.T) {
 		},
 		{
 			Op:       wire.BuildOpPlace,
+			ID:       "model-1",
 			Shape:    wire.ShapeModel,
 			Pos:      domain.Vec3{X: 0, Y: 0, Z: 0},
 			Rot:      domain.Vec3{X: 0, Y: 0, Z: 0},
@@ -126,6 +128,9 @@ func TestRoundTrip(t *testing.T) {
 			Material: wire.Material{Color: white},
 			ModelRef: "future.glb",
 		},
+		// A move + delete must round-trip too (bh-08a patch log).
+		{Op: wire.BuildOpMove, ID: "slab", Pos: domain.Vec3{X: 1, Y: 9, Z: 3}, Rot: domain.Vec3{}, Scale: domain.Vec3{X: 2, Y: 0.5, Z: 2}},
+		{Op: wire.BuildOpDelete, ID: "model-1"},
 	}
 
 	raw, err := json.Marshal(original)
@@ -145,7 +150,7 @@ func TestRoundTrip(t *testing.T) {
 	}
 
 	// Confirm the snake_case JSON field names the TS mirror reads are present.
-	for _, want := range []string{`"op"`, `"shape"`, `"model_ref"`, `"material"`, `"roughness"`, `"metalness"`} {
+	for _, want := range []string{`"op"`, `"id"`, `"shape"`, `"model_ref"`, `"material"`, `"roughness"`, `"metalness"`} {
 		if !strings.Contains(string(raw), want) {
 			t.Errorf("marshalled JSON missing field %s: %s", want, raw)
 		}
@@ -163,6 +168,153 @@ func TestRejectMalformedJSON(t *testing.T) {
 	}
 	if err := Validate(ops); err == nil {
 		t.Fatal("want malformed spec rejected, got nil")
+	}
+}
+
+// boxAt is a well-formed place op with a stable id at the given position, reused
+// by the fold cases.
+func boxAt(id string, x, y, z float64) wire.BuildOp {
+	op := validBox()
+	op.ID = id
+	op.Pos = domain.Vec3{X: x, Y: y, Z: z}
+	return op
+}
+
+// TestFold_PlaceMoveDelete is the headline fold case (bh-08a acceptance): place
+// 3, move 1, delete 1 → the correct final 2 pieces in the correct positions.
+func TestFold_PlaceMoveDelete(t *testing.T) {
+	t.Parallel()
+	ops := []wire.BuildOp{
+		boxAt("a", 0, 0, 0),
+		boxAt("b", 1, 0, 0),
+		boxAt("c", 2, 0, 0),
+		{Op: wire.BuildOpMove, ID: "b", Pos: domain.Vec3{X: 1, Y: 5, Z: 0}, Rot: domain.Vec3{}, Scale: domain.Vec3{X: 1, Y: 1, Z: 1}},
+		{Op: wire.BuildOpDelete, ID: "a"},
+	}
+	got, err := Fold(ops)
+	if err != nil {
+		t.Fatalf("Fold: unexpected error: %v", err)
+	}
+	if len(got) != 2 {
+		t.Fatalf("Fold: want 2 survivors, got %d", len(got))
+	}
+	// Survivors keep first-seen order: b (moved) then c. a is deleted.
+	if got[0].ID != "b" || got[1].ID != "c" {
+		t.Fatalf("Fold: survivor order = [%s %s], want [b c]", got[0].ID, got[1].ID)
+	}
+	// b's transform was updated by the move (Y 0 → 5); c is unchanged.
+	if got[0].Pos != (domain.Vec3{X: 1, Y: 5, Z: 0}) {
+		t.Fatalf("Fold: moved piece pos = %+v, want {1 5 0}", got[0].Pos)
+	}
+	if got[1].Pos != (domain.Vec3{X: 2, Y: 0, Z: 0}) {
+		t.Fatalf("Fold: untouched piece pos = %+v, want {2 0 0}", got[1].Pos)
+	}
+	// A move must NOT clobber the place's shape/material.
+	if got[0].Shape != wire.ShapeBox || got[0].Material.Color != "#cfcfd6" {
+		t.Fatalf("Fold: move clobbered shape/material: %+v", got[0])
+	}
+}
+
+// TestFold_PlaceOnlyFoldsToItself is the load-bearing regression guard: a
+// place-only log (with OR without ids — today's cache omits ids) folds to itself,
+// op-for-op, so existing replay renders pixel-identically (ADR-0006).
+func TestFold_PlaceOnlyFoldsToItself(t *testing.T) {
+	t.Parallel()
+	for _, name := range []string{"with-ids", "no-ids (legacy cache)"} {
+		ops := []wire.BuildOp{boxAt("", 0, 0, 0), boxAt("", 1, 0, 0), boxAt("", 0, 1, 0)}
+		if name == "with-ids" {
+			ops = []wire.BuildOp{boxAt("a", 0, 0, 0), boxAt("b", 1, 0, 0), boxAt("c", 0, 1, 0)}
+		}
+		t.Run(name, func(t *testing.T) {
+			got, err := Fold(ops)
+			if err != nil {
+				t.Fatalf("Fold: %v", err)
+			}
+			if !reflect.DeepEqual(got, ops) {
+				t.Fatalf("place-only log did not fold to itself:\n in =%+v\n out=%+v", ops, got)
+			}
+		})
+	}
+}
+
+// TestFold_LastWriteWins confirms a re-placed id and repeated moves resolve to
+// the last write, keeping the original insertion order.
+func TestFold_LastWriteWins(t *testing.T) {
+	t.Parallel()
+	ops := []wire.BuildOp{
+		boxAt("a", 0, 0, 0),
+		boxAt("b", 1, 0, 0),
+		boxAt("a", 9, 9, 9), // re-place a: overwrites, keeps original slot
+	}
+	got, err := Fold(ops)
+	if err != nil {
+		t.Fatalf("Fold: %v", err)
+	}
+	if len(got) != 2 || got[0].ID != "a" || got[1].ID != "b" {
+		t.Fatalf("Fold: want [a b], got %+v", got)
+	}
+	if got[0].Pos != (domain.Vec3{X: 9, Y: 9, Z: 9}) {
+		t.Fatalf("Fold: re-placed a pos = %+v, want {9 9 9}", got[0].Pos)
+	}
+}
+
+// TestFold_UnknownTarget rejects a move or delete that targets an id no place
+// introduced (including targeting an anonymous/empty-id place).
+func TestFold_UnknownTarget(t *testing.T) {
+	t.Parallel()
+	cases := map[string][]wire.BuildOp{
+		"move unknown id":         {boxAt("a", 0, 0, 0), {Op: wire.BuildOpMove, ID: "ghost", Scale: domain.Vec3{X: 1, Y: 1, Z: 1}}},
+		"delete unknown id":       {boxAt("a", 0, 0, 0), {Op: wire.BuildOpDelete, ID: "ghost"}},
+		"delete before any place": {{Op: wire.BuildOpDelete, ID: "a"}},
+		"move anonymous place":    {boxAt("", 0, 0, 0), {Op: wire.BuildOpMove, ID: "", Scale: domain.Vec3{X: 1, Y: 1, Z: 1}}},
+		"unknown op kind":         {boxAt("a", 0, 0, 0), {Op: "execute", ID: "a"}},
+	}
+	for name, ops := range cases {
+		t.Run(name, func(t *testing.T) {
+			if _, err := Fold(ops); err == nil {
+				t.Fatalf("Fold(%s): want error, got nil", name)
+			}
+			if err := Validate(ops); err == nil {
+				t.Fatalf("Validate(%s): want error, got nil", name)
+			}
+		})
+	}
+}
+
+// TestFold_IsPure confirms Fold never mutates its input slice (so it is safe to
+// fold the accumulating spec on every snapshot).
+func TestFold_IsPure(t *testing.T) {
+	t.Parallel()
+	ops := []wire.BuildOp{
+		boxAt("a", 0, 0, 0),
+		{Op: wire.BuildOpMove, ID: "a", Pos: domain.Vec3{X: 7, Y: 0, Z: 0}, Scale: domain.Vec3{X: 1, Y: 1, Z: 1}},
+	}
+	before := append([]wire.BuildOp(nil), ops...)
+	if _, err := Fold(ops); err != nil {
+		t.Fatalf("Fold: %v", err)
+	}
+	if !reflect.DeepEqual(ops, before) {
+		t.Fatalf("Fold mutated its input:\n before=%+v\n after =%+v", before, ops)
+	}
+}
+
+// TestValidate_FoldedResult proves validation runs against the FOLDED geometry,
+// not per op: a malformed place that is later DELETED leaves valid survivors and
+// passes, while a surviving malformed place is rejected.
+func TestValidate_FoldedResult(t *testing.T) {
+	t.Parallel()
+	bad := validBox()
+	bad.ID = "x"
+	bad.Shape = "torus" // malformed
+
+	// The malformed place is deleted before folding completes ⇒ valid survivors.
+	deleted := []wire.BuildOp{boxAt("a", 0, 0, 0), bad, {Op: wire.BuildOpDelete, ID: "x"}}
+	if err := Validate(deleted); err != nil {
+		t.Fatalf("Validate: a deleted malformed place should not be checked, got %v", err)
+	}
+	// The malformed place survives ⇒ rejected.
+	if err := Validate([]wire.BuildOp{boxAt("a", 0, 0, 0), bad}); err == nil {
+		t.Fatal("Validate: a surviving malformed place should be rejected")
 	}
 }
 

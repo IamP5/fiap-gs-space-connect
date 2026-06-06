@@ -1,6 +1,7 @@
 package agent
 
 import (
+	"fmt"
 	"swarmbuild/internal/core/domain"
 	"swarmbuild/internal/wire"
 )
@@ -24,14 +25,27 @@ import (
 func buildOpsFor(t domain.TaskType) []wire.BuildOp {
 	switch t {
 	case "foundation":
-		return foundationOps()
+		return withIDs(foundationOps())
 	case "wall":
-		return wallOps()
+		return withIDs(wallOps())
 	case "dome-cap":
-		return domeCapOps()
+		return withIDs(domeCapOps())
 	default:
 		return nil
 	}
+}
+
+// withIDs stamps each place op with a stable, deterministic id derived from its
+// position in the stream (bh-08a). These streams are place-only — a degenerate
+// patch log — so distinct ids make them fold to themselves (pixel-identical
+// replay, ADR-0006). The id is a pure function of the index, so two Rovers
+// working the same Task (a killed builder and its replacement) emit identical
+// ids, preserving the resume-on-kill convergence.
+func withIDs(ops []wire.BuildOp) []wire.BuildOp {
+	for i := range ops {
+		ops[i].ID = fmt.Sprintf("op-%d", i)
+	}
+	return ops
 }
 
 // opMat is a shared procedural surface for the standalone op stream. Pointer

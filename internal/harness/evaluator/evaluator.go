@@ -210,12 +210,19 @@ func (e *Evaluator) SilhouetteThreshold() int { return e.cfg.SilhouetteThreshold
 func (e *Evaluator) Evaluate(ops []wire.BuildOp, env Envelope, done DoneCriteria, subjectOrigin domain.Vec3, neighbours []Neighbour) Verdict {
 	schemaOK := spec.Validate(ops) == nil && len(ops) > 0
 
-	envOK := schemaOK && e.checkEnvelope(ops, env)
-	collOK := schemaOK && e.checkCollision(ops, subjectOrigin, neighbours)
-	doneOK := schemaOK && e.checkDone(ops, env, done)
+	// All geometry checks run on the FOLDED result (bh-08a): the patch log's
+	// current geometry, not the raw op stream (a move/delete is not a primitive
+	// with a meaningful AABB). spec.Validate already proved the log folds when
+	// schemaOK; on a fold error schemaOK is false and the geometry checks
+	// short-circuit, so we ignore Fold's error here.
+	folded, _ := spec.Fold(ops)
 
-	coverage, coverScore, coverEvidence := e.scoreCoverage(ops, env, done)
-	cohScore, cohEvidence := e.scoreCoherence(ops, env)
+	envOK := schemaOK && e.checkEnvelope(folded, env)
+	collOK := schemaOK && e.checkCollision(folded, subjectOrigin, neighbours)
+	doneOK := schemaOK && e.checkDone(folded, env, done)
+
+	coverage, coverScore, coverEvidence := e.scoreCoverage(folded, env, done)
+	cohScore, cohEvidence := e.scoreCoherence(folded, env)
 
 	_ = coverage
 	return Verdict{
@@ -292,7 +299,11 @@ func (e *Evaluator) checkCollision(ops []wire.BuildOp, subjectOrigin domain.Vec3
 		subj[i] = opAABB(op).translate(subjectOrigin)
 	}
 	for _, n := range neighbours {
-		for _, nop := range n.Ops {
+		// A neighbour's accumulated spec is itself a patch log; fold it to its
+		// current geometry before testing for overlap (bh-08a). A malformed
+		// neighbour log folds to nothing rather than failing the subject.
+		nops, _ := spec.Fold(n.Ops)
+		for _, nop := range nops {
 			nb := opAABB(nop).translate(n.Origin)
 			for _, sb := range subj {
 				if overlaps(sb, nb, e.cfg.CollisionEpsilon) {

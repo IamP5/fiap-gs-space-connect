@@ -634,15 +634,21 @@ func (st *state) onBuildOp(ctx context.Context, m wire.BuildOpMsg) {
 	if !ok || cur.Status != domain.Leased {
 		return // not an actively-built task: drop the stray op
 	}
-	if err := spec.Validate([]wire.BuildOp{m.Op}); err != nil {
-		slog.Warn("rejected build op", "task", m.TaskID, "seq", m.Seq, "error", err)
-		return // malformed: never appended (ADR-0006)
-	}
 	existing := st.buildSpecs[m.TaskID]
 	if m.Seq != len(existing) {
 		return // duplicate, out-of-order, or gap: idempotent no-op (resume dedupe)
 	}
-	st.buildSpecs[m.TaskID] = append(existing, m.Op)
+	// Validate the candidate FOLDED log, not the op in isolation (bh-08a): a
+	// move/delete only makes sense against the accumulated log, so we fold
+	// existing+op and reject if the result is malformed (a move/delete of an
+	// unknown id, or a folded survivor that fails the schema gate). A copy avoids
+	// appending to `existing`'s backing array before the op is accepted.
+	candidate := append(append(make([]wire.BuildOp, 0, len(existing)+1), existing...), m.Op)
+	if err := spec.Validate(candidate); err != nil {
+		slog.Warn("rejected build op", "task", m.TaskID, "seq", m.Seq, "error", err)
+		return // malformed: never appended (ADR-0006)
+	}
+	st.buildSpecs[m.TaskID] = candidate
 	st.mirrorSpec(ctx, m.TaskID)
 
 	// Bump the Task version and re-mirror so the World Model/KV record that the
