@@ -39,7 +39,12 @@ export const MOCK_SNAPSHOT: Snapshot = {
             color: "#cfcfd6",
             roughness: 0.95,
             metalness: 0.05,
-            map: "/assets/textures/rock_boulder_dry_diff_512.jpg",
+            // issue #53: exercise the FULL PBR set (diffuse + normal + roughness +
+            // ao) on a SpecPrimitive with the self-hosted CC0 regolith maps.
+            map: "/assets/textures/regolith_diff_512.jpg",
+            normal_map: "/assets/textures/regolith_nor_gl_512.jpg",
+            roughness_map: "/assets/textures/regolith_rough_512.jpg",
+            ao_map: "/assets/textures/regolith_ao_512.jpg",
           },
         },
         {

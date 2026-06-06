@@ -57,6 +57,31 @@ Poly Haven publishes all of its assets under CC0 1.0
 (https://polyhaven.com/license); the asset's authors are confirmed via the Poly
 Haven API (`https://api.polyhaven.com/info/rock_boulder_dry`).
 
+## PBR texture sets — regolith (CC0)
+
+The lunar terrain (and the PBR `SpecPrimitive` slot) is clothed with Poly Haven's
+**Moon 01** set (issue #53): the full diffuse / normal (OpenGL) / roughness / AO
+maps, downloaded as 1K jpg and **resized to 512×512** for bundle size (otherwise
+unmodified). The jpg `nor_gl` normal map is used (no EXR dependency).
+
+| File | Source map | Authors | Source URL | License |
+|------|-----------|---------|-----------|---------|
+| `textures/regolith_diff_512.jpg` | "Moon 01" — 1K diffuse, resized to 512 | Greg Zaal, Rico Cilliers, Jenelle van Heerden (photography), Dario Barresi (processing) | https://polyhaven.com/a/moon_01 | CC0 1.0 |
+| `textures/regolith_nor_gl_512.jpg` | "Moon 01" — 1K normal (OpenGL), resized to 512 | Greg Zaal, Rico Cilliers, Jenelle van Heerden (photography), Dario Barresi (processing) | https://polyhaven.com/a/moon_01 | CC0 1.0 |
+| `textures/regolith_rough_512.jpg` | "Moon 01" — 1K roughness, resized to 512 | Greg Zaal, Rico Cilliers, Jenelle van Heerden (photography), Dario Barresi (processing) | https://polyhaven.com/a/moon_01 | CC0 1.0 |
+| `textures/regolith_ao_512.jpg` | "Moon 01" — 1K ambient occlusion, resized to 512 | Greg Zaal, Rico Cilliers, Jenelle van Heerden (photography), Dario Barresi (processing) | https://polyhaven.com/a/moon_01 | CC0 1.0 |
+
+Original 1K downloads (resized down to 512; otherwise unmodified):
+
+- `https://dl.polyhaven.org/file/ph-assets/Textures/jpg/1k/moon_01/moon_01_diff_1k.jpg`
+- `https://dl.polyhaven.org/file/ph-assets/Textures/jpg/1k/moon_01/moon_01_nor_gl_1k.jpg`
+- `https://dl.polyhaven.org/file/ph-assets/Textures/jpg/1k/moon_01/moon_01_rough_1k.jpg`
+- `https://dl.polyhaven.org/file/ph-assets/Textures/jpg/1k/moon_01/moon_01_ao_1k.jpg`
+
+Poly Haven publishes all of its assets under CC0 1.0
+(https://polyhaven.com/license); the set's authors are confirmed via the Poly
+Haven API (`https://api.polyhaven.com/info/moon_01`).
+
 ## HDR environments
 
 Used by `<SpaceEnvironment>` (issue #50) as the self-hosted skybox + image-based
