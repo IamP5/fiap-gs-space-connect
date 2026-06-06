@@ -184,6 +184,29 @@ func TestSpecRequestSchema_ObjectRooted(t *testing.T) {
 	}
 }
 
+// TestSpecRequestSchema_AssetKeyNullable asserts the per-op schema offers a
+// nullable asset_key field (ADR-0010, issue #61): the model MAY emit a curated
+// Asset KEY (resolved server-side to a model_ref) instead of leaning on a
+// procedural shape. Nullable is the strict-mode form of optional, so a null/absent
+// asset_key is a plain procedural op.
+func TestSpecRequestSchema_AssetKeyNullable(t *testing.T) {
+	var s map[string]any
+	if err := json.Unmarshal(specRequestSchema(), &s); err != nil {
+		t.Fatalf("schema is not valid JSON: %v", err)
+	}
+	ops, _ := s["properties"].(map[string]any)["ops"].(map[string]any)
+	items, _ := ops["items"].(map[string]any)
+	opProps, _ := items["properties"].(map[string]any)
+	ak, ok := opProps["asset_key"].(map[string]any)
+	if !ok {
+		t.Fatalf("build op schema must carry an asset_key property, got %v", opProps)
+	}
+	types := toStringSet(ak["type"])
+	if !types["string"] || !types["null"] {
+		t.Fatalf("asset_key must be nullable string, got type %v", ak["type"])
+	}
+}
+
 // TestSpecRequestSchema_StrictCompliant walks the whole schema and asserts every
 // object node sets additionalProperties:false AND lists ALL its properties in
 // "required" — the constraints OpenAI strict mode enforces. This is the guard

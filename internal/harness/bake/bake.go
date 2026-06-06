@@ -15,6 +15,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"strings"
 	"swarmbuild/internal/core/domain"
 	"swarmbuild/internal/harness/asset"
 	"swarmbuild/internal/harness/cache"
@@ -295,7 +296,8 @@ func BuildPrompt(c Contract, contractJSON json.RawMessage, world WorldContext) (
 		"with pos/rot/scale (finite X,Y,Z; positive scale on every axis) and a PBR material " +
 		"(non-empty hex color, optional roughness/metalness in [0,1]). " +
 		"All coordinates are RELATIVE to the Task's Build-envelope frame and MUST stay within the envelope. " +
-		"You never emit code; the renderer interprets your ops. Return strict JSON of the form {\"ops\": [ ... ]}."
+		"You never emit code; the renderer interprets your ops. Return strict JSON of the form {\"ops\": [ ... ]}." +
+		assetCatalogNote(c)
 
 	neighbourNote := ""
 	if len(world.Neighbours) > 0 {
@@ -336,4 +338,45 @@ func BuildPrompt(c Contract, contractJSON json.RawMessage, world WorldContext) (
 		{Role: "system", Content: system},
 		{Role: "user", Content: user},
 	}, nil
+}
+
+// assetCatalogNote renders the system-prompt addendum that offers the model the
+// contract's closed Asset catalog (ADR-0010, issue #61). It lists the available
+// catalog KEYS — names ONLY, with each key's suited Task type(s) — and instructs the
+// model that it MAY set `asset_key: "<key>"` on a `place` op to drop in a curated
+// Asset instead of authoring a procedural shape. It NEVER leaks a model_ref/URL/path
+// (the server resolves key → self-hosted model_ref before the browser sees the op),
+// so the model can only ever pick a key. Keys come from the contract's catalog, which
+// is the SAME set replay and live draw from (AssetCatalog() falls back to the global
+// asset.DefaultCatalog() when the contract scopes none). An empty catalog yields an
+// empty note (no Asset offer), so the prompt stays purely procedural.
+func assetCatalogNote(c Contract) string {
+	cat := c.AssetCatalog()
+	keys := cat.Keys()
+	if len(keys) == 0 {
+		return ""
+	}
+
+	var b strings.Builder
+	b.WriteString("\n\nCURATED ASSET CATALOG (ADR-0010): you MAY place a real, curated Asset instead of a " +
+		"procedural shape by setting `asset_key` on a `place` op to one of the KEYS below (and you may still " +
+		"set a fallback shape on the same op). NEVER invent a model_ref/URL/path — the server resolves the key " +
+		"to a self-hosted model and fits it to your op's pos/rot/scale. Place an Asset only when its suited " +
+		"type matches this Task; otherwise emit procedural shapes. Available keys (key — suited task type(s)):")
+	for _, k := range keys {
+		entry, ok := cat.Get(k)
+		if !ok {
+			continue
+		}
+		suited := "any task type"
+		if len(entry.TaskTypes) > 0 {
+			parts := make([]string, len(entry.TaskTypes))
+			for i, t := range entry.TaskTypes {
+				parts[i] = string(t)
+			}
+			suited = strings.Join(parts, ", ")
+		}
+		fmt.Fprintf(&b, "\n  - %s — %s", k, suited)
+	}
+	return b.String()
 }
