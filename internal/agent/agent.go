@@ -37,9 +37,13 @@ const (
 	ModeReplay Mode = "replay"
 	// ModeLive opts the rover into inline generation: in its work phase it runs
 	// the Build harness via the injected LiveBuilder seam (a live model call) and
-	// streams the accepted spec on build.op.<task>. On exhaustion/error it degrades
-	// to the replay/primitive stream (failure-heal is a later slice 08f), so a
-	// model fault never crashes the swarm.
+	// streams the accepted spec on build.op.<task>. The harness RETRIES a transient
+	// model fault (bounded, per call); a non-model fall-back (gate exhaustion / no
+	// contract) degrades to the replay/primitive stream so the Task still completes.
+	// A MODEL failure routes through self-heal (bh-08f): once the rover's failure
+	// count crosses LiveFailureThreshold the rover DIES (releases its lease / stops
+	// heartbeating) and the existing expiry → re-auction path reassigns the Task — an
+	// LLM that won't cooperate becomes just another dead robot.
 	ModeLive Mode = "live"
 )
 
@@ -68,6 +72,22 @@ type LiveBuilder interface {
 	BuildLive(ctx context.Context, task domain.TaskID, taskType domain.TaskType, emit func(iterationOps []wire.BuildOp)) (ok bool)
 }
 
+// liveFaultReporter is the OPTIONAL richer seam the live work phase prefers when a
+// LiveBuilder implements it (bh-08f): BuildLiveFault returns whether the build
+// succeeded (ok) AND — when it did not — whether the cause was a MODEL FAILURE (the
+// model would not produce a spec after the harness's bounded retries, modelFailed=
+// true) as opposed to a gate exhaustion / unbuildable contract (modelFailed=false).
+// The rover counts a model failure toward its death threshold (route through
+// self-heal) but merely degrades on a non-model fall-back. It returns two plain
+// booleans (no shared struct) so the agent matches it structurally WITHOUT importing
+// the live package — which would pull the Model seam onto the agent's import graph and
+// break the archtest. It is a SEPARATE optional interface so the LiveBuilder contract
+// stays byte-stable: a builder that does not implement it is never routed through the
+// death path (every failure degrades, the pre-08f behaviour).
+type liveFaultReporter interface {
+	BuildLiveFault(ctx context.Context, task domain.TaskID, taskType domain.TaskType, emit func(iterationOps []wire.BuildOp)) (ok, modelFailed bool)
+}
+
 // Config is the static identity and starting state of one rover. HeartbeatEvery
 // is how often the rover renews a lease it holds (and is the cadence the
 // coordinator's TTL is sized against, TTL ≥ 3× this).
@@ -90,6 +110,17 @@ type Config struct {
 	// stream. Injected by the composition root so the agent package itself never
 	// imports the Model seam (ADR-0005 / archtest).
 	LiveBuilder LiveBuilder
+
+	// LiveFailureThreshold is the per-Rover MODEL-failure budget in live mode
+	// (bh-08f): the number of times the live build may fail because the model would
+	// not cooperate (after the harness's own bounded per-call retries) before the
+	// rover DIES — it stops heartbeating / releases its lease so the existing
+	// expiry → re-auction path reassigns the Task to a healthy rover. No special
+	// supervisory logic: a model that won't build is just another dead robot. A
+	// non-model fall-back (gate exhaustion / unbuildable contract) never counts
+	// toward this and degrades to the replay/primitive stream instead. Zero ⇒
+	// defaultLiveFailureThreshold; a value < 1 is treated as 1 (one failure kills).
+	LiveFailureThreshold int
 
 	// FailTask, if non-empty, makes this rover abandon that task instead of
 	// completing it: on award it drives to the task, then reports execution
@@ -144,6 +175,17 @@ type Config struct {
 // model-free regardless of Mode).
 func (c Config) liveEnabled() bool {
 	return c.Mode == ModeLive && c.LiveBuilder != nil && c.BuildOps == nil
+}
+
+// liveFailureThreshold is the per-Rover model-failure budget for live mode (bh-08f):
+// Config.LiveFailureThreshold when positive, else defaultLiveFailureThreshold; a
+// value of exactly 1 is honoured (one model failure kills). Clamped to ≥ 1 so a
+// misconfigured non-positive value never disables the death path silently.
+func (c Config) liveFailureThreshold() int {
+	if c.LiveFailureThreshold > 0 {
+		return c.LiveFailureThreshold
+	}
+	return defaultLiveFailureThreshold
 }
 
 // opsFor resolves the ordered op stream this rover emits while working task (of
@@ -233,6 +275,14 @@ const (
 // telemetryEvery is how often a rover self-reports position/battery/health/load.
 const telemetryEvery = 200 * time.Millisecond
 
+// defaultLiveFailureThreshold is the per-Rover MODEL-failure budget in live mode when
+// Config.LiveFailureThreshold is left zero (bh-08f): after this many model failures
+// (each already past the harness's bounded per-call retries) the rover dies and its
+// Task re-auctions. Small so an uncooperative model is shed quickly, > 1 so a single
+// transient blip that slips past the per-call retry does not instantly kill an
+// otherwise-healthy rover.
+const defaultLiveFailureThreshold = 3
+
 // defaultRecoverAfter is how long a killed rover stays dark before it revives in
 // place when Config.RecoverAfter is left zero. Long enough to clearly watch the
 // rover go down and the swarm re-auction its task to a neighbour, short enough to
@@ -277,6 +327,13 @@ type rover struct {
 	// refused is the set of tasks this rover has cooperatively failed and will
 	// never bid on again (it has "lost the capability" for them). Guarded by mu.
 	refused map[domain.TaskID]struct{}
+
+	// liveFailures counts live-mode MODEL failures across this rover's lifetime
+	// (bh-08f): each live build that fell back because the model would not produce a
+	// spec (past the harness's bounded per-call retries) bumps it; once it reaches
+	// the configured threshold the rover dies (kill) so the swarm self-heals its Task
+	// via expiry → re-auction. Guarded by mu.
+	liveFailures int
 
 	// down is the recoverable-outage signal. kill() closes the CURRENT down
 	// channel to abort any in-flight execution (the drive/work loops select on
@@ -473,6 +530,16 @@ func (r *rover) refuses(task domain.TaskID) bool {
 	defer r.mu.Unlock()
 	_, ok := r.refused[task]
 	return ok
+}
+
+// recordLiveFailure bumps the lifetime live-mode model-failure count and reports the
+// new total, so the live work phase can compare it against the rover's death
+// threshold (bh-08f). Guarded by the rover mutex.
+func (r *rover) recordLiveFailure() int {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	r.liveFailures++
+	return r.liveFailures
 }
 
 // moveToward advances the rover's position toward target by at most maxStep
@@ -841,19 +908,31 @@ func drive(ctx context.Context, cfg Config, conn *bus.Conn, st *rover, heart, fa
 // rover goes silent, its partial ops stay durable, and the coordinator
 // self-heals the lease.
 func workPhase(ctx context.Context, cfg Config, conn *bus.Conn, st *rover, heart, fault *time.Ticker, down <-chan struct{}, aw wire.Award) phaseResult {
-	// LIVE mode (bh-08d): stream each refine iteration's patch ops as the Build
+	// LIVE mode (bh-08d/08f): stream each refine iteration's patch ops as the Build
 	// harness produces them, pacing emission by the Choreography cadence while
-	// heartbeating. On exhaustion/error (nothing emitted) it degrades to the
-	// deterministic replay/primitive stream — a model fault never crashes the swarm.
+	// heartbeating. A non-model fall-back (gate exhaustion / no contract) degrades to
+	// the deterministic replay/primitive stream — that path never crashes the swarm.
+	// A MODEL failure routes through self-heal (bh-08f): once the rover's failure count
+	// crosses its threshold the rover DIES so the Task re-auctions.
 	if cfg.liveEnabled() {
-		res, emitted := streamLiveOps(ctx, cfg, conn, st, heart, fault, down, aw)
+		res, outcome := streamLiveOps(ctx, cfg, conn, st, heart, fault, down, aw)
 		if res != phaseDone {
 			return res // ctx cancelled / killed / faulted mid-stream: no completion
 		}
-		if emitted {
+		switch outcome {
+		case liveEmitted:
 			return phaseDone // the live harness streamed at least one iteration
+		case liveModelDied:
+			// The rover crossed its model-failure threshold and killed itself: stop
+			// heartbeating and abandon the Task WITHOUT completing it, so the
+			// coordinator self-heals the lease by TTL expiry and re-auctions it to a
+			// healthy rover (bh-08f). No primitive fallback on this path.
+			slog.Warn("live build: rover died past model-failure threshold; abandoning task for re-auction",
+				"rover", cfg.ID, "task", aw.TaskID)
+			return phaseAbort
+		case liveDegrade:
+			// fall through: a non-model fall-back, degrade to replay/primitive.
 		}
-		// fall through: live generation produced nothing, degrade to replay/primitive
 	}
 
 	// Replay/fallback: resolve the deterministic op stream (a map/cache lookup, no
@@ -866,6 +945,17 @@ func workPhase(ctx context.Context, cfg Config, conn *bus.Conn, st *rover, heart
 	}
 	return streamOps(ctx, cfg, conn, st, heart, fault, down, aw, ops)
 }
+
+// liveOutcome is how a completed (phaseDone) live build dispositions the Task: it
+// streamed ops, it should degrade to replay/primitive, or the rover died past its
+// model-failure threshold and the Task must re-auction (bh-08f).
+type liveOutcome int
+
+const (
+	liveEmitted   liveOutcome = iota // the harness streamed at least one iteration
+	liveDegrade                      // a non-model fall-back: degrade to replay/primitive
+	liveModelDied                    // a model failure crossed the death threshold: rover killed
+)
 
 // streamLiveOps runs the injected Build harness on a background goroutine and PACES
 // each refine iteration's patch batch onto build.op.<task> as it arrives, while this
@@ -882,12 +972,13 @@ func workPhase(ctx context.Context, cfg Config, conn *bus.Conn, st *rover, heart
 //
 // The model call is bound to a context cancelled on kill/ctx-done, so a killed rover
 // does not keep an LLM call in flight for a Task it has abandoned. It returns the
-// phase result and whether ANY op was emitted: on phaseDone with emitted=false the
-// harness was exhausted and the caller degrades to the replay/primitive stream.
-func streamLiveOps(ctx context.Context, cfg Config, conn *bus.Conn, st *rover, heart, fault *time.Ticker, down <-chan struct{}, aw wire.Award) (phaseResult, bool) {
+// phase result and, on phaseDone, the liveOutcome: streamed (complete), degrade
+// (non-model fall-back), or died (a model failure crossed the rover's threshold so
+// the rover killed itself and the Task must re-auction, bh-08f).
+func streamLiveOps(ctx context.Context, cfg Config, conn *bus.Conn, st *rover, heart, fault *time.Ticker, down <-chan struct{}, aw wire.Award) (phaseResult, liveOutcome) {
 	genCtx, cancel := context.WithCancel(ctx)
 	defer cancel()
-	batches := startLiveBuilder(genCtx, cfg, aw)
+	build := startLiveBuilder(genCtx, cfg, aw)
 
 	op := time.NewTicker(opEvery)
 	defer op.Stop()
@@ -901,27 +992,28 @@ func streamLiveOps(ctx context.Context, cfg Config, conn *bus.Conn, st *rover, h
 	)
 	for {
 		// Once generation is done AND every buffered op has been streamed, the live
-		// build is complete (or, if next==0, produced nothing and we degrade).
+		// build is complete: streamed something, or produced nothing and we decide
+		// between degrade and death based on whether the model failed (bh-08f).
 		if genDone && len(pending) == 0 {
-			return phaseDone, next > 0
+			return finishLiveBuild(ctx, cfg, st, down, aw, build, next)
 		}
 		select {
 		case <-ctx.Done():
 			cancel()
-			return phaseAbort, next > 0
+			return phaseAbort, liveEmitted
 		case <-down:
 			cancel() // killed mid-stream: stop the in-flight model call; partial ops stay durable
-			return phaseAbort, next > 0
+			return phaseAbort, liveEmitted
 		case <-fault.C:
 			if rollFault(st) {
 				cancel()
-				return phaseFault, next > 0
+				return phaseFault, liveEmitted
 			}
 		case <-heart.C:
 			sendHeartbeat(conn, cfg.ID, aw.TaskID)
 		case <-tick.C:
 			st.drainOverTime(drainPerWorkSec * moveStep.Seconds())
-		case b, ok := <-batches:
+		case b, ok := <-build.batches:
 			genDone = genDone || !ok // closed channel ⇒ builder finished; drain remaining, then complete
 			pending = append(pending, b...)
 		case <-op.C:
@@ -929,6 +1021,59 @@ func streamLiveOps(ctx context.Context, cfg Config, conn *bus.Conn, st *rover, h
 			pending, next = paceOp(conn, aw.TaskID, pending, next)
 		}
 	}
+}
+
+// finishLiveBuild dispositions a completed live build (generation done, buffer
+// drained): it streamed something (liveEmitted/phaseDone), or produced nothing —
+// in which case a teardown (ctx/down) is an abort, otherwise dispositionNoOps decides
+// degrade vs. death from the model-failure flag (bh-08f).
+func finishLiveBuild(ctx context.Context, cfg Config, st *rover, down <-chan struct{}, aw wire.Award, build liveBuild, next int) (phaseResult, liveOutcome) {
+	if next > 0 {
+		return phaseDone, liveEmitted
+	}
+	// A build that finished only because the rover is shutting down or was killed
+	// (ctx/down) reports modelFailed via the cancelled loop — but that is NOT a model
+	// fault, so abort without recording a failure or self-killing.
+	if isDone(ctx, down) {
+		return phaseAbort, liveEmitted
+	}
+	return phaseDone, dispositionNoOps(cfg, st, aw, build.modelFailed())
+}
+
+// isDone reports whether the rover's run is being torn down — the execute context is
+// cancelled (shutdown) or the rover's outage channel is closed (kill) — so a live
+// build that finished only because it was cancelled is treated as an abort, not a
+// model fault (bh-08f).
+func isDone(ctx context.Context, down <-chan struct{}) bool {
+	select {
+	case <-ctx.Done():
+		return true
+	case <-down:
+		return true
+	default:
+		return false
+	}
+}
+
+// dispositionNoOps decides what a live build that emitted ZERO ops means for the Task
+// (bh-08f). A non-model fall-back (gate exhaustion / unbuildable contract) degrades
+// to the replay/primitive stream. A MODEL failure bumps the rover's lifetime failure
+// count: under the threshold it still degrades (one transient blip should not orphan
+// the Task), but once it crosses the threshold the rover KILLS itself (releases its
+// lease / stops heartbeating) so the existing expiry → re-auction path reassigns the
+// Task to a healthy rover — no special supervisory logic, no primitive on this path.
+func dispositionNoOps(cfg Config, st *rover, aw wire.Award, modelFailed bool) liveOutcome {
+	if !modelFailed {
+		return liveDegrade
+	}
+	failures := st.recordLiveFailure()
+	if failures < cfg.liveFailureThreshold() {
+		slog.Warn("live build: model failure under threshold; degrading to replay/primitive",
+			"rover", cfg.ID, "task", aw.TaskID, "failures", failures, "threshold", cfg.liveFailureThreshold())
+		return liveDegrade
+	}
+	st.kill() // an LLM that won't cooperate is just another dead robot (bh-08f)
+	return liveModelDied
 }
 
 // paceOp emits the head of pending (if any) on build.op.<task> at its monotonic Seq
@@ -943,23 +1088,53 @@ func paceOp(conn *bus.Conn, task domain.TaskID, pending []wire.BuildOp, next int
 	return pending[1:], next + 1
 }
 
-// startLiveBuilder runs the injected Build harness on its own goroutine and returns
-// the channel each accepted iteration's patch batch arrives on. The channel is
-// buffered (the builder's emit runs on the loop goroutine, never blocking on the
-// pacer) and closed when generation finishes, so the pacer drains the remainder and
-// completes. A killed/cancelled genCtx stops the builder feeding a dead pacer.
-func startLiveBuilder(genCtx context.Context, cfg Config, aw wire.Award) <-chan []wire.BuildOp {
+// liveBuild is the handle the pacer holds onto the background Build harness goroutine
+// (bh-08f): batches carries each accepted iteration's patch batch and is closed when
+// generation finishes; modelFailed reports — AFTER the channel has closed (the pacer
+// only consults it once it has observed genDone) — whether the build fell back
+// because the MODEL failed to produce a spec, distinct from a gate exhaustion / no
+// contract. The bool is written before close(batches), so a reader that has seen the
+// close has a happy-before edge to it without extra synchronisation.
+type liveBuild struct {
+	batches      <-chan []wire.BuildOp
+	modelFailedP *bool
+}
+
+// modelFailed reports whether the finished build's empty result was caused by a model
+// failure. Only valid once the batches channel has closed (the pacer's contract);
+// before that it reads the zero value.
+func (b liveBuild) modelFailed() bool { return *b.modelFailedP }
+
+// startLiveBuilder runs the injected Build harness on its own goroutine and returns a
+// liveBuild handle: the channel each accepted iteration's patch batch arrives on plus
+// the post-completion model-failure flag (bh-08f). The channel is buffered (the
+// builder's emit runs on the loop goroutine, never blocking on the pacer) and closed
+// when generation finishes, so the pacer drains the remainder and completes. A
+// killed/cancelled genCtx stops the builder feeding a dead pacer.
+//
+// When the LiveBuilder implements the optional liveFaultReporter seam, the goroutine
+// captures whether the fall-back was a model failure so the pacer can route it
+// through self-heal; a builder that does not implement it always reports false, so
+// every fall-back simply degrades (the pre-08f behaviour).
+func startLiveBuilder(genCtx context.Context, cfg Config, aw wire.Award) liveBuild {
 	batches := make(chan []wire.BuildOp, 8)
+	modelFailed := new(bool)
+	emit := func(iterationOps []wire.BuildOp) {
+		select {
+		case batches <- iterationOps:
+		case <-genCtx.Done(): // killed/cancelled: stop feeding a dead pacer
+		}
+	}
 	go func() {
 		defer close(batches)
-		cfg.LiveBuilder.BuildLive(genCtx, aw.TaskID, aw.Type, func(iterationOps []wire.BuildOp) {
-			select {
-			case batches <- iterationOps:
-			case <-genCtx.Done(): // killed/cancelled: stop feeding a dead pacer
-			}
-		})
+		if fr, ok := cfg.LiveBuilder.(liveFaultReporter); ok {
+			_, mf := fr.BuildLiveFault(genCtx, aw.TaskID, aw.Type, emit)
+			*modelFailed = mf
+			return
+		}
+		cfg.LiveBuilder.BuildLive(genCtx, aw.TaskID, aw.Type, emit)
 	}()
-	return batches
+	return liveBuild{batches: batches, modelFailedP: modelFailed}
 }
 
 // workTimer is the pre-harness work phase: hold at the worksite for the fixed

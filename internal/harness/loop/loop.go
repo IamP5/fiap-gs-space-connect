@@ -28,6 +28,15 @@ import (
 // exceeds it; on exhaustion the Task falls back to the primitive.
 const MaxIterations = 3
 
+// DefaultRetriesPerCall is the bounded retry the LIVE path uses on a single model
+// call (bh-08f): a failed/invalid/timed-out Generate is re-attempted this many EXTRA
+// times before the loop treats the call as failed. A transient provider blip
+// therefore self-corrects inside one iteration rather than burning a refine pass or
+// — on the live path — immediately counting toward the Rover's failure-death
+// threshold. It is OPT-IN via Request.RetriesPerCall; a zero value keeps the legacy
+// no-retry behaviour, so the bake/lab callers are byte-for-byte unchanged.
+const DefaultRetriesPerCall = 1
+
 // Generator is the generation sub-agent seam. Generate emits a Build spec for the
 // given prompt messages, returning schema-valid ops or model.ErrFallback on
 // exhaustion (the Model seam's own validate-and-repair runs inside it). It is an
@@ -95,6 +104,17 @@ type Request struct {
 	// is nil on every bake/headline path (so behaviour there is byte-identical).
 	Observer Observer
 
+	// RetriesPerCall is the OPTIONAL bounded retry on a single Generate call (bh-08f):
+	// when > 0, a failed/invalid/timed-out generation is re-attempted up to this many
+	// EXTRA times (total attempts = 1 + RetriesPerCall) before the loop treats the
+	// call as failed and stops. A retry re-asks with the SAME conversation (a transport
+	// blip is not refinable by a gate message), so a transient fault self-corrects
+	// inside one iteration. Zero (the default) keeps the legacy no-retry behaviour, so
+	// every bake/lab/headline caller is byte-for-byte unchanged; only the live path
+	// (which routes model failure through self-heal) sets it. A context cancellation is
+	// never retried — the loop honours ctx.Done immediately.
+	RetriesPerCall int
+
 	// EmitAccepted is an OPTIONAL per-iteration streaming hook (bh-08d, Live Build
 	// Mode): when non-nil it is called with the Generator's ops EACH TIME a refine
 	// pass produces a hard-gate-passing (renderable) spec, AS IT HAPPENS — so the
@@ -125,10 +145,26 @@ type Outcome struct {
 	Result      trace.Result
 	QualityFlag trace.QualityFlag
 	Reason      string
+
+	// Err is the last Generate transport/exhaustion error when the loop fell back
+	// because the MODEL would not produce a spec (after RetriesPerCall retries) —
+	// distinct from a fallback caused by the Evaluator's hard gate never passing
+	// (Err == nil). The live path (bh-08f) routes a model failure through self-heal
+	// (the Rover dies past its threshold), so it needs to tell the two apart; every
+	// other caller can ignore it. Always nil on an Accepted outcome.
+	Err error
 }
 
 // Accepted reports whether the loop produced a hard-gate-passing spec to cache.
 func (o Outcome) Accepted() bool { return o.Result == trace.ResultAccepted }
+
+// ModelFailed reports whether this (non-accepted) outcome fell back because the
+// Model seam failed to produce a spec — a transport error/timeout or exhausted
+// validate-and-repair (model.ErrFallback), surviving RetriesPerCall retries — as
+// opposed to the Evaluator's hard gate never passing on otherwise-valid specs. The
+// live path treats a model failure as a Rover fault (bh-08f); a gate exhaustion is
+// a quality miss, not a fault. False on an Accepted outcome.
+func (o Outcome) ModelFailed() bool { return o.Result != trace.ResultAccepted && o.Err != nil }
 
 // Run drives the bounded Generator↔Evaluator refine loop for one Task.
 //
@@ -157,11 +193,12 @@ func Run(ctx context.Context, gen Generator, eval *evaluator.Evaluator, req Requ
 
 	for range MaxIterations {
 		iter++
-		ops, err := gen.Generate(ctx, convo)
+		ops, err := generateWithRetry(ctx, gen, convo, req.RetriesPerCall)
 		if err != nil {
 			lastErr = err
 			// A generation failure is not refinable by re-asking with a gate reason;
-			// stop and keep whatever passing spec we already have (if any).
+			// stop and keep whatever passing spec we already have (if any). The bounded
+			// per-call retry above already gave a transient blip its chances (bh-08f).
 			break
 		}
 
@@ -247,7 +284,28 @@ func Run(ctx context.Context, gen Generator, eval *evaluator.Evaluator, req Requ
 		Result:      trace.ResultFallback,
 		QualityFlag: trace.QualityOK, // a fallback Task is not "low quality"; it is simply primitive
 		Reason:      fallbackReason(iterations, lastErr),
+		Err:         lastErr, // non-nil ⇒ the MODEL failed (ModelFailed); nil ⇒ gate never passed
 	}
+}
+
+// generateWithRetry runs one Generator call with a bounded retry (bh-08f): on a
+// non-context error it re-asks with the SAME conversation up to retries EXTRA times
+// (a transport blip is not refinable by a gate message), so a transient fault
+// self-corrects inside one iteration. A context cancellation is returned at once and
+// never retried. retries <= 0 is the legacy single-attempt behaviour.
+func generateWithRetry(ctx context.Context, gen Generator, convo []model.Message, retries int) ([]wire.BuildOp, error) {
+	var lastErr error
+	for attempt := 0; attempt <= retries; attempt++ {
+		if err := ctx.Err(); err != nil {
+			return nil, err // cancelled/expired: do not retry, surface immediately
+		}
+		ops, err := gen.Generate(ctx, convo)
+		if err == nil {
+			return ops, nil
+		}
+		lastErr = err
+	}
+	return nil, lastErr
 }
 
 // maxSoftPoints is the maximum summed soft score WITHOUT the vision pass

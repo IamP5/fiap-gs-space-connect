@@ -20,9 +20,18 @@
 // DIFFS each iteration against the last to produce place/move/delete patches (08a op
 // identity) so the world visibly grows and self-corrects between passes. The Rover
 // paces the emitted ops onto build.op.<task> by the Choreography cadence. On loop
-// exhaustion BuildLive returns ok=false (nothing emitted) so the Rover degrades to
-// its deterministic replay/primitive stream — a model fault never crashes the swarm.
-// Failure-heal/retry is 08f.
+// exhaustion BuildLive returns ok=false (nothing emitted).
+//
+// bh-08f routes a MODEL FAILURE through self-heal instead of around it. The refine
+// loop now RETRIES a failed/invalid/timed-out model call a bounded number of times
+// per call (loop.Request.RetriesPerCall) before treating it as failed. When the loop
+// still falls back BECAUSE the model would not produce a spec (a transport error or
+// exhausted validate-and-repair, distinct from the Evaluator's gate never passing),
+// BuildLiveResult reports ModelFailed=true so the Rover can count it toward its
+// per-Rover failure-death threshold and DIE (release its lease / stop heartbeating),
+// letting the existing expiry → re-auction path reassign the Task — no primitive
+// fallback on this path (the circuit-breaker is 08g). BuildLive keeps its ok-only
+// signature; BuildLiveResult is the additive richer surface.
 package live
 
 import (
@@ -69,6 +78,20 @@ func NewBuilderWithGenerator(gen Generator, provider, modelID string) *Builder {
 	return &Builder{gen: gen, provider: provider, modelID: modelID}
 }
 
+// Result is the richer outcome of one live build (bh-08f), surfaced by
+// BuildLiveResult. OK mirrors BuildLive's boolean (true once at least one iteration
+// was emitted). ModelFailed reports that a false OK was caused by the MODEL failing
+// to produce a spec — a transport error/timeout or exhausted validate-and-repair,
+// surviving the loop's bounded retry — as opposed to an unbuildable contract or the
+// Evaluator's gate never passing on otherwise-valid specs. The Rover counts a
+// ModelFailed result toward its per-Rover failure-death threshold (an LLM that won't
+// cooperate becomes just another dead robot); a non-model fall-back is a quality miss
+// it can simply degrade on. ModelFailed is always false when OK is true.
+type Result struct {
+	OK          bool
+	ModelFailed bool
+}
+
 // BuildLive runs the Generator↔Evaluator refine loop for one Task and STREAMS each
 // accepted/revised iteration to emit as a batch of patch ops, AS the loop produces
 // it (bh-08d). emit is called once per hard-gate-passing refine pass with that
@@ -80,29 +103,49 @@ func NewBuilderWithGenerator(gen Generator, provider, modelID string) *Builder {
 //
 // It returns ok=true once at least one iteration has been emitted, ok=false on loop
 // exhaustion (no hard-gate-passing spec), an unbuildable contract (e.g. an unknown
-// task type), or an empty accepted spec — so the Rover degrades to its deterministic
-// replay/primitive stream and the Task still completes (ADR-0005 fallback;
-// failure-heal is slice 08f). When ok=false nothing was emitted, so the Rover's
-// fallback starts from a clean op stream. It makes a LIVE model call and so must run
-// ONLY off the hot path, reached through the injected agent.LiveBuilder seam.
+// task type), or an empty accepted spec. It makes a LIVE model call and so must run
+// ONLY off the hot path, reached through the injected agent.LiveBuilder seam. It is
+// the ok-only facade over BuildLiveResult, kept stable for callers that do not need
+// the model-failure signal.
 func (b *Builder) BuildLive(ctx context.Context, task domain.TaskID, taskType domain.TaskType, emit func(iterationOps []wire.BuildOp)) bool {
+	return b.BuildLiveResult(ctx, task, taskType, emit).OK
+}
+
+// BuildLiveFault is the two-boolean facade over BuildLiveResult that the agent's
+// optional liveFaultReporter seam matches structurally (bh-08f). It returns the same
+// (OK, ModelFailed) as plain booleans so the agent can prefer it WITHOUT importing
+// this package's Result type (which would pull the Model seam onto the agent's import
+// graph and break the archtest). ok=true ⇒ at least one iteration emitted;
+// modelFailed=true ⇒ a false ok was caused by the model failing to produce a spec.
+func (b *Builder) BuildLiveFault(ctx context.Context, task domain.TaskID, taskType domain.TaskType, emit func(iterationOps []wire.BuildOp)) (ok, modelFailed bool) {
+	r := b.BuildLiveResult(ctx, task, taskType, emit)
+	return r.OK, r.ModelFailed
+}
+
+// BuildLiveResult is BuildLive plus the bh-08f model-failure signal: it runs the same
+// refine loop (now with a bounded per-call retry, loop.DefaultRetriesPerCall) and
+// returns a Result whose ModelFailed distinguishes a model fault (route through
+// self-heal: the Rover counts it toward its death threshold) from an unbuildable
+// contract or a gate exhaustion (degrade). emit/streaming behaviour is identical to
+// BuildLive's.
+func (b *Builder) BuildLiveResult(ctx context.Context, task domain.TaskID, taskType domain.TaskType, emit func(iterationOps []wire.BuildOp)) Result {
 	contract, err := bake.DemoContract(task, taskType)
 	if err != nil {
 		slog.Warn("live build: no contract for task", "task", task, "type", taskType, "error", err)
-		return false
+		return Result{} // unbuildable contract: not a model fault, just degrade
 	}
 
 	contractJSON, err := contract.JSON()
 	if err != nil {
 		slog.Warn("live build: contract marshal failed", "task", task, "error", err)
-		return false
+		return Result{}
 	}
 
 	world := bake.WorldContext{Note: "live build mode: rover builds inline in the Task envelope frame"}
 	messages, err := bake.BuildPrompt(contract, contractJSON, world)
 	if err != nil {
 		slog.Warn("live build: prompt build failed", "task", task, "error", err)
-		return false
+		return Result{}
 	}
 
 	// streamer diffs each accepted iteration against the last and turns it into a
@@ -112,13 +155,14 @@ func (b *Builder) BuildLive(ctx context.Context, task domain.TaskID, taskType do
 
 	eval := evaluator.New(evaluator.Config{})
 	out := loop.Run(ctx, b.gen, eval, loop.Request{
-		Messages:      messages,
-		Envelope:      contract.EvalEnvelope(),
-		Done:          contract.EvalDone(),
-		SubjectOrigin: world.SubjectOrigin,
-		Neighbours:    world.Neighbours,
-		TaskType:      string(contract.Type),
-		EmitAccepted:  stream.onIteration,
+		Messages:       messages,
+		Envelope:       contract.EvalEnvelope(),
+		Done:           contract.EvalDone(),
+		SubjectOrigin:  world.SubjectOrigin,
+		Neighbours:     world.Neighbours,
+		TaskType:       string(contract.Type),
+		RetriesPerCall: loop.DefaultRetriesPerCall, // bh-08f: a transient blip retries before counting as a fault
+		EmitAccepted:   stream.onIteration,
 	})
 
 	// The loop keeps the BEST passing spec, which may differ from the LAST emitted
@@ -130,11 +174,14 @@ func (b *Builder) BuildLive(ctx context.Context, task domain.TaskID, taskType do
 	}
 
 	if stream.emitted == 0 {
-		slog.Warn("live build exhausted: degrading to replay/primitive",
-			"task", task, "type", taskType, "reason", out.Reason)
-		return false
+		// Nothing emitted. A MODEL failure (out.ModelFailed) routes through self-heal —
+		// the Rover counts it toward its death threshold (bh-08f); a gate exhaustion or
+		// empty spec is a quality miss the Rover degrades on.
+		slog.Warn("live build produced no ops",
+			"task", task, "type", taskType, "reason", out.Reason, "model_failed", out.ModelFailed())
+		return Result{ModelFailed: out.ModelFailed()}
 	}
-	return true
+	return Result{OK: true}
 }
 
 // streamer turns the refine loop's per-iteration accepted specs into an append-only

@@ -216,6 +216,100 @@ func errorsIsFallbackReason(reason string) bool {
 	return strings.Contains(reason, "exhaust") || strings.Contains(reason, "fallback") || strings.Contains(reason, "error")
 }
 
+// flakyGen fails the first failFirst Generate calls with a transient error, then
+// serves `ops` on every subsequent call. It models a provider blip a bounded per-call
+// retry (bh-08f) should ride out.
+type flakyGen struct {
+	failFirst int
+	ops       []wire.BuildOp
+	calls     int
+}
+
+func (g *flakyGen) Generate(_ context.Context, _ []model.Message) ([]wire.BuildOp, error) {
+	g.calls++
+	if g.calls <= g.failFirst {
+		return nil, model.ErrFallback // transient blip
+	}
+	return g.ops, nil
+}
+
+// TestLoop_RetriesTransientThenAccepts: with RetriesPerCall set, a single transient
+// Generate failure is retried inside ONE iteration and the recovered spec is
+// accepted — a blip never burns a refine pass nor falls back (bh-08f).
+func TestLoop_RetriesTransientThenAccepts(t *testing.T) {
+	gen := &flakyGen{failFirst: 1, ops: richPlinth()}
+	r := req()
+	r.RetriesPerCall = DefaultRetriesPerCall
+	out := Run(context.Background(), gen, evaluator.New(evaluator.Config{}), r)
+	if !out.Accepted() {
+		t.Fatalf("a transient blip within the retry budget must still accept, got %q (%s)", out.Result, out.Reason)
+	}
+	if out.ModelFailed() {
+		t.Fatal("a recovered build is not a model failure")
+	}
+	// One failed attempt + one success = 2 Generate calls, all inside iteration 1.
+	if gen.calls != 2 {
+		t.Fatalf("expected 1 retry (2 Generate calls) inside one iteration, got %d", gen.calls)
+	}
+	if len(out.Iterations) != 1 {
+		t.Fatalf("a retried-then-accepted call must use exactly 1 iteration, got %d", len(out.Iterations))
+	}
+}
+
+// TestLoop_RetriesExhaustedIsModelFailure: when every attempt (initial + retries)
+// fails, the loop falls back AND flags it as a MODEL failure (Err set / ModelFailed
+// true) so the live path can route it through self-heal (bh-08f). The retry budget is
+// honoured: total Generate calls = 1 + RetriesPerCall (the loop breaks after one
+// failed call, it does not re-enter for more iterations on a transport error).
+func TestLoop_RetriesExhaustedIsModelFailure(t *testing.T) {
+	gen := &flakyGen{failFirst: 1 + DefaultRetriesPerCall + 5, ops: richPlinth()} // always fails within budget
+	r := req()
+	r.RetriesPerCall = DefaultRetriesPerCall
+	out := Run(context.Background(), gen, evaluator.New(evaluator.Config{}), r)
+	if out.Accepted() {
+		t.Fatal("an exhausted retry budget must fall back")
+	}
+	if !out.ModelFailed() {
+		t.Fatalf("a transport failure surviving every retry must report ModelFailed (Err=%v)", out.Err)
+	}
+	if gen.calls != 1+DefaultRetriesPerCall {
+		t.Fatalf("expected exactly %d Generate calls (initial + retries), got %d", 1+DefaultRetriesPerCall, gen.calls)
+	}
+}
+
+// TestLoop_GateExhaustionIsNotModelFailure: a fallback caused by the Evaluator's hard
+// gate never passing on otherwise-VALID specs is NOT a model failure — ModelFailed is
+// false, so the live path degrades rather than counting it toward the death threshold.
+func TestLoop_GateExhaustionIsNotModelFailure(t *testing.T) {
+	gen := &scriptedGen{scripts: [][]wire.BuildOp{tooFew(), tooFew(), tooFew()}}
+	r := req()
+	r.RetriesPerCall = DefaultRetriesPerCall
+	out := Run(context.Background(), gen, evaluator.New(evaluator.Config{}), r)
+	if out.Accepted() {
+		t.Fatal("expected fallback when the gate never passes")
+	}
+	if out.ModelFailed() {
+		t.Fatal("a gate exhaustion (valid specs that miss the gate) must NOT be a model failure")
+	}
+}
+
+// TestLoop_ZeroRetriesIsLegacy: RetriesPerCall=0 keeps the single-attempt behaviour,
+// so a first-call transport error falls back immediately (one Generate call) — the
+// bake/lab callers are byte-for-byte unchanged.
+func TestLoop_ZeroRetriesIsLegacy(t *testing.T) {
+	gen := &flakyGen{failFirst: 1, ops: richPlinth()}
+	out := Run(context.Background(), gen, evaluator.New(evaluator.Config{}), req()) // RetriesPerCall defaults to 0
+	if out.Accepted() {
+		t.Fatal("with zero retries a first-call error must fall back (legacy behaviour)")
+	}
+	if gen.calls != 1 {
+		t.Fatalf("zero retries must make exactly 1 Generate call, got %d", gen.calls)
+	}
+	if !out.ModelFailed() {
+		t.Fatal("a transport-error fallback is a model failure regardless of retry count")
+	}
+}
+
 // scriptedVision is a fake SilhouetteScorer (no browser, no network): it returns a
 // scripted silhouette score per call, so a test stages exactly the vision behaviour
 // it wants — a low score that should drive another refine, then a high score that
