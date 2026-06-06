@@ -258,6 +258,36 @@ func TestFold_LastWriteWins(t *testing.T) {
 	}
 }
 
+// TestFold_PlaceAfterDeleteDeduped: a place → delete → re-place of the SAME id
+// folds to exactly ONE surviving piece (the last placed value), at its original
+// slot. Without the emit dedupe the re-place would re-append the key to the order
+// list and the survivor would appear twice. This is reachable across the bh-08e
+// kill→resume handoff: a predecessor that deleted then re-placed a slot, or a
+// replacement re-placing a slot its predecessor deleted, must fold to one piece.
+func TestFold_PlaceAfterDeleteDeduped(t *testing.T) {
+	t.Parallel()
+	ops := []wire.BuildOp{
+		boxAt("a", 0, 0, 0),
+		boxAt("b", 1, 0, 0),
+		{Op: wire.BuildOpDelete, ID: "a"},
+		boxAt("a", 9, 9, 9), // re-place a after its delete
+	}
+	got, err := Fold(ops)
+	if err != nil {
+		t.Fatalf("Fold: %v", err)
+	}
+	if len(got) != 2 {
+		t.Fatalf("Fold: re-placed-after-delete must fold to 2 pieces, got %d: %+v", len(got), got)
+	}
+	// a survives once at its original slot with the re-placed value; b follows.
+	if got[0].ID != "a" || got[1].ID != "b" {
+		t.Fatalf("Fold: want [a b] in original order, got %+v", got)
+	}
+	if got[0].Pos != (domain.Vec3{X: 9, Y: 9, Z: 9}) {
+		t.Fatalf("Fold: re-placed a pos = %+v, want {9 9 9}", got[0].Pos)
+	}
+}
+
 // TestFold_UnknownTarget rejects a move or delete that targets an id no place
 // introduced (including targeting an anonymous/empty-id place).
 func TestFold_UnknownTarget(t *testing.T) {

@@ -22,14 +22,14 @@ type failingLiveBuilder struct {
 }
 
 // BuildLive satisfies the base interface: a failed build emits nothing, ok=false.
-func (f *failingLiveBuilder) BuildLive(_ context.Context, _ domain.TaskID, _ domain.TaskType, _ func([]wire.BuildOp)) bool {
+func (f *failingLiveBuilder) BuildLive(_ context.Context, _ domain.TaskID, _ domain.TaskType, _ []wire.BuildOp, _ func([]wire.BuildOp)) bool {
 	f.attempts.Add(1)
 	return false
 }
 
 // BuildLiveFault is the richer seam the rover prefers: ok=false, modelFailed=true so
 // the failure routes through self-heal (counts toward the death threshold).
-func (f *failingLiveBuilder) BuildLiveFault(_ context.Context, _ domain.TaskID, _ domain.TaskType, _ func([]wire.BuildOp)) (ok, modelFailed bool) {
+func (f *failingLiveBuilder) BuildLiveFault(_ context.Context, _ domain.TaskID, _ domain.TaskType, _ []wire.BuildOp, _ func([]wire.BuildOp)) (ok, modelFailed bool) {
 	f.attempts.Add(1)
 	return false, true
 }

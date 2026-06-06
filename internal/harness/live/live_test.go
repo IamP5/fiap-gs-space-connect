@@ -59,8 +59,15 @@ type collected struct {
 
 func collect(t *testing.T, b *Builder, task domain.TaskID, taskType domain.TaskType) collected {
 	t.Helper()
+	return collectResume(t, b, task, taskType, nil)
+}
+
+// collectResume drives BuildLive with a prior patch log (bh-08e resume seed) and
+// gathers the streamed iterations. nil priorOps is the fresh-start path.
+func collectResume(t *testing.T, b *Builder, task domain.TaskID, taskType domain.TaskType, priorOps []wire.BuildOp) collected {
+	t.Helper()
 	var c collected
-	c.ok = b.BuildLive(context.Background(), task, taskType, func(ops []wire.BuildOp) {
+	c.ok = b.BuildLive(context.Background(), task, taskType, priorOps, func(ops []wire.BuildOp) {
 		c.batches = append(c.batches, ops)
 		c.log = append(c.log, ops...)
 	})
@@ -162,7 +169,7 @@ func TestBuildLiveResult_RetriesTransientThenAccepts(t *testing.T) {
 	fake := &model.FakeModel{FailFirst: 1, Responses: []json.RawMessage{specJSON(t, richFoundation())}}
 	b := fakeBuilder(fake)
 
-	r := b.BuildLiveResult(context.Background(), "foundation-1", "foundation", func([]wire.BuildOp) {})
+	r := b.BuildLiveResult(context.Background(), "foundation-1", "foundation", nil, func([]wire.BuildOp) {})
 	if !r.OK {
 		t.Fatalf("a transient blip within the retry budget must still accept, got %+v", r)
 	}
@@ -182,7 +189,7 @@ func TestBuildLiveResult_ForcedErrorIsModelFailure(t *testing.T) {
 	fake := &model.FakeModel{Err: errors.New("simulated provider timeout")}
 	b := fakeBuilder(fake)
 
-	r := b.BuildLiveResult(context.Background(), "foundation-1", "foundation", func([]wire.BuildOp) {})
+	r := b.BuildLiveResult(context.Background(), "foundation-1", "foundation", nil, func([]wire.BuildOp) {})
 	if r.OK {
 		t.Fatalf("a forced model error must not produce ops (ok=false), got %+v", r)
 	}
@@ -201,7 +208,7 @@ func TestBuildLiveResult_UnbuildableContractIsNotModelFailure(t *testing.T) {
 	fake := &model.FakeModel{Responses: []json.RawMessage{specJSON(t, richFoundation())}}
 	b := fakeBuilder(fake)
 
-	r := b.BuildLiveResult(context.Background(), "mystery-1", "mystery", func([]wire.BuildOp) {})
+	r := b.BuildLiveResult(context.Background(), "mystery-1", "mystery", nil, func([]wire.BuildOp) {})
 	if r.OK || r.ModelFailed {
 		t.Fatalf("an unbuildable contract must degrade (ok=false, modelFailed=false), got %+v", r)
 	}
@@ -215,10 +222,77 @@ func TestBuildLiveResult_UnbuildableContractIsNotModelFailure(t *testing.T) {
 func TestBuildLiveFault_MatchesResult(t *testing.T) {
 	fake := &model.FakeModel{Err: errors.New("boom")}
 	b := fakeBuilder(fake)
-	ok, modelFailed := b.BuildLiveFault(context.Background(), "foundation-1", "foundation", func([]wire.BuildOp) {})
+	ok, modelFailed := b.BuildLiveFault(context.Background(), "foundation-1", "foundation", nil, func([]wire.BuildOp) {})
 	if ok || !modelFailed {
 		t.Fatalf("BuildLiveFault on a forced error: got (ok=%v, modelFailed=%v), want (false, true)", ok, modelFailed)
 	}
+}
+
+// TestBuildLive_ResumeContinuesFromPriorLog (bh-08e): a replacement Rover wins a
+// Task that already has a durable patch log (its predecessor was killed mid-build).
+// BuildLive FOLDS the prior log, seeds the loop from the half-built geometry, and
+// streams only the patches that GROW it onward — it NEVER re-places the durable prior
+// ops. The prior log CONCATENATED with the streamed patches folds to the complete
+// generated structure (the renderer's pure fold across the kill→resume handoff).
+func TestBuildLive_ResumeContinuesFromPriorLog(t *testing.T) {
+	full := richFoundation()
+	// The predecessor streamed the first two pieces (with the stable slot ids the
+	// streamer assigns) before it was killed; this is the durable partial log.
+	prior := []wire.BuildOp{
+		withID(full[0], "p0"),
+		withID(full[1], "p1"),
+	}
+	// The replacement's model returns the COMPLETE intended structure.
+	fake := &model.FakeModel{Responses: []json.RawMessage{specJSON(t, full)}}
+	b := fakeBuilder(fake)
+
+	c := collectResume(t, b, "foundation-1", "foundation", prior)
+	if !c.ok {
+		t.Fatalf("expected the resumed live build to grow the structure (ok=true)")
+	}
+
+	// It must NOT re-place the durable prior pieces: every streamed op targets a NEW
+	// slot (p2, p3...), never p0/p1 (those are already durable and unchanged).
+	for i, op := range c.log {
+		if op.ID == "p0" || op.ID == "p1" {
+			t.Fatalf("streamed op %d re-touched a durable prior slot %q; resume must only GROW the structure", i, op.ID)
+		}
+	}
+
+	// The prior log + the streamed patches fold to the complete generated structure.
+	combined := append(append([]wire.BuildOp(nil), prior...), c.log...)
+	folded, err := spec.Fold(combined)
+	if err != nil {
+		t.Fatalf("prior log + streamed patches must fold cleanly: %v", err)
+	}
+	if len(folded) != len(full) {
+		t.Fatalf("resumed structure must fold to %d pieces, got %d", len(full), len(folded))
+	}
+}
+
+// TestBuildLive_ResumeWithMalformedPriorStartsClean (bh-08e defensive): a prior log
+// that does not fold (a move/delete of an unknown id) must not abort the build — the
+// builder logs and starts clean, still streaming the generated structure (ok=true).
+func TestBuildLive_ResumeWithMalformedPriorStartsClean(t *testing.T) {
+	bad := []wire.BuildOp{{Op: wire.BuildOpMove, ID: "ghost"}} // move of an unknown id ⇒ fold error
+	fake := &model.FakeModel{Responses: []json.RawMessage{specJSON(t, richFoundation())}}
+	b := fakeBuilder(fake)
+
+	c := collectResume(t, b, "foundation-1", "foundation", bad)
+	if !c.ok {
+		t.Fatalf("a malformed prior log must degrade to a clean start, not abort (want ok=true)")
+	}
+	// Starting clean, the first iteration streams as place-only ops from slot p0.
+	if len(c.log) == 0 || c.log[0].ID != "p0" {
+		t.Fatalf("a clean start must stream from slot p0; got %+v", c.log)
+	}
+}
+
+// withID returns a copy of op with the given stable slot id (test helper for the
+// resume seed, which carries the predecessor's slot ids in the durable log).
+func withID(op wire.BuildOp, id string) wire.BuildOp {
+	op.ID = id
+	return op
 }
 
 // TestStreamer_DiffsIterationsIntoPatches: the per-iteration differ turns successive

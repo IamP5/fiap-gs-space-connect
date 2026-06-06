@@ -80,6 +80,17 @@ func effectiveMode(taskMode string, cfgMode Mode) Mode {
 // one tick and the rover keeps heartbeating throughout the (possibly slow) model
 // call. emit must not be called after BuildLive returns.
 //
+// priorOps is the Task's already-accumulated durable patch log at award time
+// (bh-08e, resume-live on kill): empty for a fresh Task, non-empty when this Rover
+// is the REPLACEMENT for one killed/expired mid-live-build and the Task returned to
+// UNCLAIMED with its patch log intact. On a non-empty priorOps the builder FOLDS it
+// to the current geometry and CONTINUES the harness loop from the half-built
+// structure (seeding the loop with the prior geometry so the Generator extends it),
+// emitting only the patch ops that grow it onward — never re-placing the prior ops,
+// which are already durable. The rover resumes Seq numbering AFTER the prior ops so
+// the coordinator's append-by-Seq stays monotonic and the renderer fold stays
+// correct. An empty priorOps is byte-identical to the pre-08e fresh-start path.
+//
 // It is an INTERFACE held on Config — the agent package never imports
 // internal/harness/{model,loop} itself, so the coordinator (which imports agent)
 // keeps the Model seam OUT of its hot-path import closure (ADR-0005, enforced by
@@ -87,7 +98,7 @@ func effectiveMode(taskMode string, cfgMode Mode) Mode {
 // implementation and injects it here, exactly as the gateway injects its
 // LabRunner. A nil LiveBuilder in live mode degrades to the replay stream.
 type LiveBuilder interface {
-	BuildLive(ctx context.Context, task domain.TaskID, taskType domain.TaskType, emit func(iterationOps []wire.BuildOp)) (ok bool)
+	BuildLive(ctx context.Context, task domain.TaskID, taskType domain.TaskType, priorOps []wire.BuildOp, emit func(iterationOps []wire.BuildOp)) (ok bool)
 }
 
 // liveFaultReporter is the OPTIONAL richer seam the live work phase prefers when a
@@ -103,7 +114,7 @@ type LiveBuilder interface {
 // stays byte-stable: a builder that does not implement it is never routed through the
 // death path (every failure degrades, the pre-08f behaviour).
 type liveFaultReporter interface {
-	BuildLiveFault(ctx context.Context, task domain.TaskID, taskType domain.TaskType, emit func(iterationOps []wire.BuildOp)) (ok, modelFailed bool)
+	BuildLiveFault(ctx context.Context, task domain.TaskID, taskType domain.TaskType, priorOps []wire.BuildOp, emit func(iterationOps []wire.BuildOp)) (ok, modelFailed bool)
 }
 
 // Config is the static identity and starting state of one rover. HeartbeatEvery
@@ -1009,17 +1020,27 @@ func streamLiveOps(ctx context.Context, cfg Config, conn *bus.Conn, st *rover, h
 	tick := time.NewTicker(moveStep)
 	defer tick.Stop()
 
+	// next is the monotonic Seq the rover stamps on each emitted op. On a RESUME
+	// (bh-08e) the Task already has startSeq durable ops, so the replacement continues
+	// numbering AFTER them — the coordinator appends an op only at the next expected
+	// Seq, so resuming from the prior length keeps the accumulating patch log monotonic
+	// and gap-free across the handoff. A fresh Task starts at 0 as before. THIS rover
+	// emitted a NEW op iff next advanced past startSeq, which is the ok-signal returned
+	// at each exit (so a resume that grew the structure reports emitted=true even
+	// though next started > 0, and a resume that added nothing degrades to replay).
+	startSeq := len(aw.PriorOps)
 	var (
 		pending []wire.BuildOp // ops received but not yet paced out
-		next    int            // monotonic Seq across all iterations
+		next    = startSeq
 		genDone bool
 	)
 	for {
 		// Once generation is done AND every buffered op has been streamed, the live
-		// build is complete: streamed something, or produced nothing and we decide
-		// between degrade and death based on whether the model failed (bh-08f).
+		// build is complete: streamed something (resume-aware — next advanced past the
+		// startSeq prior ops, bh-08e), or produced nothing and we decide between degrade
+		// and death based on whether the model failed (bh-08f).
 		if genDone && len(pending) == 0 {
-			return finishLiveBuild(ctx, cfg, st, down, aw, build, next)
+			return finishLiveBuild(ctx, cfg, st, down, aw, build, next, startSeq)
 		}
 		select {
 		case <-ctx.Done():
@@ -1051,8 +1072,11 @@ func streamLiveOps(ctx context.Context, cfg Config, conn *bus.Conn, st *rover, h
 // drained): it streamed something (liveEmitted/phaseDone), or produced nothing —
 // in which case a teardown (ctx/down) is an abort, otherwise dispositionNoOps decides
 // degrade vs. death from the model-failure flag (bh-08f).
-func finishLiveBuild(ctx context.Context, cfg Config, st *rover, down <-chan struct{}, aw wire.Award, build liveBuild, next int) (phaseResult, liveOutcome) {
-	if next > 0 {
+func finishLiveBuild(ctx context.Context, cfg Config, st *rover, down <-chan struct{}, aw wire.Award, build liveBuild, next, startSeq int) (phaseResult, liveOutcome) {
+	// next advanced past startSeq ⇒ THIS rover streamed at least one new op (a resume
+	// that grew the structure, or a fresh build, bh-08e). next == startSeq ⇒ nothing
+	// new emitted, so we disposition degrade vs. death below.
+	if next > startSeq {
 		return phaseDone, liveEmitted
 	}
 	// A build that finished only because the rover is shutting down or was killed
@@ -1102,8 +1126,10 @@ func dispositionNoOps(cfg Config, st *rover, aw wire.Award, modelFailed bool) li
 
 // paceOp emits the head of pending (if any) on build.op.<task> at its monotonic Seq
 // and returns the advanced buffer + next Seq, so the live pacer streams at most one
-// op per opEvery tick (Choreography cadence) and a whole iteration never lands in
-// one tick. An empty buffer is a no-op (the rover keeps heartbeating, waiting).
+// op per opEvery tick (Choreography cadence) and a whole iteration never lands in one
+// tick. An empty buffer is a no-op (the rover keeps heartbeating, waiting). On a
+// resume (bh-08e) next already starts past the prior ops, so the first emitted op
+// continues the Seq monotonically; the caller reads next > startSeq as "emitted".
 func paceOp(conn *bus.Conn, task domain.TaskID, pending []wire.BuildOp, next int) ([]wire.BuildOp, int) {
 	if len(pending) == 0 {
 		return pending, next
@@ -1151,12 +1177,18 @@ func startLiveBuilder(genCtx context.Context, cfg Config, aw wire.Award) liveBui
 	}
 	go func() {
 		defer close(batches)
+		// aw.PriorOps seeds a RESUME (bh-08e): on a re-auction of a partially-built Task
+		// the builder folds it and continues the loop, emitting only the patches that GROW
+		// the structure (never re-placing the durable prior ops); empty on a fresh Task ⇒
+		// start from scratch, exactly as pre-08e. When the builder implements the optional
+		// liveFaultReporter seam (bh-08f), the goroutine captures whether an empty
+		// fall-back was a MODEL failure so the pacer can route it through self-heal.
 		if fr, ok := cfg.LiveBuilder.(liveFaultReporter); ok {
-			_, mf := fr.BuildLiveFault(genCtx, aw.TaskID, aw.Type, emit)
+			_, mf := fr.BuildLiveFault(genCtx, aw.TaskID, aw.Type, aw.PriorOps, emit)
 			*modelFailed = mf
 			return
 		}
-		cfg.LiveBuilder.BuildLive(genCtx, aw.TaskID, aw.Type, emit)
+		cfg.LiveBuilder.BuildLive(genCtx, aw.TaskID, aw.Type, aw.PriorOps, emit)
 	}()
 	return liveBuild{batches: batches, modelFailedP: modelFailed}
 }

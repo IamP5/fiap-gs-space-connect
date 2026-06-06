@@ -109,6 +109,19 @@ type Award struct {
 	Pos      domain.Vec2    `json:"pos"`
 	LeaseTTL domain.Tick    `json:"lease_ttl"`
 	Version  domain.Lamport `json:"version"`
+
+	// PriorOps is the Task's already-accumulated, durable patch log at award time
+	// (bh-08e, resume-live on kill). It is EMPTY for a fresh Task and NON-EMPTY when
+	// a predecessor Rover streamed ops before it was killed/expired and the Task
+	// returned to UNCLAIMED with its patch log intact (the bh-02 durable partial
+	// state). The replacement Rover, on a non-empty PriorOps in live mode, FOLDS it
+	// to the current geometry and continues the live harness loop from there —
+	// extending the half-built structure rather than restarting from scratch — and
+	// resumes Seq numbering AFTER the prior ops so the stream stays monotonic and the
+	// renderer fold stays correct. Carried on the Award so the winner needs no extra
+	// round-trip to learn the partial state. Absent ⇒ a clean start, byte-identical
+	// to the pre-08e award.
+	PriorOps []BuildOp `json:"prior_ops,omitempty"`
 }
 
 // Complete reports that a rover finished its leased task.
