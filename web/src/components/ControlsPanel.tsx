@@ -11,6 +11,9 @@
 
 import { memo, useCallback, useState } from "react";
 import type { Control } from "../types/wire";
+// Type-only import — erased at build time, so this does NOT pull the lazy
+// three.js Scene3D chunk into the eager dashboard bundle.
+import type { ViewMode } from "./Scene3D";
 
 const FAILURE_MAX = 1;
 const FAILURE_STEP = 0.05;
@@ -19,8 +22,14 @@ const LATENCY_STEP = 100;
 
 export const ControlsPanel = memo(function ControlsPanel({
   send,
+  viewMode,
+  onViewModeChange,
 }: {
   send: (c: Control) => void;
+  // Camera view-mode toggle (issue #49). Threaded from App so the framing state
+  // lives beside the renderer toggle; the 3D scene reads it as a prop.
+  viewMode: ViewMode;
+  onViewModeChange: (mode: ViewMode) => void;
 }) {
   // Local UI state for the dial positions — operator inputs, not world state.
   const [failure, setFailure] = useState(0);
@@ -51,6 +60,36 @@ export const ControlsPanel = memo(function ControlsPanel({
   return (
     <aside className="controls-panel">
       <div className="controls-eyebrow">Stress controls</div>
+
+      {/* Camera view-mode toggle (issue #49): surface = rehearsed worksite
+          framing (default, ADR-0004); orbit = pulled-back vantage that takes in
+          the distant parked Moon. Both framings stay clamped. */}
+      <div className="control">
+        <div className="control-head">
+          <span className="control-label">View</span>
+        </div>
+        <div className="view-toggle" role="group" aria-label="Camera view">
+          <button
+            type="button"
+            className={`view-btn ${viewMode === "surface" ? "is-active" : ""}`}
+            aria-pressed={viewMode === "surface"}
+            onClick={() => onViewModeChange("surface")}
+          >
+            Surface
+          </button>
+          <button
+            type="button"
+            className={`view-btn ${viewMode === "orbit" ? "is-active" : ""}`}
+            aria-pressed={viewMode === "orbit"}
+            onClick={() => onViewModeChange("orbit")}
+          >
+            Orbit
+          </button>
+        </div>
+        <p className="control-caption">
+          surface worksite framing · orbit pulls back to the Moon
+        </p>
+      </div>
 
       <div className="control">
         <div className="control-head">

@@ -824,6 +824,12 @@ const HaloBloom = memo(function HaloBloom({
   );
 });
 
+// View-mode (issue #49). "surface" is the DEFAULT clamped worksite framing
+// (ADR-0004 fixed default orbit angle); "orbit" is a DISTINCT clamped preset
+// that pulls the camera back to take in a distant parked Moon. Each mode keeps
+// its own clamps/target so neither can be knocked into a useless pose.
+export type ViewMode = "surface" | "orbit";
+
 type Scene3DProps = {
   snapshot: Snapshot | null;
   selected: string | null;
@@ -836,6 +842,43 @@ type Scene3DProps = {
   ghost?: Ghost | null;
   onPlaceMove?: (origin: Vec2) => void;
   onPlaceConfirm?: () => void;
+  // View-mode framing (issue #49). Defaults to "surface" so the scene keeps its
+  // rehearsed worksite pose when the prop is omitted (tests / 2D fallback).
+  viewMode?: ViewMode;
+};
+
+// Per-mode OrbitControls clamps + target. Both presets are clamped (ADR-0004):
+// surface is the rehearsed worksite framing; orbit pulls back far enough to see
+// a distant Moon WITHOUT just widening surface-mode's reach (kept distinct). The
+// far plane (~8000) puts a parked Moon in-frustum; maxDistance here stays well
+// under that so the orbit target is always renderable.
+const VIEW_PRESETS: Record<
+  ViewMode,
+  {
+    minDistance: number;
+    maxDistance: number;
+    minPolarAngle: number;
+    maxPolarAngle: number;
+    target: [number, number, number];
+  }
+> = {
+  surface: {
+    minDistance: 10,
+    maxDistance: 34,
+    minPolarAngle: Math.PI / 6,
+    maxPolarAngle: Math.PI / 2.4,
+    target: [0, 0.6, 0],
+  },
+  orbit: {
+    // Pull back to a wide vantage that frames the worksite AND a parked Moon
+    // sitting out along -Z. Distinct clamps from surface — not a widened
+    // worksite zoom — and a target lifted/pushed toward the Moon's berth.
+    minDistance: 120,
+    maxDistance: 900,
+    minPolarAngle: Math.PI / 8,
+    maxPolarAngle: Math.PI / 2.1,
+    target: [0, 40, -200],
+  },
 };
 
 // GHOST_OK / GHOST_BAD tint the placement preview green when the spot is valid,
@@ -1073,6 +1116,56 @@ function SceneContents({
 // a new snapshot, an animating beat, or orbit interaction (OrbitControls is
 // makeDefault, so drei invalidates on change + damping). dpr is capped at 1.5
 // so a retina projector doesn't pay for 4× the pixels.
+// ViewModeSync — drives the camera + OrbitControls target to the active preset
+// whenever the view mode changes, then wakes the demand loop ONCE so the move
+// renders (and any future <Detailed> LOD re-evaluates). It lives INSIDE the
+// Canvas so it can read the default controls (OrbitControls makeDefault) and the
+// camera via useThree. It renders nothing and never animates per-frame, so the
+// demand loop returns to 0 fps once settled.
+function ViewModeSync({ viewMode }: { viewMode: ViewMode }) {
+  const camera = useThree((s) => s.camera);
+  const controls = useThree((s) => s.controls) as
+    | (THREE.EventDispatcher & {
+        target: THREE.Vector3;
+        update: () => void;
+      })
+    | null;
+  const invalidate = useThree((s) => s.invalidate);
+  // Skip the very first run: the initial mount already starts in the default
+  // (surface) framing from the Canvas `camera` prop + OrbitControls clamps, so
+  // re-positioning on mount would fight that fixed default angle (ADR-0004).
+  const mounted = useRef(false);
+
+  useEffect(() => {
+    if (!controls) return;
+    if (!mounted.current) {
+      mounted.current = true;
+      return;
+    }
+    const preset = VIEW_PRESETS[viewMode];
+    const target = new THREE.Vector3(...preset.target);
+    // Place the camera BACK along its current world view direction at a sensible
+    // distance for the mode (mid-way between its clamps), looking at the preset
+    // target. We derive the direction from the camera's own orientation rather
+    // than (camera.position - controls.target): drei applies the declarative
+    // `target` prop during commit, so by the time this passive effect runs
+    // controls.target already holds the NEW preset target — subtracting it would
+    // mix an old position with a new target and skew the framing. The camera
+    // quaternion is the unambiguous source of the current view direction.
+    const dir = camera.getWorldDirection(new THREE.Vector3()).negate();
+    if (dir.lengthSq() === 0) dir.set(0, 0.5, 1); // degenerate guard
+    dir.normalize();
+    const dist = (preset.minDistance + preset.maxDistance) / 2;
+    controls.target.copy(target);
+    camera.position.copy(target).addScaledVector(dir, dist);
+    camera.lookAt(target);
+    controls.update();
+    invalidate(); // wake the demand loop so the new framing renders
+  }, [viewMode, controls, camera, invalidate]);
+
+  return null;
+}
+
 export function Scene3D({
   snapshot,
   selected,
@@ -1081,13 +1174,18 @@ export function Scene3D({
   ghost,
   onPlaceMove,
   onPlaceConfirm,
+  viewMode = "surface",
 }: Scene3DProps) {
+  const preset = VIEW_PRESETS[viewMode];
   return (
     <Canvas
       className="world-canvas"
       frameloop="demand"
       dpr={[1, 1.5]}
-      camera={{ position: [0, 14, 18], fov: 42, near: 0.1, far: 200 }}
+      // far raised to ~8000 (issue #49) so a distant parked Moon is in-frustum;
+      // near kept at 0.1. Shipping WITHOUT logarithmicDepthBuffer — the low-poly
+      // worksite shows no z-fighting at this range.
+      camera={{ position: [0, 14, 18], fov: 42, near: 0.1, far: 8000 }}
       // While placing, a click on empty space confirms the drop; otherwise it
       // deselects a rover (the existing behaviour).
       onPointerMissed={() => (placing ? onPlaceConfirm?.() : onPick(null))}
@@ -1109,19 +1207,23 @@ export function Scene3D({
         onPlaceMove={onPlaceMove}
         onPlaceConfirm={onPlaceConfirm}
       />
+      <ViewModeSync viewMode={viewMode} />
       <OrbitControls
         makeDefault
         enablePan={false}
         // Disable orbit drag while placing so a placement-drag doesn't spin the
         // camera; the placement plane owns the cursor then.
         enableRotate={!placing}
-        minDistance={10}
-        maxDistance={34}
+        // Distance + polar clamps come from the active view preset (issue #49);
+        // surface = rehearsed worksite framing, orbit = distinct far-Moon
+        // vantage. Both stay clamped (ADR-0004) — never a free-fly camera.
+        minDistance={preset.minDistance}
+        maxDistance={preset.maxDistance}
         // Clamp the vertical angle so the camera can't dip under the ground or
         // look straight down — keeps the diorama readable from any orbit.
-        minPolarAngle={Math.PI / 6}
-        maxPolarAngle={Math.PI / 2.4}
-        target={[0, 0.6, 0]}
+        minPolarAngle={preset.minPolarAngle}
+        maxPolarAngle={preset.maxPolarAngle}
+        target={preset.target}
         enableDamping
         dampingFactor={0.08}
       />

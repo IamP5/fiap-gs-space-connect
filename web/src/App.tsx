@@ -26,6 +26,9 @@ import { EncorePanel } from "./components/EncorePanel";
 import { LabPanel } from "./components/LabPanel";
 import { BlueprintPalette } from "./components/BlueprintPalette";
 import { WorldCanvas } from "./components/WorldCanvas";
+// Type-only — erased at build time, so referencing the camera view-mode type
+// here does NOT pull the lazy three.js Scene3D chunk into the eager shell bundle.
+import type { ViewMode } from "./components/Scene3D";
 import { blueprintById } from "./lib/blueprintCatalog";
 import {
   ghostTasks,
@@ -61,6 +64,11 @@ export default function App() {
   // The renderer toggle. Defaults to the 3D diorama (the pitch); the 2D canvas
   // stays a one-click fallback if 3D ever misbehaves on the projector.
   const [renderer, setRenderer] = useState<Renderer>("3d");
+
+  // Camera view-mode (issue #49). Defaults to "surface" — the rehearsed fixed
+  // worksite framing (ADR-0004). The operator can flip to "orbit" to pull the
+  // camera back and take in the distant parked Moon; both framings stay clamped.
+  const [viewMode, setViewMode] = useState<ViewMode>("surface");
 
   // The currently-selected rover, resolved against the LATEST snapshot. If it
   // has vanished from the snapshot, this is undefined → treated as deselected.
@@ -268,7 +276,11 @@ export default function App() {
 
         {/* Stress dials, bottom-left. The latency slider is wired here so it can
             be promoted into the demo arc with a one-line change (issue 09). */}
-        <ControlsPanel send={send} />
+        <ControlsPanel
+          send={send}
+          viewMode={viewMode}
+          onViewModeChange={setViewMode}
+        />
 
         {/* The DELAYED Earth view, bottom-right — it lags the live TaskLedger
             (top-left) as latency climbs, proving "Earth never knew" (issue 09). */}
@@ -311,6 +323,7 @@ export default function App() {
               ghost={ghost}
               onPlaceMove={movePlacement}
               onPlaceConfirm={confirmPlacement}
+              viewMode={viewMode}
             />
           </Suspense>
         ) : (
