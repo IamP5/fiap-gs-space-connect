@@ -2,6 +2,7 @@ package model
 
 import (
 	"context"
+	"encoding/base64"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -51,6 +52,33 @@ func NewOpenAI(cfg Config) (Model, error) {
 	}, nil
 }
 
+// userMessage builds a "user" turn from a Message, attaching any inline PNG
+// screenshots as base64 data-URI image parts (the vision input, bh-06). With no
+// images it is a plain text turn — byte-identical to openai.UserMessage(text) —
+// so the generation path is unchanged; only the bake-time vision pass sets
+// Images. Each image is sent at "high" detail so the vision model can read fine
+// structural geometry in the screenshot.
+func userMessage(m Message) openai.ChatCompletionMessageParamUnion {
+	if len(m.Images) == 0 {
+		return openai.UserMessage(m.Content)
+	}
+	parts := make([]openai.ChatCompletionContentPartUnionParam, 0, len(m.Images)+1)
+	if m.Content != "" {
+		parts = append(parts, openai.TextContentPart(m.Content))
+	}
+	for _, img := range m.Images {
+		if len(img) == 0 {
+			continue
+		}
+		dataURI := "data:image/png;base64," + base64.StdEncoding.EncodeToString(img)
+		parts = append(parts, openai.ImageContentPart(openai.ChatCompletionContentPartImageImageURLParam{
+			URL:    dataURI,
+			Detail: "high",
+		}))
+	}
+	return openai.UserMessage(parts)
+}
+
 // Generate sends req to the provider with strict response_format json_schema and
 // returns the raw structured-output JSON. Strict mode binds the output to the
 // caller's schema so the validate-and-repair pass in GenerateSpec only has to
@@ -64,7 +92,7 @@ func (o *openAIModel) Generate(ctx context.Context, req Request) (json.RawMessag
 		case "assistant":
 			msgs = append(msgs, openai.AssistantMessage(m.Content))
 		default: // "user" and any unknown role default to a user turn
-			msgs = append(msgs, openai.UserMessage(m.Content))
+			msgs = append(msgs, userMessage(m))
 		}
 	}
 

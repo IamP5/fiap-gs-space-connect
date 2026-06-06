@@ -1,17 +1,21 @@
 // Command bake is the SwarmBuild offline generation step (TECHSPEC §3/§4,
-// ADR-0007): it generates ONE demo Task's Build spec via a GPT-class model and
-// writes it to the committed cache, so the headline replays it deterministically
-// with no live model call. It is the ONLY binary that reaches the Model seam.
+// ADR-0007/0008): it runs the Generator↔Evaluator refine loop for demo Task(s) via
+// a GPT-class model and writes the approved Build spec(s) + per-Task trace sidecars
+// to the committed cache, so the headline replays them deterministically with no
+// live model call. It is the ONLY binary that reaches the Model seam.
 //
 // Usage:
 //
 //	set -a; . ./.env; set +a            # load OPENAI_API_KEY (never commit .env)
-//	go run ./cmd/bake -task foundation-1 -type foundation
+//	go run ./cmd/bake -task foundation-1 -type foundation   # bake ONE task
+//	go run ./cmd/bake -all                                   # bake the WHOLE dome
 //
-// Flags select the demo Task, provider (base_url swap) and model id. The API key
-// is read from the environment ONLY (OPENAI_API_KEY) and never logged or shipped
-// anywhere near the browser. On model exhaustion bake exits non-zero and writes
-// nothing — the demo Task then falls back to the primitive geometry.
+// -all bakes every demo Blueprint Task in dependency order (foundations → walls →
+// dome-cap), writing a spec + trace per Task and printing the operator review
+// (which Tasks fell back ∪ which were cached quality_flag:low). The API key is read
+// from the environment ONLY and never logged or shipped near the browser. On model
+// exhaustion a Task falls back to the primitive (the dome still completes); a hard
+// generation/IO error exits non-zero.
 package main
 
 import (
@@ -25,9 +29,12 @@ import (
 	"path/filepath"
 	"strings"
 	"swarmbuild/internal/core/domain"
+	"swarmbuild/internal/demo"
 	"swarmbuild/internal/harness/bake"
 	"swarmbuild/internal/harness/cache"
+	"swarmbuild/internal/harness/loop"
 	"swarmbuild/internal/harness/model"
+	"swarmbuild/internal/harness/vision"
 	"time"
 )
 
@@ -48,7 +55,11 @@ func run() error {
 		modelID  = flag.String("model", "gpt-4o-2024-08-06", "model id (GPT-class)")
 		outDir   = flag.String("out", "", "cache output dir (empty ⇒ committed internal/harness/cache/specs)")
 		envFile  = flag.String("env", ".env", "optional .env file to load for the key (never committed)")
-		timeout  = flag.Duration("timeout", 60*time.Second, "overall generation timeout")
+		timeout  = flag.Duration("timeout", 60*time.Second, "overall generation timeout (per bake run)")
+		all      = flag.Bool("all", false, "bake EVERY demo Blueprint Task in dependency order (the whole dome) + emit the operator review")
+		visionOn = flag.Bool("vision", false, "run the bake-time VISION PASS: render each spec on the real Scene3D headless, screenshot it, and score silhouette (needs a built web bundle + headless Chrome; bh-06)")
+		webDist  = flag.String("web-dist", "", "built web bundle dir for the vision render harness (empty ⇒ <repo>/web/dist); only used with -vision")
+		chrome   = flag.String("chrome", "", "headless Chrome binary path for the vision pass (empty ⇒ $CHROME_PATH then the macOS default)")
 	)
 	flag.Parse()
 
@@ -73,17 +84,29 @@ func run() error {
 		return err
 	}
 
+	root, rErr := repoRoot()
+	if rErr != nil {
+		return rErr
+	}
 	dir := *outDir
 	if dir == "" {
-		root, rErr := repoRoot()
-		if rErr != nil {
-			return rErr
-		}
 		dir = cache.DefaultStoreDir(root)
 	}
 	store, err := cache.NewStore(dir)
 	if err != nil {
 		return err
+	}
+
+	// Optional bake-time vision pass (bh-06): render each spec on the real Scene3D
+	// headless and score silhouette. Built only when -vision is set; nil ⇒
+	// analytic-only bake (the headline never reaches here either way).
+	visionScorer, vErr := buildVisionScorer(*visionOn, m, root, *webDist, *chrome)
+	if vErr != nil {
+		return vErr
+	}
+
+	if *all {
+		return bakeAll(m, store, dir, *provider, *modelID, baseURLResolved, *timeout, visionScorer)
 	}
 
 	contract, err := bake.DemoContract(domain.TaskID(*taskID), domain.TaskType(*taskType))
@@ -95,8 +118,16 @@ func run() error {
 	ctx, cancel := context.WithTimeout(context.Background(), *timeout)
 	defer cancel()
 
-	slog.Info("baking", "provider", *provider, "model", *modelID, "task", *taskID, "type", *taskType, "base_url", baseURLResolved)
-	res, err := bake.Bake(ctx, m, store, contract, world, *provider, *modelID)
+	// The single-task vision scorer carries this task's own contract description so
+	// the silhouette is judged against the right intent.
+	if ls, ok := visionScorer.(vision.LoopScorer); ok {
+		ls.Description = contract.Done.Description
+		ls.Style = contract.Style
+		visionScorer = ls
+	}
+
+	slog.Info("baking", "provider", *provider, "model", *modelID, "task", *taskID, "type", *taskType, "base_url", baseURLResolved, "vision", visionScorer != nil)
+	res, err := bake.Bake(ctx, m, store, contract, world, *provider, *modelID, visionScorer)
 	if err != nil {
 		if errors.Is(err, model.ErrFallback) {
 			return fmt.Errorf("generation exhausted (validate-and-repair gave up): %w — demo will use the primitive fallback; nothing cached", err)
@@ -104,9 +135,112 @@ func run() error {
 		return err
 	}
 
-	slog.Info("baked", "ops", res.Ops, "key", res.Key.Filename(), "path", res.Path)
-	fmt.Printf("OK baked %s/%s: %d ops → %s\n", res.Key.BlueprintID, res.Key.TaskID, res.Ops, res.Path)
+	slog.Info("baked", "ops", res.Ops, "key", res.Key.Filename(), "path", res.Path, "quality", res.QualityFlag)
+	fmt.Printf("OK baked %s/%s: %d ops (%s) → %s\n", res.Key.BlueprintID, res.Key.TaskID, res.Ops, res.QualityFlag, res.Path)
 	return nil
+}
+
+// bakeAll bakes the WHOLE demo dome in dependency order via bake.BakeAll, prints the
+// operator review, and writes it beside the cache as REVIEW.md. A per-Task fallback
+// (model exhaustion) does NOT abort — that Task uses the primitive and is listed in
+// the review; only a hard build/IO error fails the run.
+func bakeAll(m model.Model, store *cache.Store, dir, provider, modelID, baseURL string, timeout time.Duration, visionScorer loop.SilhouetteScorer) error {
+	tasks := demoPlanTasks()
+
+	// The vision pass renders the real Scene3D in headless Chrome per task, which
+	// is far slower than a generation call, so give the run extra headroom when it
+	// is on.
+	per := timeout
+	if visionScorer != nil {
+		per += 60 * time.Second
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), per*time.Duration(len(tasks)+1))
+	defer cancel()
+
+	slog.Info("baking ALL demo tasks", "provider", provider, "model", modelID, "tasks", len(tasks), "base_url", baseURL, "vision", visionScorer != nil)
+	results, review, err := bake.All(ctx, m, store, tasks, bake.DemoContract, provider, modelID, visionScorer)
+	if err != nil {
+		return fmt.Errorf("bake-all: %w", err)
+	}
+
+	for _, r := range results {
+		switch {
+		case r.FellBack():
+			slog.Warn("task fell back", "task", r.TaskID, "reason", r.Result.Reason)
+		case r.LowQuality():
+			slog.Warn("task cached low-quality", "task", r.TaskID, "reason", r.Result.Reason)
+		default:
+			slog.Info("task baked", "task", r.TaskID, "ops", r.Result.Ops, "quality", r.Result.QualityFlag)
+		}
+	}
+
+	summary := review.Summary()
+	fmt.Print("\n" + summary)
+
+	reviewPath := filepath.Join(dir, "REVIEW.md")
+	if wErr := os.WriteFile(reviewPath, []byte("```\n"+summary+"```\n"), 0o600); wErr != nil {
+		return fmt.Errorf("write operator review %q: %w", reviewPath, wErr)
+	}
+	slog.Info("operator review written", "path", reviewPath, "cached", review.Cached, "fellback", len(review.FellBack), "lowquality", len(review.LowQual))
+	return nil
+}
+
+// demoPlanTasks adapts the demo dome Blueprint (internal/demo) into the bake
+// package's self-contained PlanTask shape (id/type/deps/pos), so bake-all generates
+// in the real blueprint's dependency order with the real worksite positions.
+func demoPlanTasks() []bake.PlanTask {
+	bp := demo.DomeBlueprint()
+	tasks := make([]bake.PlanTask, 0, len(bp))
+	for _, bt := range bp {
+		tasks = append(tasks, bake.PlanTask{
+			ID:   bt.Task.ID,
+			Type: bt.Task.Type,
+			Deps: bt.Task.Deps,
+			Pos:  bt.Pos,
+		})
+	}
+	return tasks
+}
+
+// buildVisionScorer constructs the bake-time vision scorer when -vision is set,
+// else returns nil (analytic-only bake). It wires the SAME model adapter used for
+// generation (a vision-capable model id like gpt-4o is required) and the render
+// harness config (the built web bundle + a headless Chrome binary). It fails
+// LOUDLY when -vision is on but the prerequisites are missing — the live vision
+// step must never silently degrade to no-op.
+func buildVisionScorer(on bool, m model.Model, root, webDist, chrome string) (loop.SilhouetteScorer, error) {
+	if !on {
+		return nil, nil //nolint:nilnil // nil scorer ⇒ analytic-only bake, the documented default
+	}
+	dist := webDist
+	if dist == "" {
+		dist = filepath.Join(root, "web", "dist")
+	}
+	if _, err := os.Stat(filepath.Join(dist, "bake-harness.html")); err != nil {
+		return nil, fmt.Errorf("-vision needs the built web bundle: %q not found (run `cd web && npm run build`, or pass -web-dist): %w",
+			filepath.Join(dist, "bake-harness.html"), err)
+	}
+	rcfg := vision.RenderConfig{WebDistDir: dist, ChromePath: chrome}
+	if !vision.IsChromeAvailable(rcfg) {
+		return nil, fmt.Errorf("-vision needs a headless Chrome binary (looked for %q); pass -chrome or set $CHROME_PATH",
+			firstNonEmpty(chrome, os.Getenv("CHROME_PATH"), vision.DefaultChromePath))
+	}
+	slog.Info("vision pass ENABLED", "web_dist", dist, "chrome", firstNonEmpty(chrome, os.Getenv("CHROME_PATH"), vision.DefaultChromePath))
+	return vision.LoopScorer{
+		Model:  vision.NewScorer(m),
+		Render: rcfg,
+	}, nil
+}
+
+// firstNonEmpty returns the first non-empty string, for logging the resolved
+// Chrome path.
+func firstNonEmpty(vals ...string) string {
+	for _, v := range vals {
+		if v != "" {
+			return v
+		}
+	}
+	return ""
 }
 
 // resolveBaseURL maps a provider label to its OpenAI-compatible base_url, unless

@@ -27,43 +27,83 @@ const box: BuildOp = {
 };
 
 describe("opToMesh", () => {
-  it("maps a box op to a box mesh descriptor with its transform + material", () => {
+  it("maps a box op to a primitive descriptor with its transform + material", () => {
     const m = opToMesh(box);
-    expect(m).not.toBeNull();
-    expect(m!.geometry).toBe("box");
-    expect(m!.position).toEqual([1, 2, 3]);
-    expect(m!.rotation).toEqual([0, Math.PI, 0]);
-    expect(m!.scale).toEqual([2, 0.5, 2]);
-    expect(m!.color).toBe("#cfcfd6");
-    expect(m!.roughness).toBe(0.8);
-    expect(m!.metalness).toBe(0.1);
+    if (!m || m.kind !== "primitive") throw new Error("expected a primitive descriptor");
+    expect(m.geometry).toBe("box");
+    expect(m.position).toEqual([1, 2, 3]);
+    expect(m.rotation).toEqual([0, Math.PI, 0]);
+    expect(m.scale).toEqual([2, 0.5, 2]);
+    expect(m.color).toBe("#cfcfd6");
+    expect(m.roughness).toBe(0.8);
+    expect(m.metalness).toBe(0.1);
+    expect(m.map).toBeUndefined(); // no texture unless material.map is set
   });
 
   it("maps cylinder and sphere shapes to their geometries", () => {
-    expect(opToMesh({ ...box, shape: "cylinder" })!.geometry).toBe("cylinder");
-    expect(opToMesh({ ...box, shape: "sphere" })!.geometry).toBe("sphere");
+    const c = opToMesh({ ...box, shape: "cylinder" });
+    const s = opToMesh({ ...box, shape: "sphere" });
+    if (!c || c.kind !== "primitive") throw new Error("expected primitive");
+    if (!s || s.kind !== "primitive") throw new Error("expected primitive");
+    expect(c.geometry).toBe("cylinder");
+    expect(s.geometry).toBe("sphere");
   });
 
   it("defaults the optional PBR fields when omitted", () => {
     const m = opToMesh({ ...box, material: { color: "#fff" } });
-    expect(m!.roughness).toBe(DEFAULT_ROUGHNESS);
-    expect(m!.metalness).toBe(DEFAULT_METALNESS);
+    if (!m || m.kind !== "primitive") throw new Error("expected primitive");
+    expect(m.roughness).toBe(DEFAULT_ROUGHNESS);
+    expect(m.metalness).toBe(DEFAULT_METALNESS);
   });
 
-  it("returns null for the reserved future 'model' shape (no-op today)", () => {
-    expect(opToMesh({ ...box, shape: "model", model_ref: "x.glb" })).toBeNull();
+  // bh-07b: material.map carries a texture onto the primitive descriptor.
+  it("carries a texture map onto the primitive descriptor when present", () => {
+    const m = opToMesh({
+      ...box,
+      material: { color: "#cfcfd6", map: "/assets/textures/rock.jpg" },
+    });
+    if (!m || m.kind !== "primitive") throw new Error("expected primitive");
+    expect(m.map).toBe("/assets/textures/rock.jpg");
+  });
+
+  // bh-07b: a "model" op with a model_ref produces a glTF descriptor that names
+  // the asset to load AND a box primitive fallback (so a failed load still draws).
+  it("maps a 'model' op + model_ref to a glTF descriptor with a primitive fallback", () => {
+    const m = opToMesh({ ...box, shape: "model", model_ref: "/assets/models/h.glb" });
+    if (!m || m.kind !== "model") throw new Error("expected a model descriptor");
+    expect(m.modelRef).toBe("/assets/models/h.glb");
+    expect(m.position).toEqual([1, 2, 3]);
+    expect(m.scale).toEqual([2, 0.5, 2]);
+    // The fallback is a same-transform box primitive (never a model).
+    expect(m.fallback.kind).toBe("primitive");
+    expect(m.fallback.geometry).toBe("box");
+    expect(m.fallback.position).toEqual([1, 2, 3]);
+  });
+
+  it("returns null for a 'model' op WITHOUT a model_ref (nothing to load)", () => {
+    expect(opToMesh({ ...box, shape: "model" })).toBeNull();
   });
 });
 
 describe("interpretBuildSpec", () => {
-  it("preserves op order and drops non-renderable ops", () => {
+  it("preserves op order across primitives and models", () => {
     const spec: BuildOp[] = [
       { ...box, shape: "box" },
-      { ...box, shape: "model", model_ref: "x.glb" }, // dropped
+      { ...box, shape: "model", model_ref: "/x.glb" },
       { ...box, shape: "sphere" },
     ];
     const meshes = interpretBuildSpec({ build_spec: spec });
-    expect(meshes.map((m) => m.geometry)).toEqual(["box", "sphere"]);
+    expect(meshes.map((m) => m.kind)).toEqual(["primitive", "model", "primitive"]);
+  });
+
+  it("drops a non-renderable op (a 'model' with no model_ref) but keeps the rest", () => {
+    const spec: BuildOp[] = [
+      { ...box, shape: "box" },
+      { ...box, shape: "model" }, // dropped (no model_ref)
+      { ...box, shape: "sphere" },
+    ];
+    const meshes = interpretBuildSpec({ build_spec: spec });
+    expect(meshes.map((m) => m.kind)).toEqual(["primitive", "primitive"]);
   });
 
   it("yields an empty list when build_spec is absent (fallback signal)", () => {
@@ -74,14 +114,19 @@ describe("interpretBuildSpec", () => {
 });
 
 describe("hasBuildSpec", () => {
-  it("is true only when the Task has renderable Build-spec geometry", () => {
+  it("is true when the Task has renderable Build-spec geometry", () => {
     expect(hasBuildSpec({ build_spec: [box] })).toBe(true);
+    // bh-07b: a "model" op WITH a model_ref now renders (the slot is implemented).
+    expect(hasBuildSpec({ build_spec: [{ ...box, shape: "model", model_ref: "/x.glb" }] })).toBe(
+      true,
+    );
+  });
+
+  it("is false with no spec, or a spec of only unrenderable ops (fallback)", () => {
     expect(hasBuildSpec({})).toBe(false);
     expect(hasBuildSpec({ build_spec: [] })).toBe(false);
-    // A spec of ONLY future "model" ops is not renderable today ⇒ fall back.
-    expect(hasBuildSpec({ build_spec: [{ ...box, shape: "model", model_ref: "x.glb" }] })).toBe(
-      false,
-    );
+    // A "model" op with NO model_ref has nothing to load ⇒ not renderable ⇒ fall back.
+    expect(hasBuildSpec({ build_spec: [{ ...box, shape: "model" }] })).toBe(false);
   });
 });
 

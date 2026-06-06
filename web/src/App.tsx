@@ -15,6 +15,7 @@ import { ControlsPanel } from "./components/ControlsPanel";
 import { EarthPanel } from "./components/EarthPanel";
 import { PartitionPanel } from "./components/PartitionPanel";
 import { EncorePanel } from "./components/EncorePanel";
+import { LabPanel } from "./components/LabPanel";
 import { WorldCanvas } from "./components/WorldCanvas";
 import "./styles/dashboard.css";
 
@@ -160,6 +161,10 @@ export default function App() {
             narrative; the EncorePanel triggers the real container kill (issue 11).
             Both stay OUT of the 10 Hz snapshot re-render path (memoized). */}
         <div className="encore-column">
+          {/* The in-app LIVE lab (bh-07a): pick a Task, watch the real
+              Generator↔Evaluator loop think. Off the headline — its stream is a
+              separate channel that never touches the snapshot re-render. */}
+          <LabPanel />
           <PartitionPanel />
           <EncorePanel send={send} />
         </div>

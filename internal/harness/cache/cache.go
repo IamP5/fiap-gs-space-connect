@@ -62,7 +62,17 @@ type Entry struct {
 	Ops          []wire.BuildOp  `json:"ops"`
 	Repaired     bool            `json:"repaired"` // true if the spec needed the repair re-ask
 	Contract     json.RawMessage `json:"contract,omitempty"`
+	// QualityFlag is the advisory soft-quality marker (ADR-0008): "ok" when the
+	// spec cleared the Evaluator's soft threshold, "low" when it passed the hard
+	// gate but scored below it (cached, NOT withheld — the operator review lists
+	// it). Empty on legacy entries is treated as "ok". It never affects replay:
+	// the headline replays a flagged spec exactly like any other.
+	QualityFlag string `json:"quality_flag,omitempty"`
 }
+
+// IsLowQuality reports whether this entry was flagged quality_flag:low (passed the
+// hard gate but scored below the soft threshold). An empty flag is treated as ok.
+func (e Entry) IsLowQuality() bool { return e.QualityFlag == "low" }
 
 // filenameUnsafe matches every character we strip from key fields when forming a
 // filename, so a model id like "gpt-4o-2024-08-06" or a slashed provider path

@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"io/fs"
 	"path"
+	"strings"
 	"sync"
 )
 
@@ -56,6 +57,13 @@ func readEmbeddedFiles() (map[string][]byte, error) {
 	files := make(map[string][]byte)
 	for _, e := range entries {
 		if e.IsDir() || path.Ext(e.Name()) != ".json" {
+			continue
+		}
+		// Trace sidecars (<spec-key>.trace.json) share the .json extension but are
+		// lab-loop audit data, NOT replayable cache entries (ADR-0008): they have no
+		// top-level ops and would fail entry validation. Skip them so the headline
+		// replay index is built only from the spec files.
+		if strings.HasSuffix(e.Name(), ".trace.json") {
 			continue
 		}
 		b, rErr := fs.ReadFile(bakedFS, path.Join(specsDir, e.Name()))

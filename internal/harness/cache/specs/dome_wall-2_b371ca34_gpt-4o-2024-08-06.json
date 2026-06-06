@@ -1,11 +1,59 @@
 {
   "blueprint_id": "dome",
-  "task_id": "foundation-1",
-  "task_type": "foundation",
-  "contract_hash": "3ae7e393",
+  "task_id": "wall-2",
+  "task_type": "wall",
+  "contract_hash": "b371ca34",
   "model": "gpt-4o-2024-08-06",
   "provider": "openai",
   "ops": [
+    {
+      "op": "place",
+      "shape": "box",
+      "pos": {
+        "X": 0,
+        "Y": -1.6,
+        "Z": 0
+      },
+      "rot": {
+        "X": 0,
+        "Y": 0,
+        "Z": 0
+      },
+      "scale": {
+        "X": 2.6,
+        "Y": 0.4,
+        "Z": 1.8
+      },
+      "material": {
+        "color": "#d3d3d3",
+        "roughness": 0.8,
+        "metalness": 0.2
+      }
+    },
+    {
+      "op": "place",
+      "shape": "box",
+      "pos": {
+        "X": 0,
+        "Y": -1.2,
+        "Z": 0
+      },
+      "rot": {
+        "X": 0,
+        "Y": 0,
+        "Z": 0
+      },
+      "scale": {
+        "X": 2.4,
+        "Y": 0.4,
+        "Z": 1.5
+      },
+      "material": {
+        "color": "#d3d3d3",
+        "roughness": 0.8,
+        "metalness": 0.2
+      }
+    },
     {
       "op": "place",
       "shape": "box",
@@ -20,47 +68,23 @@
         "Z": 0
       },
       "scale": {
-        "X": 2,
-        "Y": 0.2,
-        "Z": 2
+        "X": 2.1,
+        "Y": 0.4,
+        "Z": 1.2
       },
       "material": {
-        "color": "#D3D3D3",
-        "roughness": 0.8,
-        "metalness": 0
-      }
-    },
-    {
-      "op": "place",
-      "shape": "cylinder",
-      "pos": {
-        "X": -0.9,
-        "Y": 0.1,
-        "Z": -0.9
-      },
-      "rot": {
-        "X": 0,
-        "Y": 0,
-        "Z": 0
-      },
-      "scale": {
-        "X": 0.2,
-        "Y": 0.9,
-        "Z": 0.2
-      },
-      "material": {
-        "color": "#C0C0C0",
-        "roughness": 0.5,
+        "color": "#b0c4de",
+        "roughness": 0.7,
         "metalness": 0.3
       }
     },
     {
       "op": "place",
-      "shape": "cylinder",
+      "shape": "box",
       "pos": {
-        "X": 0.9,
-        "Y": 0.1,
-        "Z": -0.9
+        "X": 0,
+        "Y": -0.4,
+        "Z": 0
       },
       "rot": {
         "X": 0,
@@ -68,61 +92,13 @@
         "Z": 0
       },
       "scale": {
-        "X": 0.2,
-        "Y": 0.9,
-        "Z": 0.2
+        "X": 1.8,
+        "Y": 0.4,
+        "Z": 1
       },
       "material": {
-        "color": "#C0C0C0",
-        "roughness": 0.5,
-        "metalness": 0.3
-      }
-    },
-    {
-      "op": "place",
-      "shape": "cylinder",
-      "pos": {
-        "X": -0.9,
-        "Y": 0.1,
-        "Z": 0.9
-      },
-      "rot": {
-        "X": 0,
-        "Y": 0,
-        "Z": 0
-      },
-      "scale": {
-        "X": 0.2,
-        "Y": 0.9,
-        "Z": 0.2
-      },
-      "material": {
-        "color": "#C0C0C0",
-        "roughness": 0.5,
-        "metalness": 0.3
-      }
-    },
-    {
-      "op": "place",
-      "shape": "cylinder",
-      "pos": {
-        "X": 0.9,
-        "Y": 0.1,
-        "Z": 0.9
-      },
-      "rot": {
-        "X": 0,
-        "Y": 0,
-        "Z": 0
-      },
-      "scale": {
-        "X": 0.2,
-        "Y": 0.9,
-        "Z": 0.2
-      },
-      "material": {
-        "color": "#C0C0C0",
-        "roughness": 0.5,
+        "color": "#b0c4de",
+        "roughness": 0.7,
         "metalness": 0.3
       }
     },
@@ -131,7 +107,7 @@
       "shape": "sphere",
       "pos": {
         "X": 0,
-        "Y": 0.9,
+        "Y": 0,
         "Z": 0
       },
       "rot": {
@@ -140,22 +116,22 @@
         "Z": 0
       },
       "scale": {
-        "X": 0.5,
-        "Y": 0.2,
-        "Z": 0.5
+        "X": 1.5,
+        "Y": 0.3,
+        "Z": 0.8
       },
       "material": {
-        "color": "#808080",
+        "color": "#b0c4de",
         "roughness": 0.6,
-        "metalness": 0.2
+        "metalness": 0.5
       }
     }
   ],
   "repaired": false,
   "contract": {
     "blueprint_id": "dome",
-    "task_id": "foundation-1",
-    "type": "foundation",
+    "task_id": "wall-2",
+    "type": "wall",
     "envelope": {
       "center": {
         "X": 0,
@@ -163,14 +139,17 @@
         "Z": 0
       },
       "size": {
-        "X": 2,
-        "Y": 1.6,
+        "X": 3,
+        "Y": 3.6,
         "Z": 2
       }
     },
     "done": {
-      "description": "a stable plinth: a slab base with supporting pillars and a small finial, clearly richer than a single block"
+      "description": "several stacked courses rising to a coping stone, forming one segment of the dome wall",
+      "min_ops": 3,
+      "min_coverage": 0.02
     },
     "style": "moon-base habitat, pale prefab panels, brushed metal accents"
-  }
+  },
+  "quality_flag": "ok"
 }
