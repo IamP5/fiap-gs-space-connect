@@ -38,12 +38,21 @@ type Model interface {
 	Generate(ctx context.Context, req Request) (json.RawMessage, error)
 }
 
-// Message is one chat message in a Request (role + text content). Roles follow
-// the OpenAI chat convention ("system" | "user" | "assistant"); the repair pass
-// appends a "user" message carrying the validation error.
+// Message is one chat message in a Request (role + text content, plus optional
+// inline images). Roles follow the OpenAI chat convention
+// ("system" | "user" | "assistant"); the repair pass appends a "user" message
+// carrying the validation error.
+//
+// Images carries zero or more raw PNG screenshots attached to a "user" message —
+// the seam's vision input (bh-06). An adapter that supports vision encodes each as
+// a base64 data-URI image part alongside the text; the FakeModel ignores them
+// (the unit suite proves orchestration, not provider wire behaviour). Images are
+// LAB-ONLY (the bake-time vision pass); the generation path never sets them, so
+// the headline replay carries no image bytes.
 type Message struct {
 	Role    string
 	Content string
+	Images  [][]byte // optional inline PNG screenshots (vision input; user role only)
 }
 
 // Request is one structured-generation call. Messages is the conversation so far;

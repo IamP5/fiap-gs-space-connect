@@ -216,6 +216,131 @@ func errorsIsFallbackReason(reason string) bool {
 	return strings.Contains(reason, "exhaust") || strings.Contains(reason, "fallback") || strings.Contains(reason, "error")
 }
 
+// scriptedVision is a fake SilhouetteScorer (no browser, no network): it returns a
+// scripted silhouette score per call, so a test stages exactly the vision behaviour
+// it wants — a low score that should drive another refine, then a high score that
+// should stop the loop. It records call count to assert the vision pass ran the
+// expected number of times.
+type scriptedVision struct {
+	scores []evaluator.Score
+	err    error
+	calls  int
+}
+
+func (s *scriptedVision) ScoreSilhouette(_ context.Context, _ string, _ []wire.BuildOp) (evaluator.Score, error) {
+	i := s.calls
+	s.calls++
+	if s.err != nil {
+		return evaluator.Score{}, s.err
+	}
+	if i >= len(s.scores) {
+		return s.scores[len(s.scores)-1], nil // repeat the last staged score
+	}
+	return s.scores[i], nil
+}
+
+// visionReq is a loop Request with the vision pass wired in (bh-06).
+func visionReq(v SilhouetteScorer) Request {
+	return Request{Envelope: foundationEnv(), Done: demoDone(), Vision: v, TaskType: "foundation"}
+}
+
+// TestLoop_LowSilhouetteTriggersAnotherIteration: a spec that PASSES the analytic
+// hard gate AND clears the analytic soft threshold but scores LOW on the vision
+// silhouette must NOT stop the loop early — within budget it triggers another
+// Generator iteration (the "passes analytic, looks wrong" lever, ADR-0008).
+func TestLoop_LowSilhouetteTriggersAnotherIteration(t *testing.T) {
+	// Both passes are analytically-rich (richPlinth ⇒ analytic soft score 4 ≥ 3).
+	// Vision: pass 1 scores silhouette 0 (looks wrong) ⇒ refine; pass 2 scores 2 ⇒ stop.
+	gen := &scriptedGen{scripts: [][]wire.BuildOp{richPlinth(), richPlinth()}}
+	vis := &scriptedVision{scores: []evaluator.Score{
+		{Score: 0, Evidence: "reads as a flat blob, not a plinth"},
+		{Score: 2, Evidence: "clear stepped plinth silhouette"},
+	}}
+
+	out := Run(context.Background(), gen, evaluator.New(evaluator.Config{}), visionReq(vis))
+	if !out.Accepted() {
+		t.Fatalf("expected accepted, got %q (%s)", out.Result, out.Reason)
+	}
+	if gen.calls != 2 {
+		t.Fatalf("a low silhouette within budget must trigger another Generator pass; got %d Generate calls", gen.calls)
+	}
+	if vis.calls != 2 {
+		t.Fatalf("the vision pass must run on each passing spec; got %d vision calls", vis.calls)
+	}
+	if out.QualityFlag != trace.QualityOK {
+		t.Fatalf("the second pass scored silhouette 2 ⇒ quality ok, got %q", out.QualityFlag)
+	}
+	// The accepted iteration's verdict carries the silhouette score + evidence (lands
+	// in the trace, ADR-0008).
+	last := out.Iterations[len(out.Iterations)-1].Verdict
+	if last.Rubric.Silhouette.Score != 2 || last.Rubric.Silhouette.Evidence == "" {
+		t.Fatalf("the trace verdict must carry the vision silhouette score+evidence, got %+v", last.Rubric.Silhouette)
+	}
+}
+
+// TestLoop_LowSilhouetteExhaustsToLowFlaggedNotWithheld: a spec that passes the
+// hard gate and the analytic soft threshold but NEVER clears the silhouette bar
+// across the whole budget still CACHES — flagged quality_flag:low, never withheld
+// (ADR-0008). The silhouette score+evidence are in the trace.
+func TestLoop_LowSilhouetteExhaustsToLowFlaggedNotWithheld(t *testing.T) {
+	gen := &scriptedGen{scripts: [][]wire.BuildOp{richPlinth(), richPlinth(), richPlinth()}}
+	vis := &scriptedVision{scores: []evaluator.Score{{Score: 0, Evidence: "looks wrong every time"}}}
+
+	out := Run(context.Background(), gen, evaluator.New(evaluator.Config{}), visionReq(vis))
+	if !out.Accepted() {
+		t.Fatalf("a passing-but-low-silhouette spec must be ACCEPTED (cached), got %q (%s)", out.Result, out.Reason)
+	}
+	if out.QualityFlag != trace.QualityLow {
+		t.Fatalf("an exhausted low silhouette must flag quality_flag:low, got %q", out.QualityFlag)
+	}
+	if len(out.Ops) == 0 {
+		t.Fatal("a low-quality accepted spec must still carry ops to cache (never withheld)")
+	}
+	if vis.calls != MaxIterations {
+		t.Fatalf("the vision pass must run on every passing iteration; got %d, want %d", vis.calls, MaxIterations)
+	}
+	if !strings.Contains(out.Reason, "silhouette") {
+		t.Fatalf("the low-quality reason must cite the silhouette (the (B)→(C) signal), got %q", out.Reason)
+	}
+}
+
+// TestLoop_VisionFailureIsNonFatal: when the vision pass errors (no Chrome, key
+// invalid, beta compat rejects), the silhouette dimension stays unscored, the
+// analytic verdict stands, and the spec still caches — the soft rubric never blocks
+// (ADR-0008).
+func TestLoop_VisionFailureIsNonFatal(t *testing.T) {
+	gen := &scriptedGen{scripts: [][]wire.BuildOp{richPlinth()}}
+	vis := &scriptedVision{err: context.DeadlineExceeded}
+
+	out := Run(context.Background(), gen, evaluator.New(evaluator.Config{}), visionReq(vis))
+	if !out.Accepted() {
+		t.Fatalf("a vision failure must NOT block caching, got %q (%s)", out.Result, out.Reason)
+	}
+	// Analytic soft score (richPlinth ⇒ 4) clears the threshold, so it is ok.
+	if out.QualityFlag != trace.QualityOK {
+		t.Fatalf("a vision failure leaves the analytic verdict intact (ok here), got %q", out.QualityFlag)
+	}
+	// The unscored silhouette dimension records WHY it is unscored, for the trace.
+	last := out.Iterations[len(out.Iterations)-1].Verdict
+	if last.Rubric.Silhouette.Score != 0 || !strings.Contains(last.Rubric.Silhouette.Evidence, "unavailable") {
+		t.Fatalf("a failed vision pass must record an unavailable silhouette, got %+v", last.Rubric.Silhouette)
+	}
+}
+
+// TestLoop_NoVisionIsAnalyticOnly: with no vision scorer the loop behaves exactly
+// as bh-04 — no silhouette score, the analytic soft score alone decides the flag.
+func TestLoop_NoVisionIsAnalyticOnly(t *testing.T) {
+	gen := &scriptedGen{scripts: [][]wire.BuildOp{richPlinth()}}
+	out := Run(context.Background(), gen, evaluator.New(evaluator.Config{}), req())
+	if !out.Accepted() || out.QualityFlag != trace.QualityOK {
+		t.Fatalf("analytic-only rich spec must be accepted ok, got %q/%q", out.Result, out.QualityFlag)
+	}
+	last := out.Iterations[len(out.Iterations)-1].Verdict
+	if last.Rubric.Silhouette.Score != 0 {
+		t.Fatalf("without a vision pass the silhouette stays 0, got %d", last.Rubric.Silhouette.Score)
+	}
+}
+
 // TestModelGenerator_BridgesTheSeam: the production ModelGenerator forwards to
 // GenerateSpec — a valid scripted FakeModel response flows through to ops, proving
 // the seam wiring without a network.

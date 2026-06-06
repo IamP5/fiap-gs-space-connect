@@ -147,13 +147,21 @@ func (r Result) LowQuality() bool { return r.QualityFlag == trace.QualityLow }
 // provider/modelID are recorded in the cache key + entry so a vendor swap yields a
 // distinct cache file. m is the (already-constructed) Model seam — Bake never
 // constructs a provider itself, so a test can drive it with a fake.
-func Bake(ctx context.Context, m model.Model, store *cache.Store, c Contract, world WorldContext, provider, modelID string) (Result, error) {
+//
+// vision is the OPTIONAL bake-time vision pass (bh-06): when non-nil, each
+// hard-gate-passing spec is rendered on the real Scene3D headless, screenshotted,
+// and scored for silhouette, with the score folded into the trace and the quality
+// flag (a low silhouette within budget triggers another iteration; on exhaustion
+// the spec still caches flagged quality_flag:low — never withheld). When nil the
+// bake is analytic-only (bh-04 behaviour). It is wired ONLY by cmd/bake; the
+// headline never reaches here.
+func Bake(ctx context.Context, m model.Model, store *cache.Store, c Contract, world WorldContext, provider, modelID string, vision loop.SilhouetteScorer) (Result, error) {
 	contractJSON, err := c.JSON()
 	if err != nil {
 		return Result{}, err
 	}
 
-	messages, err := buildPrompt(c, contractJSON, world)
+	messages, err := BuildPrompt(c, contractJSON, world)
 	if err != nil {
 		return Result{}, err
 	}
@@ -165,6 +173,8 @@ func Bake(ctx context.Context, m model.Model, store *cache.Store, c Contract, wo
 		Done:          c.EvalDone(),
 		SubjectOrigin: world.SubjectOrigin,
 		Neighbours:    world.Neighbours,
+		Vision:        vision,
+		TaskType:      string(c.Type),
 	})
 
 	key := cache.Key{
@@ -245,12 +255,14 @@ func Bake(ctx context.Context, m model.Model, store *cache.Store, c Contract, wo
 	}, nil
 }
 
-// buildPrompt assembles the system + user messages for one bake: a system message
-// pinning the role and the declarative-data invariant (ADR-0006), and a user
-// message carrying the Build contract, the world context, and the exact output
-// envelope shape. The strict response_format json_schema (set by GenerateSpec)
-// constrains the structure; the prompt supplies intent.
-func buildPrompt(c Contract, contractJSON json.RawMessage, world WorldContext) ([]model.Message, error) {
+// BuildPrompt assembles the system + user messages for one generation: a system
+// message pinning the role and the declarative-data invariant (ADR-0006), and a
+// user message carrying the Build contract, the world context, and the exact
+// output envelope shape. The strict response_format json_schema (set by
+// GenerateSpec) constrains the structure; the prompt supplies intent. It is
+// exported so the in-app live lab (internal/harness/lab) drives the SAME prompt
+// the offline bake uses, keeping the lab and the headline-cache generation honest.
+func BuildPrompt(c Contract, contractJSON json.RawMessage, world WorldContext) ([]model.Message, error) {
 	worldJSON, err := json.Marshal(world)
 	if err != nil {
 		return nil, fmt.Errorf("marshal world context: %w", err)
