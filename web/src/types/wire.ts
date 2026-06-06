@@ -7,7 +7,38 @@
 
 export type Vec2 = { X: number; Y: number };
 
+// Vec3 mirrors Go's domain.Vec3 (no JSON tags, so capital X/Y/Z), used by the
+// Build spec for a position, rotation (Euler radians), or scale in the Task's
+// Build-envelope frame.
+export type Vec3 = { X: number; Y: number; Z: number };
+
 export type TaskStatus = "UNCLAIMED" | "LEASED" | "DONE";
+
+// --- Build spec (TECHSPEC §4, ADR-0006) — forward-compatible geometry-as-data.
+//
+// An ordered list of declarative BuildOps the renderer INTERPRETS into meshes,
+// never executes. Mirrors wire.go's BuildOp/Material exactly (snake_case JSON
+// field names) so the two round-trip. box|cylinder|sphere render today; "model"
+// (with model_ref) and material `map` are reserved future glTF/texture slots the
+// current renderer treats as no-ops.
+export type BuildShape = "box" | "cylinder" | "sphere" | "model";
+
+export type Material = {
+  color: string;
+  roughness?: number; // 0..1; omitted ⇒ renderer default
+  metalness?: number; // 0..1; omitted ⇒ renderer default
+  map?: string; // future texture reference; no-op today
+};
+
+export type BuildOp = {
+  op: "place";
+  shape: BuildShape;
+  pos: Vec3;
+  rot: Vec3;
+  scale: Vec3;
+  material: Material;
+  model_ref?: string; // future glTF reference; only with shape "model"
+};
 
 export type RoverView = {
   id: string;
@@ -27,6 +58,9 @@ export type TaskView = {
   lease_expiry?: number;
   version: number;
   deps?: string[];
+  // Accumulated, ordered Build spec (ADR-0006). Absent ⇒ the renderer falls back
+  // to the deterministic `tierOf` primitive, so the field is purely additive.
+  build_spec?: BuildOp[];
 };
 
 // A choreography beat (slice 06), derived server-side from a REAL engine event

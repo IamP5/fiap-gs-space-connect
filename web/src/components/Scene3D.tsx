@@ -54,6 +54,7 @@ import {
   activeBeats,
   beatProgress,
 } from "../lib/choreography";
+import { type MeshDesc, interpretBuildSpec } from "../lib/buildspec";
 
 // Functional telemetry colors (DESIGN.md: live-data signals only — the brand
 // palette itself is black + white). Matched to the 2D canvas so the two
@@ -87,6 +88,12 @@ type SceneGeo = {
   foundation: THREE.BoxGeometry;
   wall: THREE.BoxGeometry;
   dome: THREE.SphereGeometry;
+  // Unit primitives for the Build-spec interpreter (ADR-0006): each interpreted
+  // op reuses one of these and is scaled per-op, so a spec of N ops still costs
+  // only these 3 shared GPU buffers (r3f-geometry "Reuse geometries").
+  specBox: THREE.BoxGeometry;
+  specCylinder: THREE.CylinderGeometry;
+  specSphere: THREE.SphereGeometry;
 };
 
 function makeSceneGeo(): SceneGeo {
@@ -102,6 +109,10 @@ function makeSceneGeo(): SceneGeo {
     foundation: new THREE.BoxGeometry(1.1, 0.3, 1.1),
     wall: new THREE.BoxGeometry(0.9, 1.1, 0.9),
     dome: new THREE.SphereGeometry(1.0, 24, 16, 0, Math.PI * 2, 0, Math.PI / 2),
+    // Unit primitives (edge/diameter 1) so a Build op's scale maps directly.
+    specBox: new THREE.BoxGeometry(1, 1, 1),
+    specCylinder: new THREE.CylinderGeometry(0.5, 0.5, 1, 20),
+    specSphere: new THREE.SphereGeometry(0.5, 20, 16),
   };
 }
 
@@ -446,14 +457,27 @@ function TaskBlock({
   const isCap = tier === "dome";
   const blockGeo = isCap ? geo.dome : tier === "foundation" ? geo.foundation : geo.wall;
 
+  // Interpret the Task's Build spec (ADR-0006), if any, into renderable meshes.
+  // EMPTY ⇒ the Task has no (renderable) spec, so we render EXACTLY today's
+  // primitive — the fallback this slice must keep pixel-identical. Memoized on
+  // the spec identity so the pure pass stays allocation-light (~12 Hz snapshots).
+  const specMeshes = useMemo<MeshDesc[]>(
+    () => interpretBuildSpec(task),
+    [task],
+  );
+  const interpreted = specMeshes.length > 0;
+
+  // Solidify-pop refs. The PRIMITIVE path animates its single mesh + material
+  // EXACTLY as before (meshRef/matRef). The INTERPRETED path has no single
+  // material to flash, so it pops the whole structure group (groupRef) by scale
+  // alone, keeping each op's procedural material intact. Only one path's refs are
+  // populated per render, so the unused branch is a harmless no-op.
   const meshRef = useRef<THREE.Mesh>(null);
   const matRef = useRef<THREE.MeshStandardMaterial>(null);
+  const groupRef = useRef<THREE.Group>(null);
 
   const id = task.id;
   useFrame(() => {
-    const mesh = meshRef.current;
-    const mat = matRef.current;
-    if (!mesh || !mat) return;
     const list = beats.current;
     let solidify = 0;
     if (list) {
@@ -465,16 +489,64 @@ function TaskBlock({
         }
       }
     }
-    // Solidify pop: a brief upward scale + green flash on a just-completed task.
-    mesh.scale.setScalar(solidify > 0 ? 1 + Math.sin(solidify * Math.PI) * 0.25 : 1);
-    if (solidify > 0) {
-      mat.emissive.set(SIGNAL_OK);
-      mat.emissiveIntensity = 1.5 * (1 - solidify);
-    } else if (mat.emissiveIntensity !== 0) {
-      mat.emissiveIntensity = 0;
+    const popScale = solidify > 0 ? 1 + Math.sin(solidify * Math.PI) * 0.25 : 1;
+
+    // Interpreted structure: pop the group (scale only — procedural mats stay).
+    if (groupRef.current) groupRef.current.scale.setScalar(popScale);
+
+    // Primitive: pop the single mesh + green-flash its material (unchanged).
+    const mesh = meshRef.current;
+    const mat = matRef.current;
+    if (mesh && mat) {
+      mesh.scale.setScalar(popScale);
+      if (solidify > 0) {
+        mat.emissive.set(SIGNAL_OK);
+        mat.emissiveIntensity = 1.5 * (1 - solidify);
+      } else if (mat.emissiveIntensity !== 0) {
+        mat.emissiveIntensity = 0;
+      }
     }
   });
 
+  // INTERPRETED PATH — the richer structure. Each op's unit primitive is scaled
+  // per-op and placed in the Task's envelope frame (its group sits at the same
+  // ground point as the primitive). Built/ghost opacity is shared so an
+  // unfinished interpreted Task still reads as a ghost, like the primitive.
+  if (interpreted) {
+    return (
+      <group ref={groupRef} position={[p.x, 0, p.z]}>
+        {specMeshes.map((m, i) => (
+          <mesh
+            key={i}
+            geometry={
+              m.geometry === "box"
+                ? geo.specBox
+                : m.geometry === "cylinder"
+                  ? geo.specCylinder
+                  : geo.specSphere
+            }
+            position={m.position}
+            rotation={m.rotation}
+            scale={m.scale}
+            raycast={() => null}
+          >
+            <meshStandardMaterial
+              color={built ? m.color : color}
+              roughness={m.roughness}
+              metalness={m.metalness}
+              transparent
+              opacity={opacity}
+              emissive="#000000"
+              emissiveIntensity={0}
+              toneMapped={false}
+            />
+          </mesh>
+        ))}
+      </group>
+    );
+  }
+
+  // PRIMITIVE FALLBACK — EXACTLY today's tierOf block (unchanged).
   return (
     <group position={[p.x, 0, p.z]}>
       <mesh ref={meshRef} geometry={blockGeo} position={[0, h, 0]} raycast={() => null}>

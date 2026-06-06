@@ -1,0 +1,46 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://swarmbuild/internal/harness/spec/build-spec.schema.json",
+  "title": "BuildSpec",
+  "description": "An ordered, append-only list of declarative Build ops (TECHSPEC §4, ADR-0006). Interpreted by the renderer, never executed.",
+  "type": "array",
+  "items": { "$ref": "#/$defs/buildOp" },
+  "$defs": {
+    "vec3": {
+      "type": "object",
+      "description": "A 3D vector. Marshalled with capital X/Y/Z to mirror Go's domain.Vec3 (no JSON tags).",
+      "properties": {
+        "X": { "type": "number" },
+        "Y": { "type": "number" },
+        "Z": { "type": "number" }
+      },
+      "required": ["X", "Y", "Z"],
+      "additionalProperties": false
+    },
+    "material": {
+      "type": "object",
+      "properties": {
+        "color": { "type": "string", "minLength": 1 },
+        "roughness": { "type": "number", "minimum": 0, "maximum": 1 },
+        "metalness": { "type": "number", "minimum": 0, "maximum": 1 },
+        "map": { "type": "string" }
+      },
+      "required": ["color"],
+      "additionalProperties": false
+    },
+    "buildOp": {
+      "type": "object",
+      "properties": {
+        "op": { "type": "string", "const": "place" },
+        "shape": { "type": "string", "enum": ["box", "cylinder", "sphere", "model"] },
+        "pos": { "$ref": "#/$defs/vec3" },
+        "rot": { "$ref": "#/$defs/vec3" },
+        "scale": { "$ref": "#/$defs/vec3" },
+        "material": { "$ref": "#/$defs/material" },
+        "model_ref": { "type": "string" }
+      },
+      "required": ["op", "shape", "pos", "rot", "scale", "material"],
+      "additionalProperties": false
+    }
+  }
+}

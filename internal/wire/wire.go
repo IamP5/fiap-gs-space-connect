@@ -138,6 +138,63 @@ type TaskView struct {
 	LeaseExpiry domain.Tick     `json:"lease_expiry,omitempty"`
 	Version     domain.Lamport  `json:"version"`
 	Deps        []domain.TaskID `json:"deps,omitempty"`
+	// BuildSpec is the Task's accumulated, ordered Build spec (TECHSPEC §4,
+	// ADR-0006): declarative geometry the renderer INTERPRETS, never executes.
+	// Absent ⇒ the renderer falls back to the deterministic `tierOf` primitive,
+	// so the field is purely additive. It is validated server-side
+	// (internal/harness/spec) before it rides a snapshot.
+	BuildSpec []BuildOp `json:"build_spec,omitempty"`
+}
+
+// --- Build spec (TECHSPEC §4) — forward-compatible declarative geometry ---
+//
+// A Build spec is an ordered list of BuildOps that describe the geometry a Rover
+// builds for a Task. It is DATA, never executed code (ADR-0006): the renderer
+// interprets box/cylinder/sphere ops into meshes today, and the schema reserves
+// the `model`/`map`/`model_ref` slots for future glTF + textures, which current
+// renderers treat as no-ops. The whole spec is a pure function of the snapshot,
+// so the scene can never claim geometry the World Model has not recorded.
+
+// BuildShape is the geometry primitive a BuildOp places. Only box/cylinder/
+// sphere are rendered today; "model" is a reserved forward-compatible slot for a
+// future glTF reference (model_ref) and is a renderer no-op for now.
+type BuildShape string
+
+// The shapes a BuildOp may place. box/cylinder/sphere render today; model is a
+// reserved forward-compatible glTF slot (renderer no-op for now).
+const (
+	ShapeBox      BuildShape = "box"
+	ShapeCylinder BuildShape = "cylinder"
+	ShapeSphere   BuildShape = "sphere"
+	ShapeModel    BuildShape = "model" // future glTF; not rendered yet
+)
+
+// BuildOpPlace is the only op kind today: place one primitive in the Task's
+// Build-envelope frame. Kept as a const (not an enum type) so the JSON value is
+// the literal string "place".
+const BuildOpPlace = "place"
+
+// Material is a BuildOp's procedural surface. Color/roughness/metalness drive a
+// standard PBR material today; Map (a texture reference) is a reserved
+// forward-compatible slot, ignored by current renderers.
+type Material struct {
+	Color     string   `json:"color"`               // CSS/hex color, e.g. "#cfcfd6"
+	Roughness *float64 `json:"roughness,omitempty"` // 0..1; nil ⇒ renderer default
+	Metalness *float64 `json:"metalness,omitempty"` // 0..1; nil ⇒ renderer default
+	Map       string   `json:"map,omitempty"`       // future texture reference; no-op today
+}
+
+// BuildOp is a single declarative build step. pos/rot/scale are expressed
+// relative to the Task's Build-envelope frame (TECHSPEC §4). ModelRef is the
+// future glTF reference, populated only when Shape is "model".
+type BuildOp struct {
+	Op       string      `json:"op"`    // always "place" today (BuildOpPlace)
+	Shape    BuildShape  `json:"shape"` // box | cylinder | sphere | model
+	Pos      domain.Vec3 `json:"pos"`
+	Rot      domain.Vec3 `json:"rot"`
+	Scale    domain.Vec3 `json:"scale"`
+	Material Material    `json:"material"`
+	ModelRef string      `json:"model_ref,omitempty"` // future glTF reference; only with shape "model"
 }
 
 // Choreography beat kinds (slice 06). Each is emitted by the coordinator from a

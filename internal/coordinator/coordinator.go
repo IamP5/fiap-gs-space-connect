@@ -26,6 +26,7 @@ import (
 	"swarmbuild/internal/core/lease"
 	"swarmbuild/internal/core/planner"
 	"swarmbuild/internal/core/world"
+	"swarmbuild/internal/harness/spec"
 	"swarmbuild/internal/wire"
 	"time"
 )
@@ -68,6 +69,14 @@ type Config struct {
 	// KILL — so the heal that follows is entirely genuine. This reproduces the
 	// kill→heal money shot at the same beat every run. Empty in production.
 	ScriptedKills []ScriptedKill
+	// BuildSpecs is an OPTIONAL per-Task Build spec (TECHSPEC §4, ADR-0006):
+	// declarative geometry the renderer interprets instead of the primitive
+	// fallback. In bh-01 this carries a single hardcoded SAMPLE spec to prove the
+	// wire seam end-to-end; a later slice replaces it with generated/cached specs
+	// streamed over NATS. It is validated once at Run (off the hot path) and then
+	// attached to the matching TaskView in each snapshot — pure additive data, so
+	// a Task without an entry renders exactly as before.
+	BuildSpecs map[domain.TaskID][]wire.BuildOp
 }
 
 // ScriptedKill schedules one reproducible demo kill: once WhenTaskLeased is
@@ -139,6 +148,12 @@ type state struct {
 	blueprint []domain.Task
 	cfgKills  []ScriptedKill
 
+	// buildSpecs holds pre-validated, optional per-Task Build specs (TECHSPEC §4,
+	// ADR-0006). publishSnapshot attaches the matching spec to a TaskView so it
+	// rides the real WS snapshot; a Task with no entry renders the primitive
+	// fallback unchanged. Read-only after Run (validated once, off the hot path).
+	buildSpecs map[domain.TaskID][]wire.BuildOp
+
 	conn   *bus.Conn
 	kv     *bus.KV
 	clk    domain.Clock
@@ -197,6 +212,14 @@ func Run(ctx context.Context, cfg Config) error {
 	clk := wallClock{}
 	ttl := domain.Tick(cfg.HeartbeatEvery.Milliseconds() * int64(cfg.TTLFactor))
 
+	// --- Validate any optional Build specs ONCE, off the hot path (ADR-0006: a
+	// malformed spec must never reach a snapshot). A rejected spec fails Run loudly
+	// rather than silently shipping bad geometry to the browser. ---
+	buildSpecs, err := validatedBuildSpecs(cfg.BuildSpecs)
+	if err != nil {
+		return fmt.Errorf("coordinator: invalid build spec: %w", err)
+	}
+
 	st := &state{
 		plan:     plan,
 		model:    model,
@@ -219,6 +242,8 @@ func Run(ctx context.Context, cfg Config) error {
 		// Buffered so publishSnapshot's non-blocking send rarely drops; the shim
 		// owns the channel's receive side.
 		earthCh: make(chan wire.EarthUplink, 64),
+		// Optional, pre-validated per-Task Build specs (bh-01: a hardcoded sample).
+		buildSpecs: buildSpecs,
 	}
 
 	// --- Earth-uplink shim (issue 09): a SEPARATE goroutine owns the artificial
@@ -806,6 +831,25 @@ func maxVersion(tasks []domain.Task) domain.Lamport {
 	return highest
 }
 
+// validatedBuildSpecs copies and validates the optional per-Task Build specs
+// against the Build-spec schema (ADR-0006), returning the first rejection so Run
+// fails loudly rather than shipping malformed geometry to the browser. Runs once
+// at startup, never on the hot path. A nil/empty input yields a nil map.
+func validatedBuildSpecs(in map[domain.TaskID][]wire.BuildOp) (map[domain.TaskID][]wire.BuildOp, error) {
+	if len(in) == 0 {
+		return nil, nil
+	}
+	out := make(map[domain.TaskID][]wire.BuildOp, len(in))
+	for id, ops := range in {
+		if err := spec.Validate(ops); err != nil {
+			return nil, fmt.Errorf("task %s: %w", id, err)
+		}
+		// Defensive copy so a caller mutating its slice can't alter what snapshots ship.
+		out[id] = append([]wire.BuildOp(nil), ops...)
+	}
+	return out, nil
+}
+
 // mirror writes the authoritative task record to NATS KV (the World Model
 // mirror, TECHSPEC §3 / ADR-0002).
 func (st *state) mirror(ctx context.Context, t domain.Task) {
@@ -829,6 +873,9 @@ func (st *state) publishSnapshot() {
 			LeaseExpiry: t.LeaseExpiry,
 			Version:     t.Version,
 			Deps:        t.Deps,
+			// Attach the Task's pre-validated Build spec, if any. Absent ⇒ the field
+			// stays nil and the renderer uses the deterministic primitive fallback.
+			BuildSpec: st.buildSpecs[t.ID],
 		})
 	}
 
