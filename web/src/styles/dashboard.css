@@ -457,6 +457,42 @@
   color: var(--signal-warn);
 }
 
+/* Camera view-mode toggle (issue #49) — mirrors the header renderer-toggle
+   chrome: a hairline-boxed pair of caps buttons, active one filled. */
+.view-toggle {
+  display: inline-flex;
+  border: 1px solid var(--hairline-on-dark);
+  border-radius: var(--r-xs);
+  overflow: hidden;
+}
+
+.view-btn {
+  flex: 1 1 0;
+  padding: 6px var(--s-sm);
+  font-family: var(--display);
+  font-size: 12px;
+  font-weight: 700;
+  letter-spacing: 1.17px;
+  text-transform: uppercase;
+  color: var(--ink-mute);
+  background: transparent;
+  border: none;
+  cursor: pointer;
+}
+
+.view-btn + .view-btn {
+  border-left: 1px solid var(--hairline-on-dark);
+}
+
+.view-btn.is-active {
+  color: var(--on-primary);
+  background: var(--canvas-night-soft);
+}
+
+.view-btn:hover:not(.is-active) {
+  color: var(--on-primary-mute);
+}
+
 /* Range input — hairline track, square white thumb; no fills/glows. */
 .control-slider {
   -webkit-appearance: none;
