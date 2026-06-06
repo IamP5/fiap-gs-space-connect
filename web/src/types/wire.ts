@@ -45,6 +45,7 @@ export type BuildOp = {
   scale: Vec3;
   material: Material;
   model_ref?: string; // future glTF reference; only with shape "model"
+  asset_key?: string; // curated Asset catalog key (ADR-0010); the server resolves it to model_ref before this reaches the browser
 };
 
 export type RoverView = {

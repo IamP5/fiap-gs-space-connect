@@ -262,6 +262,12 @@ type Material struct {
 // Id is the stable key the renderer folds on: a `place` introduces an Id; a
 // later `move`/`delete` targets that earlier Id. A place-only log gives every
 // op a distinct Id, so it folds to itself (pixel-identical replay, ADR-0006).
+//
+// AssetKey references a curated Asset by KEY in the closed Asset catalog (ADR-0010,
+// internal/harness/asset). In live mode the Model emits ONLY a key, never a path;
+// the SERVER resolves the key to the catalog entry's self-hosted model_ref before
+// the browser sees the op (the browser only ever receives resolved URLs). Empty on
+// a procedural op or a spec that already carries a resolved ModelRef.
 type BuildOp struct {
 	Op       string      `json:"op"`    // place | move | delete (BuildOpPlace/Move/Delete)
 	ID       string      `json:"id"`    // stable piece key; move/delete target an earlier place's ID
@@ -271,6 +277,7 @@ type BuildOp struct {
 	Scale    domain.Vec3 `json:"scale"`
 	Material Material    `json:"material"`
 	ModelRef string      `json:"model_ref,omitempty"` // future glTF reference; only with shape "model"
+	AssetKey string      `json:"asset_key,omitempty"` // curated Asset catalog key (ADR-0010); server resolves to ModelRef
 }
 
 // BuildOpMsg is one streamed build op a Rover emits on SubjBuildOp(task) as it

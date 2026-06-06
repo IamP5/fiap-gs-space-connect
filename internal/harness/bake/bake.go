@@ -16,6 +16,7 @@ import (
 	"errors"
 	"fmt"
 	"swarmbuild/internal/core/domain"
+	"swarmbuild/internal/harness/asset"
 	"swarmbuild/internal/harness/cache"
 	"swarmbuild/internal/harness/evaluator"
 	"swarmbuild/internal/harness/loop"
@@ -58,6 +59,27 @@ type Contract struct {
 	Envelope    Envelope        `json:"envelope"`
 	Done        Done            `json:"done"`
 	Style       string          `json:"style,omitempty"`
+	// Catalog is the closed Asset catalog this contract scopes (ADR-0010): the
+	// curated key → model_ref Assets a Rover's Build harness (replay or live) may
+	// place by KEY for this Task. The Model emits only a key from it, never a path;
+	// the server resolves key → model_ref before the browser sees the op. Nil ⇒ the
+	// global asset.DefaultCatalog() backs the contract (an unscoped contract still
+	// has the curated set available). It is DISTINCT from coordinator.Config's
+	// blueprint Catalog (placeable structures) — this one carries model Assets — but
+	// mirrors that field's "nil ⇒ default" style for consistency. It is excluded
+	// from the contract's canonical JSON (and so from the cache key) so that
+	// re-scoping the available Assets does not re-bake every Task's geometry.
+	Catalog *asset.Catalog `json:"-"`
+}
+
+// AssetCatalog returns the contract's Asset catalog, falling back to the global
+// asset.DefaultCatalog() when the contract does not scope one (ADR-0010: a default
+// catalog backs contracts that don't specify their own). It never returns nil.
+func (c Contract) AssetCatalog() *asset.Catalog {
+	if c.Catalog != nil {
+		return c.Catalog
+	}
+	return asset.DefaultCatalog()
 }
 
 // JSON returns the contract's canonical JSON bytes (the input to ContractHash and

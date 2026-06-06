@@ -39,7 +39,8 @@
         "rot": { "$ref": "#/$defs/vec3" },
         "scale": { "$ref": "#/$defs/vec3" },
         "material": { "$ref": "#/$defs/material" },
-        "model_ref": { "type": "string" }
+        "model_ref": { "type": "string" },
+        "asset_key": { "type": "string", "description": "Curated Asset catalog key (ADR-0010); the server resolves it to a self-hosted model_ref before the browser sees the op." }
       },
       "required": ["op", "pos", "rot", "scale"],
       "additionalProperties": false

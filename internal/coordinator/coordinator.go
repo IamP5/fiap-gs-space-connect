@@ -27,6 +27,7 @@ import (
 	"swarmbuild/internal/core/lease"
 	"swarmbuild/internal/core/planner"
 	"swarmbuild/internal/core/world"
+	"swarmbuild/internal/harness/asset"
 	"swarmbuild/internal/harness/spec"
 	"swarmbuild/internal/wire"
 	"time"
@@ -74,6 +75,14 @@ type Config struct {
 	// draws from (bh-05). Nil ⇒ blueprint.DefaultCatalog() is used, so a placed
 	// Blueprint always resolves against the shipped dome/solar-array/comms-mast.
 	Catalog *blueprint.Catalog
+	// AssetCatalog is the closed, curated Asset catalog (ADR-0010, issue #59): the
+	// key → model_ref registry the server resolves a Build op's AssetKey against
+	// before the spec rides a snapshot, so the browser only ever sees resolved
+	// self-hosted URLs (never raw keys). Nil ⇒ asset.DefaultCatalog() backs it, so
+	// the curated set is always available. It is DISTINCT from the blueprint Catalog
+	// above (placeable structures) — this one carries model Assets — but mirrors its
+	// "nil ⇒ default" style for consistency.
+	AssetCatalog *asset.Catalog
 	// WorldBounds is the half-extent (in worksite units) of the square build area
 	// a placed Blueprint must fit inside, centred on the origin: every injected
 	// task's envelope footprint must lie within [-WorldBounds, +WorldBounds] on
@@ -121,6 +130,9 @@ func (cfg Config) withDefaults() Config {
 	}
 	if cfg.Catalog == nil {
 		cfg.Catalog = blueprint.DefaultCatalog()
+	}
+	if cfg.AssetCatalog == nil {
+		cfg.AssetCatalog = asset.DefaultCatalog()
 	}
 	if cfg.WorldBounds <= 0 {
 		cfg.WorldBounds = defaultWorldBounds
@@ -239,6 +251,13 @@ type state struct {
 	worldBounds float64
 	placedTasks []blueprint.PlacedTask
 	placeSeq    int
+	// assetCatalog is the closed, curated Asset catalog (ADR-0010, issue #59): the
+	// key → model_ref registry the server resolves a Build op's AssetKey against
+	// just before a spec rides a snapshot, so the BROWSER only ever receives a
+	// resolved, self-hosted URL — never a raw catalog key. The durable buildSpecs
+	// and the KV mirror keep the original key-bearing ops; resolution is applied to
+	// the snapshot copy only. Never nil (Config defaults it to asset.DefaultCatalog).
+	assetCatalog *asset.Catalog
 	// seedSpecs is a pristine copy of the static per-Task Build specs supplied at
 	// Run, used by onReload to reset buildSpecs back to the seed so a demo reload
 	// rebuilds the structure op-by-op from scratch instead of resuming a stale
@@ -346,6 +365,9 @@ func Run(ctx context.Context, cfg Config) error {
 		// Blueprint catalog + legal build square for placeBlueprint (bh-05).
 		catalog:     cfg.Catalog,
 		worldBounds: cfg.WorldBounds,
+		// Curated Asset catalog: the server resolves Build-op AssetKeys against it so
+		// the browser only sees resolved URLs (ADR-0010, issue #59).
+		assetCatalog: cfg.AssetCatalog,
 		// Buffered so publishSnapshot's non-blocking send rarely drops; the shim
 		// owns the channel's receive side.
 		earthCh: make(chan wire.EarthUplink, 64),
@@ -1161,9 +1183,13 @@ func (st *state) publishSnapshot() {
 			LeaseExpiry: t.LeaseExpiry,
 			Version:     t.Version,
 			Deps:        t.Deps,
-			// Attach the Task's pre-validated Build spec, if any. Absent ⇒ the field
-			// stays nil and the renderer uses the deterministic primitive fallback.
-			BuildSpec: st.buildSpecs[t.ID],
+			// Attach the Task's pre-validated Build spec, if any, with every Asset KEY
+			// resolved to its self-hosted model_ref (ADR-0010): the browser receives
+			// only resolved URLs, never raw catalog keys. ResolveSpec copies (never
+			// mutates the durable buildSpecs) and leaves keyless ops untouched, so a
+			// spec with no Asset keys rides byte-identically to before. Absent ⇒ the
+			// field stays nil and the renderer uses the deterministic primitive fallback.
+			BuildSpec: st.assetCatalog.ResolveSpec(st.buildSpecs[t.ID]),
 		})
 	}
 
