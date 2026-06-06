@@ -72,6 +72,21 @@ for img in \
   kind load docker-image "${img}" --name "${CLUSTER}"
 done
 
+echo "▶ ensuring namespace + LLM secret (for live lab mode) before apply…"
+kubectl create namespace "${NS}" --dry-run=client -o yaml | kubectl apply -f - >/dev/null
+if [[ -f "${REPO_ROOT}/.env" ]]; then
+  # Sync the gateway's API key(s) from the repo-root .env into an in-cluster Secret
+  # the gateway mounts via envFrom (optional). Apply-from-dry-run makes it idempotent
+  # and the key never touches git. Absent .env ⇒ live lab stays off (headline still works).
+  kubectl -n "${NS}" create secret generic swarmbuild-llm \
+    --from-env-file="${REPO_ROOT}/.env" \
+    --dry-run=client -o yaml | kubectl apply -f - >/dev/null
+  echo "  ✓ secret 'swarmbuild-llm' synced from .env → live lab mode ENABLED on the gateway"
+else
+  echo "  ⚠ no ${REPO_ROOT}/.env → live lab mode OFF (headline still replays baked specs)."
+  echo "    add OPENAI_API_KEY to .env and re-run to enable the Lab panel."
+fi
+
 echo "▶ applying manifests (kubectl apply -k ${K8S_DIR})…"
 kubectl apply -k "${K8S_DIR}"
 

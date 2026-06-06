@@ -5,3 +5,7 @@ web/node_modules
 web/dist
 *.log
 tmp
+# Never ship local secrets into any build layer (the gateway reads the key from a
+# k8s Secret / env at runtime, never from a baked-in file).
+.env
+.env.*

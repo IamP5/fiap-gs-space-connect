@@ -132,3 +132,29 @@ func TestServeLabGenerate_RejectsGET(t *testing.T) {
 		t.Fatalf("status = %d, want 405 for GET", resp.StatusCode)
 	}
 }
+
+func TestServeLabGenerate_AnswersCORSPreflight(t *testing.T) {
+	// The browser dashboard (e.g. :5173) POSTs application/json to the gateway
+	// (:8080) cross-origin — under a k8s port-forward or docker-compose — so it
+	// sends an OPTIONS preflight first. The gateway must answer with permissive
+	// CORS headers, or the browser blocks the live lab run.
+	g := gateway.New(fakeBus{}).WithLab(fakeLab{catalog: `[]`})
+	srv := httptest.NewServer(g.Handler())
+	defer srv.Close()
+
+	resp := do(t, http.MethodOptions, srv.URL+"/lab/generate", "")
+	defer func() { _ = resp.Body.Close() }()
+
+	if resp.StatusCode != http.StatusNoContent {
+		t.Fatalf("preflight status = %d, want 204", resp.StatusCode)
+	}
+	if got := resp.Header.Get("Access-Control-Allow-Origin"); got != "*" {
+		t.Fatalf("Allow-Origin = %q, want *", got)
+	}
+	if got := resp.Header.Get("Access-Control-Allow-Methods"); !strings.Contains(got, "POST") {
+		t.Fatalf("Allow-Methods = %q, want it to allow POST", got)
+	}
+	if got := resp.Header.Get("Access-Control-Allow-Headers"); !strings.Contains(got, "Content-Type") {
+		t.Fatalf("Allow-Headers = %q, want it to allow Content-Type", got)
+	}
+}

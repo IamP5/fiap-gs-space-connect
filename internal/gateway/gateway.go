@@ -234,11 +234,30 @@ func (g *Gateway) serveHealthz(w http.ResponseWriter, _ *http.Request) {
 	})
 }
 
+// labCORS sets permissive CORS headers so the browser dashboard (served from a
+// different origin/port than the gateway — e.g. :5173 vs :8080 under a k8s
+// port-forward or docker-compose) can call the lab endpoints, and answers the
+// preflight. The lab client POSTs application/json, a non-simple request, so the
+// browser sends an OPTIONS preflight first; returning true means the request was
+// a preflight that has been fully handled here.
+func labCORS(w http.ResponseWriter, r *http.Request) bool {
+	w.Header().Set("Access-Control-Allow-Origin", "*")
+	w.Header().Set("Access-Control-Allow-Methods", "POST, GET, OPTIONS")
+	w.Header().Set("Access-Control-Allow-Headers", "Content-Type")
+	if r.Method == http.MethodOptions {
+		w.WriteHeader(http.StatusNoContent)
+		return true
+	}
+	return false
+}
+
 // serveLabCatalog returns the Lab panel's selectable Task-type list as JSON. It
 // 503s when no lab runner is wired (e.g. the key was absent at startup), so the
 // dashboard can show the lab as unavailable rather than guess inputs.
-func (g *Gateway) serveLabCatalog(w http.ResponseWriter, _ *http.Request) {
-	w.Header().Set("Access-Control-Allow-Origin", "*")
+func (g *Gateway) serveLabCatalog(w http.ResponseWriter, r *http.Request) {
+	if labCORS(w, r) {
+		return
+	}
 	if g.lab == nil {
 		http.Error(w, `{"error":"live lab not enabled (no API key at startup)"}`, http.StatusServiceUnavailable)
 		return
@@ -278,7 +297,9 @@ func (s *sseWriter) Send(payload []byte) error {
 // path — the snapshot fan-out above never touches this handler, and the World
 // Model is never mutated here. 503s when no lab runner was injected.
 func (g *Gateway) serveLabGenerate(w http.ResponseWriter, r *http.Request) {
-	w.Header().Set("Access-Control-Allow-Origin", "*")
+	if labCORS(w, r) {
+		return
+	}
 	if r.Method != http.MethodPost {
 		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
 		return
