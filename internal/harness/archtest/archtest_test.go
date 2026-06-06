@@ -19,6 +19,18 @@ import (
 // modelPkg is the Model seam that must stay OFF the hot path.
 const modelPkg = "swarmbuild/internal/harness/model"
 
+// labModelPkgs are the bh-04 lab/bake packages that wire the Model seam into the
+// Generator↔Evaluator loop (ADR-0008). They import the Model seam, so they MUST
+// stay off the hot path too — a hot-path package importing any of them would pull a
+// live model call onto an award/heartbeat/expiry. The model-seam check below already
+// catches this transitively; these are named explicitly so the boundary's intent is
+// legible and a future refactor that hides the model import behind one of them still
+// fails this test.
+var labModelPkgs = []string{
+	"swarmbuild/internal/harness/loop", // Generator↔Evaluator refine loop
+	"swarmbuild/internal/harness/bake", // offline bake / bake-all (drives the loop)
+}
+
 // hotPathPkgs are the deterministic core packages on the live path of an award,
 // a lease renewal/heartbeat, an expiry, and the single-writer tick (TECHSPEC §8,
 // ADR-0005). None of them may import the Model seam, directly or transitively.
@@ -63,13 +75,18 @@ func TestModelSeamOffHotPath(t *testing.T) {
 	if !goAvailable() {
 		t.Skip("go toolchain not on PATH; skipping import-graph arch test")
 	}
+	forbidden := append([]string{modelPkg}, labModelPkgs...)
 	for _, pkg := range hotPathPkgs {
 		t.Run(pkg, func(t *testing.T) {
+			closure := make(map[string]bool)
 			for _, dep := range deps(t, pkg) {
-				if dep == modelPkg {
-					t.Fatalf("ARCH VIOLATION: hot-path package %s imports the Model seam %s "+
+				closure[dep] = true
+			}
+			for _, bad := range forbidden {
+				if closure[bad] {
+					t.Fatalf("ARCH VIOLATION: hot-path package %s imports %s "+
 						"(ADR-0005: no model call on award/heartbeat/expiry/tick). "+
-						"Move the generation behind the offline bake/lab path.", pkg, modelPkg)
+						"Move the generation behind the offline bake/lab path.", pkg, bad)
 				}
 			}
 		})

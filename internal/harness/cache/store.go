@@ -34,6 +34,28 @@ func NewStore(dir string) (*Store, error) {
 // Path returns the on-disk filename a key's entry is (or would be) written to.
 func (s *Store) Path(k Key) string { return filepath.Join(s.dir, k.Filename()) }
 
+// TracePath returns the on-disk filename of the lab-loop trace sidecar for a key:
+// the spec filename with its ".json" suffix replaced by ".trace.json", so the
+// trace sits beside the cached spec (ADR-0008). Stable for a given key.
+func (k Key) TracePath() string {
+	name := k.Filename()
+	return name[:len(name)-len(".json")] + ".trace.json"
+}
+
+// WriteTrace persists the lab-loop trace sidecar bytes beside the cached spec for
+// key, returning the file path it wrote. It does not validate the bytes (the trace
+// is declarative audit data, not replayed). A re-bake overwrites the same file.
+func (s *Store) WriteTrace(k Key, data []byte) (string, error) {
+	if len(data) == 0 || data[len(data)-1] != '\n' {
+		data = append(data, '\n') // trailing newline: clean diffs for the committed file
+	}
+	p := filepath.Join(s.dir, k.TracePath())
+	if err := os.WriteFile(p, data, 0o600); err != nil {
+		return "", fmt.Errorf("write trace file %q: %w", p, err)
+	}
+	return p, nil
+}
+
 // Write validates and persists an entry under its key, returning the file path it
 // wrote. A re-bake of the same key overwrites the same file (the key filename is
 // stable), so the cache never accumulates stale duplicates for one contract+model.

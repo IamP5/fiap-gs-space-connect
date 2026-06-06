@@ -1,0 +1,131 @@
+{
+  "blueprint_id": "dome",
+  "task_id": "dome-cap",
+  "task_type": "dome-cap",
+  "contract_hash": "a12261c5",
+  "model": "gpt-4o-2024-08-06",
+  "provider": "openai",
+  "ops": [
+    {
+      "op": "place",
+      "shape": "cylinder",
+      "pos": {
+        "X": 0,
+        "Y": -1.6,
+        "Z": 0
+      },
+      "rot": {
+        "X": 0,
+        "Y": 0,
+        "Z": 0
+      },
+      "scale": {
+        "X": 3.2,
+        "Y": 0.4,
+        "Z": 3.2
+      },
+      "material": {
+        "color": "#d3d3d3",
+        "roughness": 0.8,
+        "metalness": 0.1
+      }
+    },
+    {
+      "op": "place",
+      "shape": "cylinder",
+      "pos": {
+        "X": 0,
+        "Y": -1,
+        "Z": 0
+      },
+      "rot": {
+        "X": 0,
+        "Y": 0,
+        "Z": 0
+      },
+      "scale": {
+        "X": 2.8,
+        "Y": 0.6,
+        "Z": 2.8
+      },
+      "material": {
+        "color": "#e0e0e0",
+        "roughness": 0.9,
+        "metalness": 0.05
+      }
+    },
+    {
+      "op": "place",
+      "shape": "cylinder",
+      "pos": {
+        "X": 0,
+        "Y": -0.1,
+        "Z": 0
+      },
+      "rot": {
+        "X": 0,
+        "Y": 0,
+        "Z": 0
+      },
+      "scale": {
+        "X": 2.4,
+        "Y": 0.8,
+        "Z": 2.4
+      },
+      "material": {
+        "color": "#b0c4de",
+        "roughness": 0.7,
+        "metalness": 0.2
+      }
+    },
+    {
+      "op": "place",
+      "shape": "sphere",
+      "pos": {
+        "X": 0,
+        "Y": 1,
+        "Z": 0
+      },
+      "rot": {
+        "X": 0,
+        "Y": 0,
+        "Z": 0
+      },
+      "scale": {
+        "X": 2,
+        "Y": 0.6,
+        "Z": 2
+      },
+      "material": {
+        "color": "#708090",
+        "roughness": 0.6,
+        "metalness": 0.3
+      }
+    }
+  ],
+  "repaired": false,
+  "contract": {
+    "blueprint_id": "dome",
+    "task_id": "dome-cap",
+    "type": "dome-cap",
+    "envelope": {
+      "center": {
+        "X": 0,
+        "Y": 0,
+        "Z": 0
+      },
+      "size": {
+        "X": 3.6,
+        "Y": 3.6,
+        "Z": 3.6
+      }
+    },
+    "done": {
+      "description": "a keystone ring topped by a cap, closing the dome",
+      "min_ops": 3,
+      "min_coverage": 0.015
+    },
+    "style": "moon-base habitat, pale prefab panels, brushed metal accents"
+  },
+  "quality_flag": "ok"
+}

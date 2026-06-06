@@ -17,7 +17,11 @@ import (
 	"fmt"
 	"swarmbuild/internal/core/domain"
 	"swarmbuild/internal/harness/cache"
+	"swarmbuild/internal/harness/evaluator"
+	"swarmbuild/internal/harness/loop"
 	"swarmbuild/internal/harness/model"
+	"swarmbuild/internal/harness/trace"
+	"swarmbuild/internal/wire"
 )
 
 // Vec3 mirrors domain.Vec3 in the Build contract JSON (capital X/Y/Z), matching
@@ -33,11 +37,15 @@ type Envelope struct {
 	Size   Vec3 `json:"size"`
 }
 
-// Done is the measurable "done" condition the Architect hands the harness — kept
-// as free-form guidance here (e.g. a target silhouette) since the demo bakes a
-// single Task and the analytic gate is the spec validator.
+// Done is the measurable "done" condition the Architect hands the harness. It
+// carries free-form guidance (Description, surfaced to the prompt) AND the analytic
+// criteria the Evaluator's hard gate checks deterministically (MinOps,
+// MinCoverage) — so "done" is a real, unit-testable invariant, not just prose
+// (ADR-0008).
 type Done struct {
-	Description string `json:"description"`
+	Description string  `json:"description"`
+	MinOps      int     `json:"min_ops,omitempty"`
+	MinCoverage float64 `json:"min_coverage,omitempty"`
 }
 
 // Contract is the Build contract (Architect → Build harness, TECHSPEC §4): what to
@@ -63,27 +71,78 @@ func (c Contract) JSON() (json.RawMessage, error) {
 	return b, nil
 }
 
+// EvalEnvelope returns the Build envelope in the analytic Evaluator's shape.
+func (c Contract) EvalEnvelope() evaluator.Envelope {
+	return evaluator.Envelope{Center: c.Envelope.Center, Size: c.Envelope.Size}
+}
+
+// EvalDone returns the analytic done-criteria the Evaluator's hard gate checks.
+func (c Contract) EvalDone() evaluator.DoneCriteria {
+	return evaluator.DoneCriteria{
+		MinOps:      c.Done.MinOps,
+		MinCoverage: c.Done.MinCoverage,
+		Description: c.Done.Description,
+	}
+}
+
 // WorldContext is the snapshot context handed to the model alongside the contract:
-// where the Task sits in the world and a terse note. It keeps the prompt grounded
-// in the actual board without putting the model anywhere near the live loop.
+// where the Task sits in the world, a terse note, and — the key bh-04 addition —
+// the accumulated ops of NEIGHBOUR tasks within/near this Task's envelope, so the
+// Generator authors geometry that fits a coherent, already-rising world (and the
+// Evaluator can check for collisions). Neighbours are lifted into the world frame
+// at the subject's SubjectOrigin.
 type WorldContext struct {
-	TaskPos domain.Vec2 `json:"task_pos"`
-	Note    string      `json:"note,omitempty"`
+	TaskPos       domain.Vec2           `json:"task_pos"`
+	Note          string                `json:"note,omitempty"`
+	SubjectOrigin domain.Vec3           `json:"subject_origin"`
+	Neighbours    []evaluator.Neighbour `json:"neighbours,omitempty"`
 }
 
 // Result is one bake outcome: the approved ops, whether a repair re-ask was
-// needed, and the cache key/path the entry was written to.
+// needed, and the cache key/path the entry was written to. For a loop bake it also
+// records the final disposition (accepted | fallback), the quality flag, and the
+// trace sidecar path.
 type Result struct {
-	Key      cache.Key
-	Path     string
-	Ops      int
-	Repaired bool
+	Key         cache.Key
+	Path        string
+	TracePath   string
+	Ops         int
+	Repaired    bool
+	Result      trace.Result
+	QualityFlag trace.QualityFlag
+	Reason      string
+
+	// ops is the accepted Build spec (nil on fallback). It is unexported because
+	// callers read the COUNT via Ops; BakeAll uses opsForNeighbour to feed the
+	// geometry forward as a neighbour world for dependent Tasks.
+	ops []wire.BuildOp
 }
 
-// Bake generates and caches the Build spec for one Task. It builds the prompt from
-// the contract + world context, runs model.GenerateSpec (validate-and-repair),
-// and on success writes a cache.Entry via store, returning where it landed. On
-// model exhaustion it returns model.ErrFallback and writes nothing.
+// opsForNeighbour returns the accepted ops to hand a dependent Task as neighbour
+// geometry (a defensive copy, empty on fallback).
+func (r Result) opsForNeighbour() []wire.BuildOp {
+	out := make([]wire.BuildOp, len(r.ops))
+	copy(out, r.ops)
+	return out
+}
+
+// FellBack reports whether this bake took the primitive fallback (loop exhaustion,
+// nothing cached).
+func (r Result) FellBack() bool { return r.Result == trace.ResultFallback }
+
+// LowQuality reports whether this bake cached a spec flagged quality_flag:low.
+func (r Result) LowQuality() bool { return r.QualityFlag == trace.QualityLow }
+
+// Bake runs the Generator↔Evaluator refine loop for one Task and caches the result
+// (TECHSPEC §4/§5, ADR-0008). It builds the prompt from the contract + world
+// snapshot (including neighbour ops), drives loop.Run with the analytic Evaluator,
+// and:
+//   - on a hard-gate pass, writes the schema-valid spec to the cache (flagged
+//     quality_flag:low if its soft score is below threshold — cached, NOT withheld)
+//     AND a trace sidecar beside it;
+//   - on loop exhaustion (no passing spec), writes NOTHING to the spec cache but
+//     STILL writes the trace sidecar (so the fallback is inspectable) and returns
+//     model.ErrFallback so the caller knows the Task takes the primitive.
 //
 // provider/modelID are recorded in the cache key + entry so a vendor swap yields a
 // distinct cache file. m is the (already-constructed) Model seam — Bake never
@@ -99,22 +158,59 @@ func Bake(ctx context.Context, m model.Model, store *cache.Store, c Contract, wo
 		return Result{}, err
 	}
 
-	ops, genErr := model.GenerateSpec(ctx, m, messages)
-	if genErr != nil {
-		// Exhaustion ⇒ fallback: surface it so the operator knows the demo Task will
-		// use the primitive, and write nothing.
-		return Result{}, genErr
-	}
+	eval := evaluator.New(evaluator.Config{})
+	out := loop.Run(ctx, loop.ModelGenerator{M: m}, eval, loop.Request{
+		Messages:      messages,
+		Envelope:      c.EvalEnvelope(),
+		Done:          c.EvalDone(),
+		SubjectOrigin: world.SubjectOrigin,
+		Neighbours:    world.Neighbours,
+	})
 
-	// A repair was needed iff GenerateSpec made more than one underlying call. We
-	// don't have the count here, so record repaired=false; the cmd reports the
-	// generation outcome. (The trace-rich path is a later lab slice, ADR-0008.)
 	key := cache.Key{
 		BlueprintID:  c.BlueprintID,
 		TaskID:       string(c.TaskID),
 		ContractHash: cache.ContractHash(contractJSON),
 		Model:        modelID,
 	}
+
+	tr := trace.Trace{
+		BlueprintID: c.BlueprintID,
+		TaskID:      string(c.TaskID),
+		Model:       modelID,
+		Contract:    contractJSON,
+		Iterations:  out.Iterations,
+		Outcome: trace.Outcome{
+			Result:      out.Result,
+			Cached:      out.Accepted(),
+			QualityFlag: out.QualityFlag,
+			Reason:      out.Reason,
+		},
+	}
+	traceBytes, tErr := tr.Marshal()
+	if tErr != nil {
+		return Result{}, tErr
+	}
+
+	if !out.Accepted() {
+		// Exhaustion ⇒ fallback: write the trace (so the operator can inspect WHY)
+		// but cache no spec. The Task uses the primitive and still completes.
+		tracePath, wErr := store.WriteTrace(key, traceBytes)
+		if wErr != nil {
+			return Result{}, wErr
+		}
+		return Result{
+				Key:         key,
+				TracePath:   tracePath,
+				Result:      out.Result,
+				QualityFlag: out.QualityFlag,
+				Reason:      out.Reason,
+			},
+			fmt.Errorf("%w: %s", model.ErrFallback, out.Reason)
+	}
+
+	// A repair re-ask happened iff the loop took more than one iteration.
+	repaired := len(out.Iterations) > 1
 	entry := cache.Entry{
 		BlueprintID:  c.BlueprintID,
 		TaskID:       string(c.TaskID),
@@ -122,15 +218,31 @@ func Bake(ctx context.Context, m model.Model, store *cache.Store, c Contract, wo
 		ContractHash: key.ContractHash,
 		Model:        modelID,
 		Provider:     provider,
-		Ops:          ops,
+		Ops:          out.Ops,
+		Repaired:     repaired,
 		Contract:     contractJSON,
+		QualityFlag:  string(out.QualityFlag),
 	}
 
 	path, wErr := store.Write(key, entry)
 	if wErr != nil {
 		return Result{}, fmt.Errorf("cache write: %w", wErr)
 	}
-	return Result{Key: key, Path: path, Ops: len(ops)}, nil
+	tracePath, twErr := store.WriteTrace(key, traceBytes)
+	if twErr != nil {
+		return Result{}, twErr
+	}
+	return Result{
+		Key:         key,
+		Path:        path,
+		TracePath:   tracePath,
+		Ops:         len(out.Ops),
+		Repaired:    repaired,
+		Result:      out.Result,
+		QualityFlag: out.QualityFlag,
+		Reason:      out.Reason,
+		ops:         out.Ops,
+	}, nil
 }
 
 // buildPrompt assembles the system + user messages for one bake: a system message
@@ -151,11 +263,35 @@ func buildPrompt(c Contract, contractJSON json.RawMessage, world WorldContext) (
 		"All coordinates are RELATIVE to the Task's Build-envelope frame and MUST stay within the envelope. " +
 		"You never emit code; the renderer interprets your ops. Return strict JSON of the form {\"ops\": [ ... ]}."
 
+	neighbourNote := ""
+	if len(world.Neighbours) > 0 {
+		neighbourNote = fmt.Sprintf(
+			"\n\nNeighbouring structures already exist nearby (their accumulated ops are in the world "+
+				"context above, in world coordinates). Do NOT overlap them; your geometry must abut or clear "+
+				"them, never collide. There are %d neighbour task(s) near your envelope.",
+			len(world.Neighbours),
+		)
+	}
+
+	// Explicit numeric bounds: each op's bounding box (pos ± scale/2 per axis) MUST
+	// stay within these half-extents. Stating them deterministically — and asking for
+	// a small safety margin — keeps the Generator inside the analytic envelope gate
+	// (the dominant cause of fallbacks is a slab/finial whose AABB just pokes past a
+	// wall).
+	hx, hy, hz := c.Envelope.Size.X/2, c.Envelope.Size.Y/2, c.Envelope.Size.Z/2
+	boundsNote := fmt.Sprintf(
+		"\n\nHARD BOUNDS (envelope half-extents, centred on the origin): "+
+			"X in [%.2f, %.2f], Y in [%.2f, %.2f], Z in [%.2f, %.2f]. "+
+			"For EVERY op, pos.AXIS ± scale.AXIS/2 must lie within these limits — keep a ~10%% margin off each "+
+			"wall. The base sits on the floor (lowest point near Y=%.2f); build upward from there.",
+		-hx, hx, -hy, hy, -hz, hz, -hy,
+	)
+
 	user := fmt.Sprintf(
-		"Build the geometry for this Task.\n\nBuild contract:\n%s\n\nWorld context:\n%s\n\n"+
+		"Build the geometry for this Task.\n\nBuild contract:\n%s\n\nWorld context:\n%s%s%s\n\n"+
 			"Produce 3–8 ops that form a recognizable, structurally-plausible %s for a moon-base dome. "+
-			"Keep every op inside the envelope; rise from the ground up.",
-		string(contractJSON), string(worldJSON), c.Type,
+			"Keep every op strictly inside the HARD BOUNDS above; rise from the ground up.",
+		string(contractJSON), string(worldJSON), neighbourNote, boundsNote, c.Type,
 	)
 
 	if c.TaskID == "" || c.Type == "" {

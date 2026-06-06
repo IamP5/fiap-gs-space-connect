@@ -1,17 +1,21 @@
 // Command bake is the SwarmBuild offline generation step (TECHSPEC §3/§4,
-// ADR-0007): it generates ONE demo Task's Build spec via a GPT-class model and
-// writes it to the committed cache, so the headline replays it deterministically
-// with no live model call. It is the ONLY binary that reaches the Model seam.
+// ADR-0007/0008): it runs the Generator↔Evaluator refine loop for demo Task(s) via
+// a GPT-class model and writes the approved Build spec(s) + per-Task trace sidecars
+// to the committed cache, so the headline replays them deterministically with no
+// live model call. It is the ONLY binary that reaches the Model seam.
 //
 // Usage:
 //
 //	set -a; . ./.env; set +a            # load OPENAI_API_KEY (never commit .env)
-//	go run ./cmd/bake -task foundation-1 -type foundation
+//	go run ./cmd/bake -task foundation-1 -type foundation   # bake ONE task
+//	go run ./cmd/bake -all                                   # bake the WHOLE dome
 //
-// Flags select the demo Task, provider (base_url swap) and model id. The API key
-// is read from the environment ONLY (OPENAI_API_KEY) and never logged or shipped
-// anywhere near the browser. On model exhaustion bake exits non-zero and writes
-// nothing — the demo Task then falls back to the primitive geometry.
+// -all bakes every demo Blueprint Task in dependency order (foundations → walls →
+// dome-cap), writing a spec + trace per Task and printing the operator review
+// (which Tasks fell back ∪ which were cached quality_flag:low). The API key is read
+// from the environment ONLY and never logged or shipped near the browser. On model
+// exhaustion a Task falls back to the primitive (the dome still completes); a hard
+// generation/IO error exits non-zero.
 package main
 
 import (
@@ -25,6 +29,7 @@ import (
 	"path/filepath"
 	"strings"
 	"swarmbuild/internal/core/domain"
+	"swarmbuild/internal/demo"
 	"swarmbuild/internal/harness/bake"
 	"swarmbuild/internal/harness/cache"
 	"swarmbuild/internal/harness/model"
@@ -48,7 +53,8 @@ func run() error {
 		modelID  = flag.String("model", "gpt-4o-2024-08-06", "model id (GPT-class)")
 		outDir   = flag.String("out", "", "cache output dir (empty ⇒ committed internal/harness/cache/specs)")
 		envFile  = flag.String("env", ".env", "optional .env file to load for the key (never committed)")
-		timeout  = flag.Duration("timeout", 60*time.Second, "overall generation timeout")
+		timeout  = flag.Duration("timeout", 60*time.Second, "overall generation timeout (per bake run)")
+		all      = flag.Bool("all", false, "bake EVERY demo Blueprint Task in dependency order (the whole dome) + emit the operator review")
 	)
 	flag.Parse()
 
@@ -86,6 +92,10 @@ func run() error {
 		return err
 	}
 
+	if *all {
+		return bakeAll(m, store, dir, *provider, *modelID, baseURLResolved, *timeout)
+	}
+
 	contract, err := bake.DemoContract(domain.TaskID(*taskID), domain.TaskType(*taskType))
 	if err != nil {
 		return err
@@ -104,9 +114,64 @@ func run() error {
 		return err
 	}
 
-	slog.Info("baked", "ops", res.Ops, "key", res.Key.Filename(), "path", res.Path)
-	fmt.Printf("OK baked %s/%s: %d ops → %s\n", res.Key.BlueprintID, res.Key.TaskID, res.Ops, res.Path)
+	slog.Info("baked", "ops", res.Ops, "key", res.Key.Filename(), "path", res.Path, "quality", res.QualityFlag)
+	fmt.Printf("OK baked %s/%s: %d ops (%s) → %s\n", res.Key.BlueprintID, res.Key.TaskID, res.Ops, res.QualityFlag, res.Path)
 	return nil
+}
+
+// bakeAll bakes the WHOLE demo dome in dependency order via bake.BakeAll, prints the
+// operator review, and writes it beside the cache as REVIEW.md. A per-Task fallback
+// (model exhaustion) does NOT abort — that Task uses the primitive and is listed in
+// the review; only a hard build/IO error fails the run.
+func bakeAll(m model.Model, store *cache.Store, dir, provider, modelID, baseURL string, timeout time.Duration) error {
+	tasks := demoPlanTasks()
+
+	ctx, cancel := context.WithTimeout(context.Background(), timeout*time.Duration(len(tasks)+1))
+	defer cancel()
+
+	slog.Info("baking ALL demo tasks", "provider", provider, "model", modelID, "tasks", len(tasks), "base_url", baseURL)
+	results, review, err := bake.All(ctx, m, store, tasks, bake.DemoContract, provider, modelID)
+	if err != nil {
+		return fmt.Errorf("bake-all: %w", err)
+	}
+
+	for _, r := range results {
+		switch {
+		case r.FellBack():
+			slog.Warn("task fell back", "task", r.TaskID, "reason", r.Result.Reason)
+		case r.LowQuality():
+			slog.Warn("task cached low-quality", "task", r.TaskID, "reason", r.Result.Reason)
+		default:
+			slog.Info("task baked", "task", r.TaskID, "ops", r.Result.Ops, "quality", r.Result.QualityFlag)
+		}
+	}
+
+	summary := review.Summary()
+	fmt.Print("\n" + summary)
+
+	reviewPath := filepath.Join(dir, "REVIEW.md")
+	if wErr := os.WriteFile(reviewPath, []byte("```\n"+summary+"```\n"), 0o600); wErr != nil {
+		return fmt.Errorf("write operator review %q: %w", reviewPath, wErr)
+	}
+	slog.Info("operator review written", "path", reviewPath, "cached", review.Cached, "fellback", len(review.FellBack), "lowquality", len(review.LowQual))
+	return nil
+}
+
+// demoPlanTasks adapts the demo dome Blueprint (internal/demo) into the bake
+// package's self-contained PlanTask shape (id/type/deps/pos), so bake-all generates
+// in the real blueprint's dependency order with the real worksite positions.
+func demoPlanTasks() []bake.PlanTask {
+	bp := demo.DomeBlueprint()
+	tasks := make([]bake.PlanTask, 0, len(bp))
+	for _, bt := range bp {
+		tasks = append(tasks, bake.PlanTask{
+			ID:   bt.Task.ID,
+			Type: bt.Task.Type,
+			Deps: bt.Task.Deps,
+			Pos:  bt.Pos,
+		})
+	}
+	return tasks
 }
 
 // resolveBaseURL maps a provider label to its OpenAI-compatible base_url, unless

@@ -10,20 +10,45 @@ import (
 // the cache key stay in lockstep on the demo blueprint id.
 const DemoBlueprintID = cache.DemoBlueprintID
 
+// The demo dome's three task types (the blueprint contract — rovers advertise these
+// as capabilities and the auction matches on them, so the string values must match
+// internal/demo).
+const (
+	typeFoundation domain.TaskType = "foundation"
+	typeWall       domain.TaskType = "wall"
+	typeDomeCap    domain.TaskType = "dome-cap"
+)
+
 // demoEnvelopes are reasonable Build envelopes per demo task type, big enough to
 // hold a small plinth/wall/cap. Center at the origin: the spec is expressed in the
 // Task's envelope frame.
 var demoEnvelopes = map[domain.TaskType]Envelope{
-	"foundation": {Center: Vec3{}, Size: Vec3{X: 2.0, Y: 1.6, Z: 2.0}},
-	"wall":       {Center: Vec3{}, Size: Vec3{X: 2.0, Y: 2.6, Z: 1.2}},
-	"dome-cap":   {Center: Vec3{}, Size: Vec3{X: 2.6, Y: 2.6, Z: 2.6}},
+	typeFoundation: {Center: Vec3{}, Size: Vec3{X: 3.0, Y: 2.4, Z: 3.0}},
+	typeWall:       {Center: Vec3{}, Size: Vec3{X: 3.0, Y: 3.6, Z: 2.0}},
+	typeDomeCap:    {Center: Vec3{}, Size: Vec3{X: 3.6, Y: 3.6, Z: 3.6}},
 }
 
-// demoDone is the measurable "done" guidance per task type.
-var demoDone = map[domain.TaskType]string{
-	"foundation": "a stable plinth: a slab base with supporting pillars and a small finial, clearly richer than a single block",
-	"wall":       "several stacked courses rising to a coping stone, forming one segment of the dome wall",
-	"dome-cap":   "a keystone ring topped by a cap, closing the dome",
+// demoDone is the measurable "done" per task type: human guidance PLUS the
+// analytic criteria the Evaluator's hard gate checks (MinOps so a structure is
+// "richer than a single block", MinCoverage so it meaningfully fills its envelope).
+// These are deliberately modest so a real GPT-class spec clears them while a
+// degenerate single-block spec is rejected.
+var demoDone = map[domain.TaskType]Done{
+	typeFoundation: {
+		Description: "a stable plinth: a slab base with supporting pillars and a small finial, clearly richer than a single block",
+		MinOps:      3,
+		MinCoverage: 0.02,
+	},
+	typeWall: {
+		Description: "several stacked courses rising to a coping stone, forming one segment of the dome wall",
+		MinOps:      3,
+		MinCoverage: 0.02,
+	},
+	typeDomeCap: {
+		Description: "a keystone ring topped by a cap, closing the dome",
+		MinOps:      3,
+		MinCoverage: 0.015,
+	},
 }
 
 // DemoContract builds the Build contract for one demo dome Task of the given type
@@ -34,12 +59,16 @@ func DemoContract(taskID domain.TaskID, taskType domain.TaskType) (Contract, err
 	if !ok {
 		return Contract{}, fmt.Errorf("bake: no demo envelope for task type %q", taskType)
 	}
+	done, ok := demoDone[taskType]
+	if !ok {
+		return Contract{}, fmt.Errorf("bake: no demo done-criteria for task type %q", taskType)
+	}
 	return Contract{
 		BlueprintID: DemoBlueprintID,
 		TaskID:      taskID,
 		Type:        taskType,
 		Envelope:    env,
-		Done:        Done{Description: demoDone[taskType]},
+		Done:        done,
 		Style:       "moon-base habitat, pale prefab panels, brushed metal accents",
 	}, nil
 }
