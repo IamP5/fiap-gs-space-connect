@@ -160,12 +160,28 @@ func (c *Catalog) Keys() []string {
 // are self-hosted URLs under the curated /assets/ mount.
 func DefaultCatalog() *Catalog {
 	return NewCatalog(
-		NewEntry("habitat-dome", "/assets/habitat-dome.glb",
-			[]domain.TaskType{"dome-cap"}, Identity()),
-		NewEntry("habitat-foundation", "/assets/habitat-foundation.glb",
-			[]domain.TaskType{"foundation"}, Identity()),
-		NewEntry("habitat-wall", "/assets/habitat-wall.glb",
-			[]domain.TaskType{"wall"}, Identity()),
+		// Habitat / base Assets (#55), NASA-PD, self-hosted under web/public/assets/
+		// (see CREDITS.md). Each .glb variant is a distinct key. Transforms are
+		// hand-tuned fit/orientation nudges to seat each raw model in a unit-ish
+		// Build envelope; geometry-level fixes are baked offline (ADR-0010).
+
+		// Radome — a clean self-contained dome, the cap of the structure.
+		NewEntry("habitat-radome", "/assets/models/radome.glb",
+			[]domain.TaskType{"dome-cap"},
+			Transform{Scale: domain.Vec3{X: 0.5, Y: 0.5, Z: 0.5}}),
+
+		// Habitat Demonstration Unit, part 1 — the base/foundation module shell.
+		NewEntry("habitat-demo-unit-1", "/assets/models/habitat-demo-unit-1.glb",
+			[]domain.TaskType{"foundation"},
+			Transform{Scale: domain.Vec3{X: 0.25, Y: 0.25, Z: 0.25}}),
+
+		// Habitat Demonstration Unit, part 2 — the upper wall module.
+		NewEntry("habitat-demo-unit-2", "/assets/models/habitat-demo-unit-2.glb",
+			[]domain.TaskType{"wall"},
+			Transform{Scale: domain.Vec3{X: 0.25, Y: 0.25, Z: 0.25}}),
+
+		// TODO(#57): solar-panel / comms-mast are placeholders pending their own
+		// vendored glbs; left intact so the catalog keeps resolving those keys.
 		NewEntry("solar-panel", "/assets/solar-panel.glb",
 			[]domain.TaskType{"panel"}, Identity()),
 		NewEntry("comms-mast", "/assets/comms-mast.glb",
