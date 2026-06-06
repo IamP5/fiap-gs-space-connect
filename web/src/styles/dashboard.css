@@ -667,6 +667,132 @@
   gap: var(--s-md);
 }
 
+/* ---- in-app live lab (bh-07a) ----
+   A pick-a-Task + Generate-live control plus the agent console: the streamed
+   "watch it think" feed of the real Generator↔Evaluator loop. Off the headline. */
+.lab-caption {
+  margin: 0;
+  font-family: var(--ui);
+  font-size: 11px;
+  line-height: 1.45;
+  color: var(--ink-mute);
+}
+
+.lab-controls {
+  display: flex;
+  align-items: center;
+  gap: var(--s-sm);
+  flex-wrap: wrap;
+}
+
+.lab-control-label {
+  font-family: var(--ui);
+  font-size: 11px;
+  letter-spacing: 0.6px;
+  text-transform: uppercase;
+  color: var(--ink-mute);
+}
+
+.lab-select {
+  flex: 1 1 auto;
+  min-width: 120px;
+  background: var(--canvas-night);
+  color: var(--on-primary-mute);
+  border: 1px solid var(--hairline-on-dark);
+  border-radius: var(--r-xs);
+  padding: 5px 7px;
+  font-family: var(--ui);
+  font-size: 12px;
+}
+
+.lab-generate-btn {
+  flex: none;
+  background: var(--on-primary-mute);
+  color: var(--canvas-night);
+  border: none;
+  border-radius: var(--r-xs);
+  padding: 6px 11px;
+  font-family: var(--ui);
+  font-size: 12px;
+  font-weight: 600;
+  letter-spacing: 0.4px;
+  cursor: pointer;
+}
+
+.lab-generate-btn:disabled {
+  opacity: 0.55;
+  cursor: progress;
+}
+
+.lab-error {
+  margin: 0;
+  font-family: var(--ui);
+  font-size: 11px;
+  color: var(--signal-down, #e74c3c);
+}
+
+/* The agent console — a scrollable, monospace-ish log of streamed events. */
+.lab-console {
+  list-style: none;
+  margin: 0;
+  padding: var(--s-sm);
+  max-height: 220px;
+  overflow-y: auto;
+  background: var(--canvas-night);
+  border: 1px solid var(--hairline-on-dark);
+  border-radius: var(--r-xs);
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+
+.lab-line {
+  font-family: var(--mono, ui-monospace, "SF Mono", Menlo, monospace);
+  font-size: 11px;
+  line-height: 1.4;
+  color: var(--on-primary-mute);
+  word-break: break-word;
+}
+
+.lab-line-idle {
+  color: var(--ink-mute);
+  font-style: italic;
+}
+
+.lab-tag {
+  display: inline-block;
+  margin-right: 6px;
+  padding: 0 5px;
+  border-radius: 3px;
+  background: var(--canvas-night-soft);
+  border: 1px solid var(--hairline-on-dark);
+  font-size: 10px;
+  letter-spacing: 0.4px;
+  text-transform: uppercase;
+  color: var(--ink-mute);
+}
+
+.lab-line-verdict.is-pass,
+.lab-line-done.is-pass {
+  color: #2ecc71;
+}
+
+.lab-line-verdict.is-fail,
+.lab-line-done.is-fail,
+.lab-line-error {
+  color: #f5a623;
+}
+
+.lab-line-error {
+  color: #e74c3c;
+}
+
+.lab-evidence,
+.lab-reasons,
+.lab-ops-shapes {
+  color: var(--ink-mute);
+}
+
 /* ---- partition narrative (CRDT, issue 10) ----
    A self-contained, deterministic replay of the proven World Model merge: two
    divergent rover views of the same task, shown SIDE BY SIDE, reconcile to the
@@ -884,5 +1010,139 @@
 }
 
 .encore-cancel:hover {
+  color: var(--on-primary-mute);
+}
+
+/* ---- blueprint palette (drag-to-place, bh-05) ----
+   Docks top-left, just right of the ledger, so it never covers the worksite or
+   the task list. Same flat dark chrome as the other panels. */
+.blueprint-palette {
+  position: absolute;
+  top: var(--s-xl);
+  left: calc(268px + var(--s-xl) * 2);
+  width: 248px;
+  max-height: calc(100% - var(--s-xl) * 2);
+  overflow-y: auto;
+  padding: var(--s-xl);
+  background: var(--canvas-night-soft);
+  border: 1px solid var(--hairline-on-dark);
+  border-radius: var(--r-xs);
+  z-index: 2;
+  display: flex;
+  flex-direction: column;
+  gap: var(--s-md);
+}
+
+.bp-list {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: var(--s-xs);
+}
+
+.bp-item {
+  width: 100%;
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  padding: var(--s-md);
+  text-align: left;
+  background: transparent;
+  border: 1px solid var(--hairline-on-dark);
+  border-radius: var(--r-xs);
+  cursor: pointer;
+  color: var(--on-primary);
+}
+
+.bp-item:hover {
+  border-color: var(--on-primary-mute);
+}
+
+.bp-item.is-active {
+  border-color: var(--signal-warn);
+}
+
+.bp-name {
+  font-family: var(--display);
+  font-size: 14px;
+  font-weight: 700;
+  letter-spacing: 0.6px;
+  text-transform: uppercase;
+}
+
+.bp-desc {
+  font-family: var(--ui);
+  font-size: 11px;
+  color: var(--ink-mute);
+}
+
+.bp-placing {
+  display: flex;
+  flex-direction: column;
+  gap: var(--s-md);
+  padding-top: var(--s-md);
+  border-top: 1px solid var(--hairline-on-dark);
+}
+
+.bp-hint {
+  margin: 0;
+  font-family: var(--ui);
+  font-size: 12px;
+  color: var(--ink-mute);
+}
+
+.bp-valid {
+  margin: 0;
+  font-family: var(--ui);
+  font-size: 12px;
+  font-weight: 700;
+  color: var(--signal-ok, #2ecc71);
+}
+
+.bp-invalid {
+  margin: 0;
+  font-family: var(--ui);
+  font-size: 12px;
+  font-weight: 700;
+  color: var(--signal-down, #e74c3c);
+}
+
+.bp-actions {
+  display: flex;
+  gap: var(--s-md);
+}
+
+.bp-confirm {
+  flex: 1;
+  padding: var(--s-md);
+  font-family: var(--display);
+  font-weight: 700;
+  letter-spacing: 0.6px;
+  text-transform: uppercase;
+  color: var(--canvas-night, #0b0b0f);
+  background: var(--on-primary);
+  border: none;
+  border-radius: var(--r-xs);
+  cursor: pointer;
+}
+
+.bp-confirm:disabled {
+  opacity: 0.4;
+  cursor: not-allowed;
+}
+
+.bp-cancel {
+  padding: var(--s-md);
+  font-family: var(--ui);
+  color: var(--ink-mute);
+  background: transparent;
+  border: 1px solid var(--hairline-on-dark);
+  border-radius: var(--r-xs);
+  cursor: pointer;
+}
+
+.bp-cancel:hover {
   color: var(--on-primary-mute);
 }

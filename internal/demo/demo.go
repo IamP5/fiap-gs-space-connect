@@ -22,7 +22,7 @@ import (
 	"swarmbuild/internal/agent"
 	"swarmbuild/internal/coordinator"
 	"swarmbuild/internal/core/domain"
-	"swarmbuild/internal/wire"
+	"swarmbuild/internal/harness/cache"
 	"time"
 )
 
@@ -132,41 +132,12 @@ func DomeScenario(natsURL string, cfg Config) coordinator.Config {
 		TTLFactor:      cfg.TTLFactor,
 		SnapshotHz:     cfg.SnapshotHz,
 		ScriptedKills:  scripted,
-		BuildSpecs:     SampleBuildSpecs(),
-	}
-}
-
-// SampleBuildSpecs is a TEMPORARY hardcoded Build spec (bh-01) attached to a
-// single demo Task to prove the geometry-as-data seam end-to-end: the spec rides
-// the real WS snapshot and the renderer interprets it into a richer structure
-// than the primitive fallback, live over the WebSocket. There is NO LLM here.
-//
-// It drives foundation-1 — a non-hot-path Task that is NOT the scripted kill
-// target (wall-1) — so the kill→heal money shot is untouched. A later slice
-// replaces this with generated/cached specs streamed over NATS; until then this
-// is the only Task with a Build spec, and every other Task renders exactly as
-// before (the fallback stays provably invisible).
-func SampleBuildSpecs() map[domain.TaskID][]wire.BuildOp {
-	const place = wire.BuildOpPlace
-	rough := 0.85
-	metal := 0.1
-	mat := func(color string) wire.Material {
-		return wire.Material{Color: color, Roughness: &rough, Metalness: &metal}
-	}
-	unit := domain.Vec3{X: 1, Y: 1, Z: 1}
-	noRot := domain.Vec3{X: 0, Y: 0, Z: 0}
-
-	// A small plinth (base slab + two pillars + a sphere finial) — clearly richer
-	// than the single foundation block the primitive renders. Coordinates are in
-	// the Task's Build-envelope frame (renderer-relative units).
-	return map[domain.TaskID][]wire.BuildOp{
-		"foundation-1": {
-			{Op: place, Shape: wire.ShapeBox, Pos: domain.Vec3{X: 0, Y: 0.15, Z: 0}, Rot: noRot, Scale: domain.Vec3{X: 1.4, Y: 0.3, Z: 1.4}, Material: mat("#cfcfd6")},
-			{Op: place, Shape: wire.ShapeCylinder, Pos: domain.Vec3{X: -0.45, Y: 0.7, Z: -0.45}, Rot: noRot, Scale: domain.Vec3{X: 0.2, Y: 0.9, Z: 0.2}, Material: mat("#b8b8c2")},
-			{Op: place, Shape: wire.ShapeCylinder, Pos: domain.Vec3{X: 0.45, Y: 0.7, Z: 0.45}, Rot: noRot, Scale: domain.Vec3{X: 0.2, Y: 0.9, Z: 0.2}, Material: mat("#b8b8c2")},
-			{Op: place, Shape: wire.ShapeSphere, Pos: domain.Vec3{X: 0, Y: 1.3, Z: 0}, Rot: noRot, Scale: domain.Vec3{X: 0.45, Y: 0.45, Z: 0.45}, Material: mat("#e0e0ea")},
-			{Op: place, Shape: wire.ShapeBox, Pos: domain.Vec3{X: 0, Y: 0.45, Z: 0}, Rot: domain.Vec3{X: 0, Y: math.Pi / 4, Z: 0}, Scale: unit, Material: mat("#c4c4ce")},
-		},
+		// No static BuildSpecs (bh-02): the structure now rises op-by-op as each
+		// winning Rover STREAMS its deterministic build-op sequence on
+		// build.op.<task> (internal/agent/opsource.go stands in for the LLM). The
+		// coordinator appends and mirrors those ops, so the spec accumulates live and
+		// — the headline — survives a kill: the replacement Rover resumes appending
+		// from the partial structure (ADR-0007).
 	}
 }
 
@@ -206,6 +177,12 @@ func DomeBlueprint() []coordinator.BlueprintTask {
 // DomeRovers is the fixed six-rover swarm parked below the worksite, each
 // capable of every task type so any standby can heal any wall. Fixed positions
 // and staggered batteries make every auction's winner deterministic.
+//
+// Every rover carries the demo BlueprintID, so while working a Task it consults
+// the embedded baked-spec cache (bh-03, ADR-0007): a HIT replays the committed,
+// generated spec deterministically (no model call); a MISS falls back to the
+// deterministic primitive op stream. The replay rides the exact same
+// build.op.<task> path as the primitive stream, so resume-on-kill is unchanged.
 func DomeRovers() []agent.Config {
 	caps := []domain.Capability{
 		domain.Capability(taskFoundation),
@@ -219,6 +196,7 @@ func DomeRovers() []agent.Config {
 			Pos:          domain.Vec2{X: float64(-50 + i*20), Y: -70},
 			Battery:      1.0 - float64(i)*0.05,
 			Capabilities: caps,
+			BlueprintID:  cache.DemoBlueprintID,
 		})
 	}
 	return rovers
