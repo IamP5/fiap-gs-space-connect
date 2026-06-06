@@ -9,18 +9,20 @@
 //      useMemo (random points on a large sphere shell). NO useFrame: twinkling
 //      would pin the demand loop at 60fps. (drei's <Stars> animates per-frame,
 //      so it is intentionally NOT used here.)
-//   2. A SELF-HOSTED HDR via drei's <Environment files=... background> — this is
-//      both the skybox AND the PBR image-based lighting source, so metallic
-//      glTFs (the Kenney hangar dome) show real reflections. We use files=
-//      (a vendored CC0 .hdr in /public), NEVER preset= (which fetches a CDN).
-//      The cubemap renders once on load → demand-safe.
+//   2. A SELF-HOSTED HDR via drei's <Environment files=...> used for PBR
+//      image-based lighting ONLY (no `background`), so metallic glTFs (the
+//      Kenney hangar dome) show real reflections. The visible sky stays the
+//      starfield over the Canvas's black background — this is the MOON, so the
+//      skybox must read as space, NOT the terrestrial horizon baked into the
+//      HDRI. We use files= (a vendored CC0 .hdr in /public), NEVER preset=
+//      (which fetches a CDN). The cubemap renders once on load → demand-safe.
 //
 // GRACEFUL FALLBACK: drei's <Environment files> uses useLoader, which SUSPENDS
 // while loading and THROWS if the file is missing/corrupt. We wrap it in a
 // Suspense (so it never blocks first paint) AND an error boundary (so a failed
-// HDR is swallowed) — the black <color attach="background"> in the Canvas then
-// remains as the backdrop and the scene never goes blank. (The mandatory
-// "primitive fallback for every asset" rule from ADR-0004.)
+// HDR is swallowed) — the starfield + the black <color attach="background"> in
+// the Canvas then remain as the backdrop and the scene never goes blank. (The
+// mandatory "primitive fallback for every asset" rule from ADR-0004.)
 //
 // invalidate() is called ONCE when the HDR finishes loading so the demand loop
 // paints the new skybox + IBL; after that the loop returns to 0 idle fps.
@@ -49,17 +51,20 @@ class EnvErrorBoundary extends Component<{ children: ReactNode }, { failed: bool
   }
 }
 
-// The self-hosted HDR skybox + IBL. Kept in its own component so it sits under
-// the Suspense boundary; it wakes the demand loop once on (re)load.
+// The self-hosted HDR as the IBL source (no `background` — the starfield/black
+// is the visible space sky). Kept in its own component so it sits under the
+// Suspense boundary; it wakes the demand loop once on (re)load.
 function HdrBackdrop() {
   const invalidate = useThree((s) => s.invalidate);
   // <Environment files> suspends until the .hdr is decoded; this effect runs on
   // the FIRST committed render after it resolves — i.e. once, on load — so we
-  // paint the new skybox + reflections without any per-frame work.
+  // paint the new reflections without any per-frame work.
   useEffect(() => {
     invalidate();
   }, [invalidate]);
-  return <Environment files={HDR_FILE} background />;
+  // IBL only: no `background`, so the HDRI lights metals but is never shown as
+  // the sky (it's a terrestrial HDRI — its horizon/trees must not appear in space).
+  return <Environment files={HDR_FILE} />;
 }
 
 // A static starfield: points on a sphere shell, generated once. No useFrame.
