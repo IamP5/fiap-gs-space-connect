@@ -130,6 +130,63 @@ function loadTexture(
   };
 }
 
+// Terminator rim-glow + limb darkening shader patch (#103). A STATIC
+// onBeforeCompile tweak to the Moon's MeshStandardMaterial (same pattern as the
+// starfield's pointsMaterial patch in SpaceEnvironment.tsx:244) — no useFrame, so
+// it paints only on invalidate() and the globe stays at 0 idle fps.
+//
+// Two cheap, purely view-dependent effects evaluated in the fragment shader, just
+// before tone-mapping is applied to the accumulated lit colour:
+//   • LIMB DARKENING — the silvery Apollo limb dims toward the silhouette edge,
+//     where the line of sight grazes the regolith at a glancing angle (more
+//     intervening shadowed micro-relief). `rim` rises from 0 at disc-centre to 1
+//     at the edge via smoothstep on (1 - |dot(viewDir, normal)|); the lit colour
+//     is multiplied DOWN toward the edge, with a faint WARM grazing tint so the
+//     darkened limb reads as sunlit silver rock, not a grey vignette.
+//   • TERMINATOR RIM-GLOW — a faint COOL emissive added at that same grazing edge,
+//     a thin silver halo around the limb (the soft scattered light along the
+//     Apollo terminator). Kept faint and additive so it never blooms (the Moon is
+//     NOT on a bloom layer) and never washes out the crater relief.
+//
+// Crater detail is the NORMAL map, untouched: we read `normal` (the per-fragment
+// normal three has ALREADY perturbed by the normal map) only to compute the limb
+// factor, and we touch only the final `gl_FragColor.rgb` — diffuse/normal/
+// roughness inputs are left exactly as the stock shader assembled them.
+const MOON_RIM_GLOW_COLOR = new THREE.Color("#8fb4ff"); // faint cool silver halo
+const MOON_LIMB_WARM_TINT = new THREE.Color("#fff1dc"); // warm grazing-light tint
+
+function patchMoonLimbShader(material: THREE.MeshStandardMaterial) {
+  material.onBeforeCompile = (shader) => {
+    shader.uniforms.uRimColor = { value: MOON_RIM_GLOW_COLOR };
+    shader.uniforms.uWarmTint = { value: MOON_LIMB_WARM_TINT };
+    // `vViewPosition` (the view-space → camera vector) and `normal` (the
+    // normal-mapped per-fragment normal) are both already in scope in the standard
+    // fragment shader; we declare our two uniforms then add the limb maths just
+    // before tone-mapping.
+    shader.fragmentShader = shader.fragmentShader
+      .replace(
+        "void main() {",
+        ["uniform vec3 uRimColor;", "uniform vec3 uWarmTint;", "", "void main() {"].join("\n"),
+      )
+      .replace(
+        "#include <tonemapping_fragment>",
+        [
+          "{",
+          "  vec3 vDir = normalize( vViewPosition );",
+          "  float ndv = abs( dot( vDir, normalize( normal ) ) );",
+          "  float rim = smoothstep( 0.7, 1.0, 1.0 - ndv );",
+          "  // Limb darkening: dim toward the edge, with a faint warm grazing tint.",
+          "  float darken = mix( 1.0, 0.62, rim );",
+          "  gl_FragColor.rgb *= mix( vec3( 1.0 ), uWarmTint, rim * 0.5 ) * darken;",
+          "  // Terminator rim-glow: a faint cool silver halo at the grazing edge.",
+          "  gl_FragColor.rgb += uRimColor * ( rim * rim ) * 0.14;",
+          "}",
+          "#include <tonemapping_fragment>",
+        ].join("\n"),
+      );
+  };
+}
+
 // The Moon globe, shown ONLY in orbit view. Two LOD levels (drei <Detailed> =
 // THREE.LOD): L0 color+normal+roughness, L1 color+normal. Relief is the normal
 // map (NEVER displacementMap).
@@ -174,6 +231,11 @@ function MoonGlobe({ visible }: { visible: boolean }) {
     // tier and delivered at 4096×2048 — 4× the prior linear detail.)
     matNear.normalScale.set(0.9, 0.9);
     matFar.normalScale.set(0.6, 0.6);
+    // Terminator rim-glow + limb darkening (#103). Patched onto BOTH LOD materials
+    // (the far/L1 is MATCHED to the near/L1) so the limb reads identically across
+    // the LOD switch — no pop at MOON_LOD_SWITCH. Static shader: 0 idle fps.
+    patchMoonLimbShader(matNear);
+    patchMoonLimbShader(matFar);
     return { geomNear, geomFar, matNear, matFar };
   }, []);
 

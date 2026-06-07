@@ -1040,7 +1040,7 @@
       "area": "realistic-3d-world",
       "title": "Moon shader polish (terminator rim-glow + limb darkening)",
       "user_visible_behavior": "The Moon shows a silver terminator rim-glow and limb darkening toward the edge.",
-      "status": "not_started",
+      "status": "passing",
       "issue": 103,
       "epic": 46,
       "depends_on": [],
@@ -1048,7 +1048,9 @@
         "cd web && npm run build && npm test (TS-clean + vitest)",
         "manual: orbit & surface screenshots; animated slices pause when the tab is hidden"
       ],
-      "evidence": [],
+      "evidence": [
+        "branch worktree-agent-acd66b8ec61fb159a (PR #103): onBeforeCompile patch on both Moon LOD materials (SkyBodies.tsx) — smoothstep(0.7,1.0,1-|dot(viewDir,normal)|) rim drives limb darkening (warm grazing tint, *0.62) + faint cool emissive rim-glow before tonemapping; normal map untouched, not on a bloom layer, 0 idle fps. lint+build+test green."
+      ],
       "notes": "Wave 3 (cinematic beauty & immersion). AFK."
     },
     {
