@@ -38,7 +38,7 @@
 
 import { memo, useEffect, useMemo, useRef, useState } from "react";
 import { Canvas, useFrame, useThree, type ThreeEvent } from "@react-three/fiber";
-import { ContactShadows, Line, OrbitControls } from "@react-three/drei";
+import { ContactShadows, Instance, Instances, Line, OrbitControls } from "@react-three/drei";
 import { SpaceEnvironment } from "./SpaceEnvironment";
 import { SkyBodies } from "./SkyBodies";
 import {
@@ -50,7 +50,7 @@ import {
   SMAA,
   Vignette,
 } from "@react-three/postprocessing";
-import { BlendFunction, KernelSize } from "postprocessing";
+import { BlendFunction, KernelSize, type SelectiveBloomEffect } from "postprocessing";
 import * as THREE from "three";
 import type { RoverView, Snapshot, TaskView, Vec2 } from "../types/wire";
 import { batteryPercent } from "../lib/format";
@@ -69,7 +69,9 @@ import {
 import {
   type ActiveBeat,
   activeBeats,
+  activeBidders,
   beatProgress,
+  bidWarStrobe,
   earthriseEnvelope,
   launchShake,
 } from "../lib/choreography";
@@ -274,10 +276,95 @@ function dimRoverModel(obj: THREE.Object3D): THREE.Material[] {
 // asset never breaks the rover. The `dim` flag (dead rover) dims BOTH paths: the
 // primitives via their material color, the loaded model via dimRoverModel (which
 // clones + darkens the model's materials), so a dead rover always reads as dark.
-function RoverBody({ geo, dim }: { geo: SceneGeo; dim: boolean }) {
+//
+// `revived` is the live "revived" beat progress (a ref, 0 = none, →1 = fading):
+// the body-color half of the resurrection shockwave (#107). During the beat we
+// pulse every body mesh's emissive grey→bright cyan and back, so the rover itself
+// flares as it comes back — driven by ref-mutation in useFrame, never a
+// re-render. Works on BOTH the glTF and the primitive fallback (we traverse
+// whichever is mounted under bodyRef).
+const REVIVE_FLASH = new THREE.Color(SIGNAL_REVIVE);
+function RoverBody({
+  geo,
+  dim,
+  revived,
+}: {
+  geo: SceneGeo;
+  dim: boolean;
+  revived: React.RefObject<number>;
+}) {
   const [scene, setScene] = useState<THREE.Group | null>(null);
   const invalidate = useThree((s) => s.invalidate);
+  const bodyRef = useRef<THREE.Group>(null);
   const bodyColor = dim ? "#2a2a2e" : "#f0f0fa";
+
+  // Materials we CLONE for the resurrection flash, so mutating emissive never
+  // touches the SHARED cached glTF materials (which a live rover reuses — dimming
+  // them would flash every other rover). Cloned lazily on the first flash frame,
+  // then owned + disposed on unmount. The primitive fallback already has its own
+  // per-mesh materials, but we clone uniformly so the reset path is identical.
+  const flashMats = useRef<THREE.MeshStandardMaterial[] | null>(null);
+  const flashing = useRef(false);
+
+  // Resurrection body flash (#107): pulse every body mesh's emissive toward bright
+  // cyan at the comeback and ease back as the shockwave ring expands. A no-op when
+  // no beat is live (progress 0); we reset emissive to 0 exactly once the beat
+  // clears, so this costs nothing between revivals — demand-safe.
+  useFrame(() => {
+    const group = bodyRef.current;
+    if (!group) return;
+    const p = revived.current ?? 0;
+    if (p <= 0) {
+      if (!flashing.current) return; // already idle — nothing to reset
+      flashing.current = false; // fall through once to reset the flash mats to 0
+    } else {
+      flashing.current = true;
+      if (!flashMats.current) {
+        // First flash ever for this body: clone each body material ONCE so we
+        // mutate copies, not the SHARED cached glTF originals (which live rovers
+        // reuse). The clones stay on the meshes and are reused across every later
+        // flash — never re-cloned — and disposed on unmount, so repeated revivals
+        // leak nothing.
+        const owned: THREE.MeshStandardMaterial[] = [];
+        group.traverse((o) => {
+          const mesh = o as THREE.Mesh;
+          if (!mesh.isMesh || !mesh.material) return;
+          if (Array.isArray(mesh.material)) {
+            mesh.material = mesh.material.map((m) => {
+              const c = m.clone() as THREE.MeshStandardMaterial;
+              owned.push(c);
+              return c;
+            });
+          } else {
+            const c = mesh.material.clone() as THREE.MeshStandardMaterial;
+            owned.push(c);
+            mesh.material = c;
+          }
+        });
+        flashMats.current = owned;
+      }
+    }
+    // Brightness peaks early (1 - p) so the flash is strongest at the comeback.
+    const intensity = p > 0 ? (1 - p) * 1.6 : 0;
+    for (const sm of flashMats.current ?? []) {
+      if (!sm.emissive) continue;
+      sm.emissive.copy(REVIVE_FLASH);
+      sm.emissiveIntensity = intensity;
+    }
+  });
+
+  // Dispose the flash material clones we own on unmount/reload (never the shared
+  // cached materials, which the clones replaced on the mesh but did not free). Runs
+  // on a body swap (primitive → glTF) too, resetting `flashing` so the new body
+  // re-clones cleanly if a flash is mid-flight across the swap.
+  useEffect(
+    () => () => {
+      for (const m of flashMats.current ?? []) m.dispose();
+      flashMats.current = null;
+      flashing.current = false;
+    },
+    [scene],
+  );
 
   useEffect(() => {
     let disposed = false;
@@ -325,18 +412,24 @@ function RoverBody({ geo, dim }: { geo: SceneGeo; dim: boolean }) {
 
   if (scene) {
     // The model is pre-normalized (centered x/z, base at y=0), so it just sits at
-    // the group origin. It is raycast-suppressed, so it never steals a pick.
-    return <primitive object={scene} />;
+    // the group origin. It is raycast-suppressed, so it never steals a pick. The
+    // wrapping group is the flash traversal root (resurrection body lerp, #107).
+    return (
+      <group ref={bodyRef}>
+        <primitive object={scene} />
+      </group>
+    );
   }
 
   // PRIMITIVE fallback (ADR-0004): a low-poly box body on four short cylinder
   // wheels with a sensor mast, monochrome white, dimmed when dead. Every mesh is
   // raycast-suppressed so only the hit-proxy is pickable.
   return (
-    <group>
+    <group ref={bodyRef}>
       {/* Body — low-poly box. castShadow/receiveShadow (#104): the rover throws a
           soft sun shadow on the ground and catches shadow from its own mast. */}
       <mesh geometry={geo.body} position={[0, 0.42, 0]} raycast={() => null} castShadow receiveShadow>
+
         <meshStandardMaterial
           color={bodyColor}
           metalness={0.2}
@@ -379,6 +472,177 @@ function RoverBody({ geo, dim }: { geo: SceneGeo; dim: boolean }) {
   );
 }
 
+// ---- rover wheel dust (#107) -----------------------------------------------
+//
+// A short regolith puff kicked up when a rover MOVES — fired BY the snapshot (a
+// rover position delta between two snapshots), so it stays a pure function of the
+// world and replays deterministically. ~DUST_COUNT faded particles rise and
+// settle over DUST_MS via ONE drei <Instances> draw call (mirrors DecorRocks's
+// single-draw-call budget), then the burst clears and the loop idles again.
+//
+// DEMAND-SAFE: nothing animates between bursts. On a move we stamp a burst start
+// and invalidate(); the useFrame runs ONLY while a burst is live, keeps the loop
+// alive for its ~600ms, then stops invalidating so the scene returns to 0 idle
+// fps. Per-particle directions come from a burst-seeded deterministic PRNG
+// (decorative jitter, stable for a given rover+burst), so replay is unaffected.
+
+const DUST_COUNT = 15;
+const DUST_MS = 600;
+
+// mulberry32 — the same tiny deterministic PRNG DecorRocks uses, so a burst's
+// scatter is reproducible (decorative jitter only, never world state).
+function dustRand(seed: number) {
+  return () => {
+    seed |= 0;
+    seed = (seed + 0x6d2b79f5) | 0;
+    let t = Math.imul(seed ^ (seed >>> 15), 1 | seed);
+    t = (t + Math.imul(t ^ (t >>> 7), 61 | t)) ^ t;
+    return ((t ^ (t >>> 14)) >>> 0) / 4294967296;
+  };
+}
+
+type DustParticle = {
+  // Ground-plane launch direction + speed, plus a small per-particle scale and a
+  // phase so the puff doesn't read as a single uniform ring.
+  dx: number;
+  dz: number;
+  speed: number;
+  scale: number;
+};
+
+// A burst's particles, seeded once per spawn from the rover id so the jitter is
+// deterministic. The actual positions/opacity are computed per-frame from the
+// burst age in useFrame (no per-frame allocation).
+function makeDustParticles(seed: number): DustParticle[] {
+  const rand = dustRand(seed);
+  const out: DustParticle[] = [];
+  for (let i = 0; i < DUST_COUNT; i++) {
+    const ang = rand() * Math.PI * 2;
+    const speed = 0.5 + rand() * 0.9;
+    out.push({
+      dx: Math.cos(ang),
+      dz: Math.sin(ang),
+      speed,
+      scale: 0.05 + rand() * 0.07,
+    });
+  }
+  return out;
+}
+
+// A stable numeric seed from a rover id string (FNV-1a-ish), so each rover's dust
+// scatter is its own but reproducible across replays.
+function hashId(id: string): number {
+  let h = 0x811c9dc5;
+  for (let i = 0; i < id.length; i++) {
+    h ^= id.charCodeAt(i);
+    h = Math.imul(h, 0x01000193);
+  }
+  return h >>> 0;
+}
+
+// RoverDust emits a fading regolith puff each time the rover's snapshot position
+// changes. Mounted once per rover (inside its group); it watches `pos` and, on a
+// real delta, spawns a burst. The puff is ONE drei <Instances> (a single
+// InstancedMesh draw call): we drive each <Instance> child's transform via refs
+// and let drei compose the instance matrix. The component owns its invalidation
+// so the demand loop wakes for the puff and sleeps again after — no idle
+// animation. Non-pickable (the hit-proxy stays the sole pick target).
+function RoverDust({ pos }: { pos: Vec2 }) {
+  const invalidate = useThree((s) => s.invalidate);
+  const matRef = useRef<THREE.MeshStandardMaterial>(null);
+  // Per-instance transform handles (drei PositionMesh = a Group). We mutate these
+  // each frame; drei reads them to compose the InstancedMesh matrix.
+  const instances = useRef<(THREE.Group | null)[]>([]);
+  // Burst state in refs so a spawn never re-renders the React tree.
+  const burstStart = useRef<number>(0); // performance.now() of the live burst, 0 = idle
+  const particles = useRef<DustParticle[]>([]);
+  // Previous snapshot position, to detect a delta. Null until the first snapshot
+  // so the rover's FIRST appearance never kicks up dust (only real moves do).
+  const prevPos = useRef<Vec2 | null>(null);
+
+  // Detect a position delta on each new snapshot (pos changes only when a new
+  // snapshot arrives). A real move spawns a burst; the first render just records
+  // the start position. Runs in an effect (post-commit), so it reads the freshest
+  // pos and never fires mid-render.
+  useEffect(() => {
+    const prev = prevPos.current;
+    prevPos.current = pos;
+    if (!prev) return; // first snapshot for this rover — no dust
+    if (prev.X === pos.X && prev.Y === pos.Y) return; // no move — no dust
+    // Seed this burst from the rover position so the scatter is deterministic for
+    // a given move (decorative jitter, replay-stable).
+    const seed = (hashId(`${pos.X},${pos.Y}`) ^ 0x9e3779b9) >>> 0;
+    particles.current = makeDustParticles(seed);
+    burstStart.current = performance.now();
+    invalidate(); // wake the demand loop for the puff
+  }, [pos, invalidate]);
+
+  // Animate the live burst: lift + spread each particle and fade the shared
+  // material out over DUST_MS, then clear the burst and stop invalidating. Only
+  // runs while a burst is live, so between puffs this costs nothing (demand-safe).
+  useFrame(() => {
+    const start = burstStart.current;
+    const mat = matRef.current;
+    if (!start || !mat) return;
+    const age = (performance.now() - start) / DUST_MS;
+    if (age >= 1) {
+      // Burst done — collapse every instance to nothing and idle (one final frame
+      // draws them hidden, then we stop invalidating → loop returns to 0 fps).
+      burstStart.current = 0;
+      for (const inst of instances.current) inst?.scale.setScalar(0);
+      mat.opacity = 0;
+      return; // no invalidate → loop idles
+    }
+    const ps = particles.current;
+    const rise = Math.sin(age * Math.PI) * 0.5; // up then settle
+    const spread = age; // outward over the burst
+    for (let i = 0; i < ps.length; i++) {
+      const inst = instances.current[i];
+      if (!inst) continue;
+      const p = ps[i];
+      inst.position.set(
+        p.dx * p.speed * spread,
+        0.06 + rise * p.speed,
+        p.dz * p.speed * spread,
+      );
+      inst.scale.setScalar(p.scale * (1 + age)); // puff billows as it fades
+      // drei's <Instances> composes the instance matrix from each child's
+      // matrixWorld in its own useFrame; force it current NOW so the puff tracks
+      // this frame's transform instead of lagging one frame behind.
+      inst.updateMatrixWorld();
+    }
+    mat.opacity = 0.5 * (1 - age); // fade out
+    invalidate(); // keep the loop alive while the puff animates
+  });
+
+  // ONE InstancedMesh for the whole puff (one draw call). frames={Infinity} so
+  // drei re-composes the instance matrix from our mutated <Instance> transforms
+  // on every rendered frame — but the loop only renders while WE invalidate above,
+  // so it stays demand-safe. Starts collapsed (scale 0, opacity 0); raycast-
+  // suppressed so it never steals a pick.
+  return (
+    <Instances limit={DUST_COUNT} raycast={() => null}>
+      <sphereGeometry args={[1, 6, 6]} />
+      <meshStandardMaterial
+        ref={matRef}
+        color="#b8ac9c"
+        roughness={1}
+        metalness={0}
+        transparent
+        opacity={0}
+        depthWrite={false}
+      />
+      {Array.from({ length: DUST_COUNT }, (_, i) => (
+        <Instance
+          key={i}
+          ref={(el: THREE.Group | null) => (instances.current[i] = el)}
+          scale={0}
+        />
+      ))}
+    </Instances>
+  );
+}
+
 // ---- a single rover --------------------------------------------------------
 
 type Rover3DProps = {
@@ -411,6 +675,10 @@ function Rover3D({ rover, map, geo, selected, beats, onPick }: Rover3DProps) {
   const wonMatRef = useRef<THREE.MeshStandardMaterial>(null);
   const revivedRef = useRef<THREE.Mesh>(null);
   const revivedMatRef = useRef<THREE.MeshStandardMaterial>(null);
+  // Live "revived" beat progress (0 = none, →1 = fading), written each frame in
+  // useFrame and read by RoverBody so the body itself does the grey→bright lerp
+  // of the resurrection shockwave (#107) without re-rendering.
+  const revivedProgress = useRef<number>(0);
 
   // Put the status halo + winner ring + recovery pulse on the bloom layer so ONLY
   // they glow. Once on mount — the meshes are stable across re-renders.
@@ -438,14 +706,32 @@ function Rover3D({ rover, map, geo, selected, beats, onPick }: Rover3DProps) {
       else if (b.kind === "won") won = beatProgress(b, now);
       else if (b.kind === "revived") revived = beatProgress(b, now);
     }
+    // Share the revived progress with RoverBody (the body color lerp half of the
+    // resurrection shockwave). Written every frame so it tracks the beat exactly.
+    revivedProgress.current = revived;
+
+    // Bid-war strobe (#107): when MULTIPLE rovers are bidding at once (auction
+    // contention), every contending rover's halo strobes faster + harder than the
+    // lone-bid flash. A pure read of the live beats (activeBidders/bidWarStrobe),
+    // so the strobe stays deterministic; 0 when only this rover bids.
+    const strobe = bid > 0 ? bidWarStrobe(activeBidders(list, now)) : 0;
 
     const halo = haloRef.current;
     const haloMat = haloMatRef.current;
     if (halo && haloMat) {
-      halo.scale.setScalar(1 + (bid > 0 ? Math.sin(bid * Math.PI) * 0.35 : 0));
+      // Base bid flash: a single half-sine swell over the beat. During contention,
+      // overlay a fast strobe (≈10 Hz) whose depth scales with the number of
+      // bidders, so a tug-of-war reads as a frantic flicker, not a calm pulse.
+      const basePulse = bid > 0 ? Math.sin(bid * Math.PI) * 0.35 : 0;
+      const strobePulse =
+        strobe > 0 ? (0.5 + 0.5 * Math.sin(now * 0.063)) * strobe * 0.4 : 0;
+      halo.scale.setScalar(1 + basePulse + strobePulse);
       const c = bid > 0 ? SIGNAL_WARN : haloColor;
       haloMat.color.set(c);
       haloMat.emissive.set(c);
+      // Spike the halo's own emissive during contention so the strobe also pumps
+      // brightness (and, via the bloom layer, the selective-bloom glow).
+      haloMat.emissiveIntensity = (dim ? 1.4 : 2.2) + strobePulse * 3.0;
     }
 
     const wonMesh = wonRef.current;
@@ -512,7 +798,12 @@ function Rover3D({ rover, map, geo, selected, beats, onPick }: Rover3DProps) {
       {/* Body — the realistic rover glTF (#54), with the PRIMITIVE box + mast +
           wheels as the FOREVER fallback until/if the model loads. Both are
           raycast-suppressed so the hit-proxy above stays the SOLE pick target. */}
-      <RoverBody geo={geo} dim={dim} />
+      <RoverBody geo={geo} dim={dim} revived={revivedProgress} />
+
+      {/* Wheel dust (#107) — a regolith puff kicked up when this rover MOVES
+          (a snapshot position delta). Demand-safe: it animates only during a
+          burst, then idles. Lives in the rover group so the puff follows it. */}
+      <RoverDust pos={rover.pos} />
 
       {/* Status halo — a thin ring on the ground under the rover. This is the
           ONLY rover element on the bloom layer, so the glow is confined to it.
@@ -1222,6 +1513,7 @@ function LunarTerrain() {
 //                      backbuffer would be wasted and trips the ANGLE/macOS
 //                      glBlitFramebuffer depth/stencil error).
 //   2. SelectiveBloom (halos)     — tight, small kernel, just the status halos.
+//                      Its intensity is spiked above base during a bid-war (#107).
 //   3. SelectiveBloom (celestial) — Sun core + Earth limb, lower threshold,
 //                      wider kernel, SCREEN blend + smoothed luminance.
 //   4. DepthOfField  — surface-only (mounted only on the surface): the distant
@@ -1242,12 +1534,20 @@ function LunarTerrain() {
 // memo() keeps the whole postprocessing subtree stable across snapshots, so the
 // effects are built once. onSurface DOES change (a real remount on view flip),
 // which is the only time the stack legitimately rebuilds.
+//
+// Base selective-bloom intensity (the calm-scene value). The bid-war strobe (#107)
+// briefly spikes ABOVE this during auction contention, then eases back to it.
+const BLOOM_BASE_INTENSITY = 2.2;
+const BLOOM_WAR_SPIKE = 2.6; // added at full contention
+
 const CinematicFX = memo(function CinematicFX({
   lightRef,
   onSurface,
+  beats,
 }: {
   lightRef: React.RefObject<THREE.DirectionalLight>;
   onSurface: boolean;
+  beats: React.RefObject<ActiveBeat[]>;
 }) {
   // The directional light mounts in the same pass as this component, so its ref
   // is null on first render. Force exactly one re-render after mount so the ref
@@ -1255,6 +1555,32 @@ const CinematicFX = memo(function CinematicFX({
   // until then.
   const [, ready] = useState(0);
   useEffect(() => ready(1), []);
+  const bloomRef = useRef<SelectiveBloomEffect>(null);
+
+  // Bid-war bloom spike (#107): while multiple rovers contend, pump the bloom
+  // intensity above its base in proportion to the strobe, easing back to base as
+  // the contention clears. A pure read of the live beats (no random), and it only
+  // ever runs on already-invalidated frames (the bid beats keep the loop alive),
+  // so it adds no idle work — when no bids are live it settles to base and stops.
+  const spiked = useRef(false);
+  useFrame(() => {
+    const effect = bloomRef.current;
+    const list = beats.current;
+    if (!effect) return;
+    let strobe = 0;
+    if (list && list.length > 0) {
+      strobe = bidWarStrobe(activeBidders(list, performance.now()));
+    }
+    if (strobe <= 0) {
+      if (!spiked.current) return; // already at base — nothing to reset
+      spiked.current = false;
+      effect.intensity = BLOOM_BASE_INTENSITY; // settle back exactly once
+      return;
+    }
+    spiked.current = true;
+    effect.intensity = BLOOM_BASE_INTENSITY + BLOOM_WAR_SPIKE * strobe;
+  });
+
   const light = lightRef.current;
   if (!light) return null;
   return (
@@ -1266,10 +1592,11 @@ const CinematicFX = memo(function CinematicFX({
       {/* Halo bloom — status/winner halos only. Tight: small kernel, high-ish
           threshold so only the bright halo cores glow. SCREEN blend, smoothed. */}
       <SelectiveBloom
+        ref={bloomRef}
         lights={[light]}
         selectionLayer={HALO_BLOOM_LAYER}
         blendFunction={BlendFunction.SCREEN}
-        intensity={2.2}
+        intensity={BLOOM_BASE_INTENSITY}
         luminanceThreshold={0.1}
         luminanceSmoothing={0.2}
         mipmapBlur
@@ -2096,8 +2423,9 @@ function SceneContents({
           celestial Sun/Earth), SMAA, surface-gated DoF, orbit-only chromatic
           aberration, vignette, film grain. Rendered last; reads lightRef. All
           passes static (demand-loop safe). Supersedes the standalone HaloBloom —
-          the halo SelectiveBloom is now one pass inside this stack. */}
-      <CinematicFX lightRef={lightRef} onSurface={onSurface} />
+          the halo SelectiveBloom is now one pass inside this stack, and it reads
+          the live beats to spike intensity during a bid-war (#107). */}
+      <CinematicFX lightRef={lightRef} onSurface={onSurface} beats={beats} />
     </group>
   );
 }

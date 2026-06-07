@@ -130,3 +130,34 @@ export function beatProgress(beat: ActiveBeat, nowMs: number): number {
   if (p > 1) return 1;
   return p;
 }
+
+// ---- bid-war contention (#107) --------------------------------------------
+
+// How many DISTINCT rovers have a still-live "bid" beat right now. Two or more
+// rovers bidding at once is "contention" — an auction tug-of-war — which the
+// renderer escalates into a higher-frequency halo strobe + a brief bloom spike.
+// Pure: a function of the live beat list + clock, so it's unit-testable and the
+// strobe stays a deterministic read of the snapshot's events (never random).
+export function activeBidders(beats: ActiveBeat[], nowMs: number): number {
+  const ids = new Set<string>();
+  for (const b of beats) {
+    if (b.kind !== "bid") continue;
+    if (nowMs - b.spawn >= beatLifetimeMs("bid")) continue; // expired
+    // Fall back to a synthetic key for the rare bid beat with no robot_id, so
+    // each still counts as one bidder rather than collapsing to a single id.
+    ids.add(b.robot_id ?? `anon:${b.spawn}`);
+  }
+  return ids.size;
+}
+
+// Strobe intensity 0..1 from the number of concurrent bidders. 0/1 bidder is no
+// contention (0 — the normal single-rover bid flash carries it); 2 bidders ramp
+// in and it saturates at BID_WAR_SATURATION+ rovers, so a big pile-on doesn't
+// keep escalating without bound. Drives both the halo strobe depth and the
+// bloom-intensity spike, so the heat reads proportional to the tug-of-war.
+export const BID_WAR_SATURATION = 4;
+export function bidWarStrobe(bidders: number): number {
+  if (bidders < 2) return 0;
+  const t = (bidders - 1) / (BID_WAR_SATURATION - 1);
+  return t < 0 ? 0 : t > 1 ? 1 : t;
+}
