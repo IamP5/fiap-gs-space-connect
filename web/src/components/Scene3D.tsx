@@ -71,6 +71,7 @@ import {
 } from "../lib/buildspec";
 import { type Ghost, footprintOf } from "../lib/placement";
 import { LaunchScenery } from "./LaunchScenery";
+import { DecorRocks } from "./DecorRocks";
 
 // Functional telemetry colors (DESIGN.md: live-data signals only — the brand
 // palette itself is black + white). Matched to the 2D canvas so the two
@@ -1399,6 +1400,10 @@ function SceneContents({
       {/* Launch infrastructure set-pieces (#56) — static NASA-PD Scenery at the
           worksite edge. Snapshot-INDEPENDENT decoration, raycast-suppressed. */}
       <LaunchScenery />
+
+      {/* Instanced decorative rock field (#58a) — snapshot-INDEPENDENT scatter of
+          low-poly rocks in ONE draw call via <Instances frames={1}>, non-pickable. */}
+      <DecorRocks />
 
       {/* Drag-to-place ghost + cursor plane (bh-05). The plane is mounted only
           while placing; the ghost only once the cursor has hit the ground. */}
