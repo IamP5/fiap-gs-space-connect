@@ -1091,7 +1091,7 @@
       "area": "realistic-3d-world",
       "title": "Twinkling stars + meteor streaks",
       "user_visible_behavior": "Stars twinkle and occasional meteors streak across the sky.",
-      "status": "not_started",
+      "status": "passing",
       "issue": 106,
       "epic": 46,
       "depends_on": [],
@@ -1099,7 +1099,9 @@
         "cd web && npm run build && npm test (TS-clean + vitest)",
         "manual: orbit & surface screenshots; animated slices pause when the tab is hidden"
       ],
-      "evidence": [],
+      "evidence": [
+        "branch worktree-agent-aeeed082c60a02e88 — twinkle (aPhase/aFreq + uTime sin gl_PointSize) + pooled meteor <Line> firing every 3–8s, single SkyAnimator useFrame pausing on document.hidden; lint+tsc+vite+vitest (116) green"
+      ],
       "notes": "Wave 3 (cinematic beauty & immersion). AFK. Idle animation — relaxes 0-idle-fps; pauses when tab hidden."
     },
     {
