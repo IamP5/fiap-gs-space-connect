@@ -49,10 +49,10 @@
 }
 
 /* ---- reload-demo button ----
-   A global demo control: resets the board so the swarm rebuilds the dome. Mirrors
-   the renderer-btn chrome (hairline-boxed caps), and carries the auto-margin that
-   pushes the whole right-hand cluster (reload · toggle · meta) hard-right. After a
-   click it shows a brief disabled "Reloading…" pulse so the operator sees it land. */
+   A global demo control: resets the board so the swarm rebuilds the dome. A
+   hairline-boxed caps button that carries the auto-margin pushing the right-hand
+   cluster (reload · meta) hard-right. After a click it shows a brief disabled
+   "Reloading…" pulse so the operator sees it land. */
 .reload-btn {
   margin-left: auto;
   padding: 6px var(--s-md);
@@ -76,48 +76,6 @@
 .reload-btn:disabled {
   color: var(--ink-mute);
   cursor: not-allowed;
-}
-
-/* ---- renderer toggle (2D / 3D) ----
-   A hairline-boxed two-button switch, mirroring the badge chrome: no fill, the
-   active segment carries white text on a near-black fill, the rest is muted.
-   Sits in the right-hand cluster, after the reload-demo button. */
-.renderer-toggle {
-  display: inline-flex;
-  border: 1px solid var(--hairline-on-dark);
-  border-radius: var(--r-xs);
-  overflow: hidden;
-}
-
-/* The meta now follows the toggle, so it no longer needs the auto-margin. */
-.renderer-toggle + .meta {
-  margin-left: var(--s-md);
-}
-
-.renderer-btn {
-  padding: 6px var(--s-sm);
-  font-family: var(--display);
-  font-size: 12px;
-  font-weight: 700;
-  letter-spacing: 1.17px;
-  text-transform: uppercase;
-  color: var(--ink-mute);
-  background: transparent;
-  border: none;
-  cursor: pointer;
-}
-
-.renderer-btn + .renderer-btn {
-  border-left: 1px solid var(--hairline-on-dark);
-}
-
-.renderer-btn.is-active {
-  color: var(--on-primary);
-  background: var(--canvas-night-soft);
-}
-
-.renderer-btn:hover:not(.is-active) {
-  color: var(--on-primary-mute);
 }
 
 /* ---- connection indicator ----
@@ -166,6 +124,15 @@
   display: block;
   width: 100%;
   height: 100%;
+}
+
+/* Minimal placeholder for the lazy Scene3D chunk's Suspense fallback — a plain
+   dark fill so the stage isn't blank while three.js loads. The branded
+   LoadingScreen replaces this in a later slice (#129). */
+.scene-loading {
+  width: 100%;
+  height: 100%;
+  background: var(--canvas-night);
 }
 
 /* ---- view-transition glare ----
@@ -481,8 +448,8 @@
   color: var(--signal-warn);
 }
 
-/* Camera view-mode toggle (issue #49) — mirrors the header renderer-toggle
-   chrome: a hairline-boxed pair of caps buttons, active one filled. */
+/* Camera view-mode toggle (issue #49) — a hairline-boxed pair of caps buttons,
+   active one filled. */
 .view-toggle {
   display: inline-flex;
   border: 1px solid var(--hairline-on-dark);

@@ -26,8 +26,8 @@ export const ControlsPanel = memo(function ControlsPanel({
   onViewModeChange,
 }: {
   send: (c: Control) => void;
-  // Camera view-mode toggle (issue #49). Threaded from App so the framing state
-  // lives beside the renderer toggle; the 3D scene reads it as a prop.
+  // Camera view-mode toggle (issue #49). Threaded from App; the 3D scene reads
+  // it as a prop.
   viewMode: ViewMode;
   onViewModeChange: (mode: ViewMode) => void;
 }) {

@@ -2,6 +2,11 @@
 
 **Status:** accepted
 
+> **Update 2026-06-07 (Epic 05, app-init refactor):** the 2D canvas **rehearsed
+> fallback** is **retired** — 3D is now the sole renderer (`WorldCanvas`/`hitTest`
+> deleted). The mandatory in-scene primitive/box fallbacks (invariant 2) remain
+> the resilience story; only the separate 2D-renderer framing below is historical.
+
 The dashboard is a React + react-three-fiber 3D lunar scene, deviating from the PRD's locked Angular + 2D Canvas. It is built against a throwaway 2D canvas **first**, with 3D layered on last so it stays cut-able.
 
 ## Context
