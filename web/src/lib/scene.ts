@@ -38,11 +38,12 @@ export const MOON_POSITION: [number, number, number] = [0, 60, -520];
 // dark side filled by EARTHSHINE (see EARTH_POSITION + Scene3D's earthshine
 // light). The sun reads WHITE (sunlight in vacuum has no atmosphere to redden it)
 // — see SunBody's white emissive.
-export const SUN_POSITION: [number, number, number] = [2000, 1100, -5650];
-// Modeled radius — small, so the far Sun reads as a brilliant DISTANT disc (only
-// ~2° across) rather than a near wall of light. Its presence comes from the
-// additive glow + radiating light-rays around it (see SunBody), not disc size.
-export const SUN_RADIUS = 120;
+export const SUN_POSITION: [number, number, number] = [2300, 1265, -6490];
+// Modeled radius — small, so the far Sun (|pos| ≈ 7k, near the 8000 far-plane)
+// reads as a brilliant DISTANT disc (~1.3° across) rather than a near wall of
+// light. Its presence comes from the additive glow + radiating light-rays around
+// it (see SunBody, which scale with this radius), not disc size.
+export const SUN_RADIUS = 80;
 
 // Earth — a distant decorative body, sized PROPORTIONALLY to the Moon (real
 // diameter ratio ≈ 3.67×) and hung up-and-LEFT of the Moon, beyond it, so the
