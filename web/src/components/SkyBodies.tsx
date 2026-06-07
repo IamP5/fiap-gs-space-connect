@@ -58,8 +58,8 @@ import {
 //   • Earth — NASA Blue Marble (day) + Black Marble (city lights, night) (NASA-PD).
 //   • Sun   — Solar System Scope colour map (CC-BY 4.0).
 //   • Nebula — ESA/Hubble Veil Nebula "Witch's Broom" (heic0712a) (CC-BY 4.0).
-const MOON_COLOR = "/assets/textures/moon_color_1024.jpg";
-const MOON_NORMAL = "/assets/textures/moon_normal_1024.jpg";
+const MOON_COLOR = "/assets/textures/moon_color_2048.jpg";
+const MOON_NORMAL = "/assets/textures/moon_normal_2048.jpg";
 const EARTH_DAY = "/assets/textures/earth_day_1024.jpg";
 const EARTH_NIGHT = "/assets/textures/earth_night_1024.jpg";
 const SUN_COLOR = "/assets/textures/sun_color_1024.jpg";
@@ -166,12 +166,14 @@ function MoonGlobe({ visible }: { visible: boolean }) {
       envMapIntensity: 0,
       fog: false,
     });
-    // Normal-map strength. The near (L0) material gets ~0.5 (mid of the 0.35→0.7
-    // band) for crater-rim definition at orbit-close distance; the far (L1)
-    // material stays at ~0.35 for clean distant frames (a full-strength normal map
-    // over-shades crater rims near the terminator under the harsh space back-light).
-    matNear.normalScale.set(0.5, 0.5);
-    matFar.normalScale.set(0.35, 0.35);
+    // Normal-map strength. With the orbit fill light crushed (Scene3D), crater
+    // relief now has to come from the normal map under the raking sun — so the
+    // near (L0) material is pushed to ~0.9 for strong crater-rim definition at
+    // orbit-close distance; the far (L1) material stays softer (~0.6) so distant
+    // frames don't over-shade near the terminator. (Baked from the LOLA LDEM-16
+    // tier, 2048×1024.)
+    matNear.normalScale.set(0.9, 0.9);
+    matFar.normalScale.set(0.6, 0.6);
     return { geomNear, geomFar, matNear, matFar };
   }, []);
 
@@ -629,7 +631,7 @@ function LunarBaseMarker({ onSelect }: { onSelect: () => void }) {
     document.body.style.cursor = "default";
   };
 
-  const intensity = hover ? 3.2 : 2.0;
+  const intensity = hover ? 2.4 : 1.5;
   const scale = hover ? 1.14 : 1;
 
   return (
@@ -677,14 +679,16 @@ function LunarBaseMarker({ onSelect }: { onSelect: () => void }) {
         />
       </mesh>
 
-      {/* Vertical beacon — a tapering glow column rising off the surface, the
-          "you are here / land here" signal. Additive so it reads as light. */}
-      <mesh position={[0, 18, 0]} raycast={() => null}>
-        <cylinderGeometry args={[0.4, 3.2, 36, 16, 1, true]} />
+      {/* Vertical beacon — a short tapering glow column rising off the surface, the
+          "you are here / land here" signal. Additive so it reads as light. Kept
+          SHORT (was 36u, which foreshortened into a streak across the disc at the
+          orbit angle) and dim so it reads as a beacon dot, not a line. */}
+      <mesh position={[0, 8, 0]} raycast={() => null}>
+        <cylinderGeometry args={[0.4, 2.6, 16, 16, 1, true]} />
         <meshBasicMaterial
           color={MARKER_COLOR}
           transparent
-          opacity={hover ? 0.5 : 0.32}
+          opacity={hover ? 0.32 : 0.18}
           side={THREE.DoubleSide}
           depthWrite={false}
           blending={THREE.AdditiveBlending}
