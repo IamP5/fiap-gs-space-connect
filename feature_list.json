@@ -1134,7 +1134,7 @@
         "manual: orbit & surface screenshots; animated slices pause when the tab is hidden"
       ],
       "evidence": [
-        "5db793f: lint+build (tsc -b, TS-clean) + vitest 125 passing (9 new choreography tests for launchShake/earthriseEnvelope/cinematic beat lifetimes). Intro fly-in reuses the glare-masked descent rig (orbit→surface, ~4.5s, controls disabled→restored); earthrise-hero lerps the camera to frame Earth over the horizon then restores; launch beat adds additive exhaust/flare billboards + decaying Perlin-style camera shake (settles to 0). Beats invalidate only while animating; intro uses rAF (auto-pauses on document.hidden)."
+        "f437d53: lint+build (tsc -b, TS-clean) + vitest 125 passing (9 new choreography tests for launchShake/earthriseEnvelope/cinematic beat lifetimes). Intro fly-in reuses the glare-masked descent rig (orbit→surface, ~4.5s, controls disabled→restored); earthrise-hero lerps the camera to frame Earth over the horizon then restores; launch beat adds additive exhaust/flare billboards + decaying Perlin-style camera shake (settles to 0). Beats invalidate only while animating; intro uses rAF (auto-pauses on document.hidden)."
       ],
       "notes": "Wave 3 (cinematic beauty & immersion). AFK. Idle animation — relaxes 0-idle-fps; pauses when tab hidden."
     },
