@@ -2899,8 +2899,9 @@ export function Scene3D({
         shadows={{ type: THREE.PCFSoftShadowMap }}
         dpr={[1, 1.5]}
         // far raised to ~8000 (issue #49) so the distant Moon + Earth are in-frustum;
-        // near kept at 0.1. Shipping WITHOUT logarithmicDepthBuffer — the low-poly
-        // worksite shows no z-fighting at this range.
+        // near kept at 0.1. That 0.1→8000 span is too wide for a standard depth buffer
+        // at the Earth's ~4.7k distance, so logarithmicDepthBuffer is enabled below (see
+        // its gl note + the logdepthbuf_* chunks in SkyBodies.tsx).
         // fov widened 42→50 (#101) for a more immersive, cinematic field — the
         // surface distance band (VIEW_PRESETS) is pulled in to hold framing.
         camera={{ position: [0, 11, 30], fov: 50, near: 0.1, far: 8000 }}
@@ -2918,10 +2919,25 @@ export function Scene3D({
         // touch more presence while ACES still rolls 0 → 0, so the void stays
         // near-black. Both tone mapping + output color space remain the v8
         // defaults; only the exposure dial is set explicitly here.
+        // logarithmicDepthBuffer: the orbit Earth is THREE near-coincident concentric
+        // shells (surface ×1.0, cloud ×1.012, atmosphere rim ×1.03) sitting at z≈4.7k,
+        // hard against the 8000 far plane. A standard hyperbolic depth buffer spends
+        // almost all its precision near the 0.1 near plane, so out there the shells
+        // share a depth bucket and z-fight — the cloud/rim flicker on/off every frame
+        // (the "black textures appearing/disappearing"). A log depth buffer gives
+        // resolvable precision across the whole 0.1–8000 range, so the shells separate
+        // cleanly. The Earth/cloud/rim custom ShaderMaterials opt in via the
+        // logdepthbuf_* GLSL chunks (see SkyBodies.tsx); built-in materials (Moon, Sun,
+        // worksite, stars) get it automatically. The composer's SMAA + selective-bloom
+        // passes don't sample scene depth, so they're unaffected. NB: a benign
+        // GL_INVALID_OPERATION glBlitFramebuffer warning is logged on ANGLE/macOS (a
+        // pre-existing EffectComposer depth-stencil quirk, present with or without log
+        // depth); it does not affect the render.
         gl={{
           antialias: false,
           powerPreference: "high-performance",
           toneMappingExposure: 1.1,
+          logarithmicDepthBuffer: true,
         }}
       >
         {/* Black background as the GRACEFUL FALLBACK (issue #50): the HDR

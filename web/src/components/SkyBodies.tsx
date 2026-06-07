@@ -103,6 +103,8 @@ const MOON_LOD_SWITCH = 420;
 // the GLSL is inlined. If shader compilation ever degrades, the additive shell
 // simply contributes nothing — Earth still renders as the lit/unlit marble beneath.
 const ATMOSPHERE_VERTEX = /* glsl */ `
+  #include <common>
+  #include <logdepthbuf_pars_vertex>
   varying vec3 vNormal;       // object-space surface normal
   varying vec3 vViewDir;      // object-space dir from surface point toward the camera
   void main() {
@@ -113,6 +115,9 @@ const ATMOSPHERE_VERTEX = /* glsl */ `
     vec3 camObj = (inverse(modelViewMatrix) * vec4(0.0, 0.0, 0.0, 1.0)).xyz;
     vViewDir = normalize(camObj - position);
     gl_Position = projectionMatrix * modelViewMatrix * vec4(position, 1.0);
+    // Logarithmic depth (see EARTH_VERTEX): the rim depth-tests correctly against the
+    // Earth surface so its limb halo clips to the silhouette instead of flickering.
+    #include <logdepthbuf_vertex>
   }
 `;
 
@@ -125,7 +130,9 @@ const ATMOSPHERE_FRAGMENT = /* glsl */ `
   uniform float uNightFloor;   // residual rim on the dark limb (earthshine)
   varying vec3 vNormal;
   varying vec3 vViewDir;
+  #include <logdepthbuf_pars_fragment>
   void main() {
+    #include <logdepthbuf_fragment>
     vec3 N = normalize(vNormal);
     // Fresnel: bright at the limb (N ⟂ view), fading toward disc-centre.
     float fresnel = pow(clamp(1.0 - dot(N, normalize(vViewDir)), 0.0, 1.0), uPower);
@@ -161,6 +168,8 @@ const ATMOSPHERE_FRAGMENT = /* glsl */ `
 // texels are undecoded). ADR-0004: uniforms default to 1×1 solid textures, so a
 // failed map load still renders a clean lit marble.
 const EARTH_VERTEX = /* glsl */ `
+  #include <common>
+  #include <logdepthbuf_pars_vertex>
   varying vec3 vWorldNormal;
   varying vec3 vViewDir;
   varying vec2 vUv;
@@ -170,6 +179,11 @@ const EARTH_VERTEX = /* glsl */ `
     vec3 worldPos = (modelMatrix * vec4(position, 1.0)).xyz;
     vViewDir = normalize(cameraPosition - worldPos);
     gl_Position = projectionMatrix * modelViewMatrix * vec4(position, 1.0);
+    // Logarithmic depth (Canvas runs logarithmicDepthBuffer): the Earth surface + the
+    // cloud shell that shares this vertex shader sit at a RESOLVABLE depth from each
+    // other at the ~4.7k orbit distance. Without it the hyperbolic depth buffer can't
+    // separate the ×1.0/×1.012 shells → they z-fight and flicker.
+    #include <logdepthbuf_vertex>
   }
 `;
 
@@ -189,10 +203,12 @@ const EARTH_FRAGMENT = /* glsl */ `
   varying vec3 vWorldNormal;
   varying vec3 vViewDir;
   varying vec2 vUv;
+  #include <logdepthbuf_pars_fragment>
 
   vec3 toLinear(vec3 c) { return pow(c, vec3(2.2)); }
 
   void main() {
+    #include <logdepthbuf_fragment>
     vec3 N = normalize(vWorldNormal);
     vec3 V = normalize(vViewDir);
     vec3 L = normalize(uSunDir);
@@ -268,7 +284,9 @@ const CLOUD_FRAGMENT = /* glsl */ `
   varying vec3 vWorldNormal;
   varying vec3 vViewDir;
   varying vec2 vUv;
+  #include <logdepthbuf_pars_fragment>
   void main() {
+    #include <logdepthbuf_fragment>
     float density = texture2D(uCloudMap, vUv).r;
     vec3 N = normalize(vWorldNormal);
     float ndl = dot(N, normalize(uSunDir));
