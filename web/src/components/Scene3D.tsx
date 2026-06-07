@@ -36,7 +36,7 @@
 //   - No custom physics; only LICENSED art (CC0/CC-BY/NASA-PD), each with a
 //     mandatory primitive fallback.
 
-import { memo, useEffect, useMemo, useRef, useState } from "react";
+import { memo, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
 import { Canvas, useFrame, useThree, type ThreeEvent } from "@react-three/fiber";
 import { ContactShadows, Instance, Instances, Line, OrbitControls } from "@react-three/drei";
 import { SpaceEnvironment, STARFIELD_PARALLAX_NAME } from "./SpaceEnvironment";
@@ -59,6 +59,7 @@ import {
   EARTH_POSITION,
   GROUND_SPAN,
   MOON_POSITION,
+  ORBIT_SUN_POSITION,
   SUN_POSITION,
   type SceneMap,
   isBuilt,
@@ -121,7 +122,7 @@ export const CELESTIAL_BLOOM_LAYER = 12;
 
 // Subtle orbit-only chromatic-aberration offset. A module-level constant (stable
 // reference) so it never re-triggers the memoized effect across renders.
-const CHROMATIC_OFFSET = new THREE.Vector2(0.001, 0.002);
+const CHROMATIC_OFFSET = new THREE.Vector2(0.0006, 0.0012);
 
 // Distance from the origin worksite to the sun (#104). The sun's orthographic
 // shadow camera looks from SUN_POSITION toward the origin, so its near/far must
@@ -132,6 +133,98 @@ const SUN_POSITION_LEN = Math.hypot(SUN_POSITION[0], SUN_POSITION[1], SUN_POSITI
 // the ±25-unit worksite (GROUND_SPAN=20 + margin) so resolution isn't wasted on
 // the far regolith plain.
 const SHADOW_WORKSITE_HALF = 25;
+
+// SPACE LIGHTING rig — extracted (Wave 4) so it renders IDENTICALLY in BOTH the
+// snapshot-loaded scene and the pre-snapshot fallback branch. Lighting is decorative
+// / snapshot-INDEPENDENT (ADR-0004), so it must never live only inside the
+// snapshot-gated return — otherwise the orbit vista shows a flat-lit Moon until the
+// first snapshot arrives. Three contributions, all VIEW-CONDITIONAL on `onSurface`:
+//   1. SUN — the white key light, DECOUPLED (Wave 4): surface keeps SUN_POSITION
+//      (lights the worksite on the Moon's near face); orbit swings to
+//      ORBIT_SUN_POSITION so the Moon reads dark-with-crescent (SVS #14992). The two
+//      views never co-render, so the swing is unseen. The Moon globe isn't inside the
+//      ±25 worksite shadow frustum, so its terminator is pure diffuse and follows
+//      this light for free.
+//   2. EARTHSHINE — a cool desaturated point light FROM Earth (inverse-square). In
+//      orbit the sun back-lights the Moon, so this faint fill is the ONLY light on the
+//      camera-facing near side (Earth sits in the camera's hemisphere off the Moon,
+//      dot≈0.89). Kept VERY low so the dark side stays dramatically dark with only
+//      barely-readable detail — the brilliant sunlit crescent is the contrast.
+//   3. Ambient + hemisphere floors — near-black in orbit so the void + shadow side
+//      stay dark; lifted on the surface for worksite legibility. Plus surface-only
+//      rim/fill directionals (skipped in orbit — the Moon stays a clean dark hero).
+// Orbit IBL grade (Wave 4) — the HDR <Environment> lights the Moon via scene
+// environment diffuse irradiance, and that (not the named lights) is what set the
+// Moon's overall brightness. We dim it hard in orbit so the Moon's far side reads
+// as a dramatic dark crescent (the sun's back-light + a faint earthshine do the
+// rest); the surface keeps full IBL for the metallic rover/glTF reflections. Set
+// imperatively (drei never touches environmentIntensity, so it sticks once set).
+const ORBIT_ENV_INTENSITY = 0.05;
+
+function EnvironmentGrade({ onSurface }: { onSurface: boolean }) {
+  const scene = useThree((s) => s.scene);
+  // useLayoutEffect (not useEffect): apply the env grade BEFORE the browser paints
+  // the first frame of the new view, so the Moon never flashes one frame at the
+  // wrong (surface=1.0) IBL intensity as the view flips — that one-frame bright/flat
+  // pop is what read as the Moon's shadow "shifting" right after the orbit transition.
+  useLayoutEffect(() => {
+    (scene as unknown as { environmentIntensity: number }).environmentIntensity = onSurface
+      ? 1.0
+      : ORBIT_ENV_INTENSITY;
+  }, [scene, onSurface]);
+  return null;
+}
+
+function SpaceLights({
+  onSurface,
+  lightRef,
+}: {
+  onSurface: boolean;
+  lightRef: React.RefObject<THREE.DirectionalLight>;
+}) {
+  return (
+    <>
+      <ambientLight color="#0e1014" intensity={onSurface ? 0.12 : 0.01} />
+      <hemisphereLight args={["#ffe9cc", "#1a1814", onSurface ? 0.25 : 0.0]} />
+      <directionalLight
+        ref={lightRef}
+        position={onSurface ? SUN_POSITION : ORBIT_SUN_POSITION}
+        color="#ffffff"
+        intensity={1.9}
+        castShadow
+        shadow-mapSize-width={2048}
+        shadow-mapSize-height={2048}
+        shadow-camera-near={SUN_POSITION_LEN - SHADOW_WORKSITE_HALF - 35}
+        shadow-camera-far={SUN_POSITION_LEN + SHADOW_WORKSITE_HALF + 35}
+        shadow-camera-left={-SHADOW_WORKSITE_HALF}
+        shadow-camera-right={SHADOW_WORKSITE_HALF}
+        shadow-camera-top={SHADOW_WORKSITE_HALF}
+        shadow-camera-bottom={-SHADOW_WORKSITE_HALF}
+        shadow-normalBias={0.05}
+        shadow-bias={-0.0005}
+      />
+      <pointLight
+        position={EARTH_POSITION}
+        color="#a8bfda"
+        decay={2}
+        distance={0}
+        // Orbit earthshine LIFTED: in the SVS #14992 reference the Moon's SHADOW side is
+        // not black — its maria/craters are picked out by cool reflected earthlight. This
+        // raking fill from Earth's position reveals that dark-side relief so the near-half-
+        // lit Moon reads as detailed dark rock, never a void. Sized to the (now farther)
+        // Earth berth: decay=2 inverse-square over |Earth→Moon| ≈ 4.5k needs ~1.35M to land
+        // the same illuminance the closer berth got from a smaller number.
+        intensity={onSurface ? 2_310_000 : 1_350_000}
+      />
+      {onSurface && (
+        <>
+          <directionalLight position={[-40, 26, -30]} color="#9fb6d8" intensity={0.35} />
+          <directionalLight position={[36, 22, 28]} color="#ffd9b0" intensity={0.22} />
+        </>
+      )}
+    </>
+  );
+}
 
 // ---- shared geometry buffers ------------------------------------------------
 
@@ -1646,7 +1739,7 @@ const CinematicFX = memo(function CinematicFX({
       {/* Gentle corner vignette — both views. */}
       <Vignette offset={0.3} darkness={0.4} blendFunction={BlendFunction.NORMAL} />
       {/* Faint film grain — SCREEN blend, very low opacity, both views. */}
-      <Noise blendFunction={BlendFunction.SCREEN} opacity={0.03} />
+      <Noise blendFunction={BlendFunction.SCREEN} opacity={0.018} />
     </EffectComposer>
   );
 });
@@ -2225,7 +2318,11 @@ function SceneContents({
   if (!snapshot || !map || !taskById) {
     return (
       <>
-        <ambientLight intensity={0.4} />
+        {/* Same decorative lighting rig as the main branch (snapshot-independent), so
+            the orbit vista's dark-side Moon reads correctly even before the first
+            snapshot arrives. */}
+        <SpaceLights onSurface={onSurface} lightRef={lightRef} />
+        <EnvironmentGrade onSurface={onSurface} />
         {/* Surface-only horizon fog — shared SURFACE_FOG_ARGS (#101, see above). */}
         {onSurface && <fog attach="fog" args={SURFACE_FOG_ARGS} />}
         {onSurface && <LunarTerrain />}
@@ -2237,94 +2334,11 @@ function SceneContents({
 
   return (
     <group>
-      {/* SPACE LIGHTING — one harsh white sun + faint reflected fills, the way
-          airless space really lights a scene (no atmosphere to scatter, so high
-          contrast and near-black shadows). Three contributions:
-          1. SUN — the key light, FROM the visible Sun body (shared SUN_POSITION),
-             WHITE (0xffffff, sunlight in vacuum), strong. Also drives the bloom.
-          2. EARTHSHINE — a dim COOL-BLUE light FROM the visible Earth
-             (EARTH_POSITION): Earth reflects sunlight back, faintly lighting the
-             Moon's night side (the classic "earthshine") and filling the
-             worksite's shadow side. This is the "bodies reflect their sunlight"
-             effect the scene is replicating.
-          3. Regolith bounce — a low hemisphere (lit ground colour from below,
-             black sky from above) standing in for sunlight bouncing off the bright
-             lunar surface, plus a tiny ambient floor so nothing is pure black
-             (ADR-0004 readability). */}
-      {/* Ambient floor — VIEW-CONDITIONAL. In orbit the Moon is airless and has
-          essentially NO fill but faint earthshine, so the void + shadow side must
-          go near-black for crater relief and a dramatic terminator to read (the
-          SVS look) → 0.04. On the surface a touch more (0.12) keeps the worksite's
-          shadow side legible. Cool near-black tint. */}
-      <ambientLight color="#0e1014" intensity={onSurface ? 0.12 : 0.04} />
-      {/* Hemisphere regolith bounce — VIEW-CONDITIONAL for the same reason: a
-          whisper on the surface (0.25, regolith bounce under the worksite), all but
-          OFF in orbit (0.05) so the Moon's shadow side isn't washed flat. */}
-      <hemisphereLight args={["#ffe9cc", "#1a1814", onSurface ? 0.25 : 0.05]} />
-      {/* SUN — the key light, PURE WHITE (#FFFFFF): sunlight in vacuum has no
-          atmosphere to redden it (see lib/scene.ts), so a white key keeps the lit
-          Moon a neutral cool grey (the NASA reference look) instead of warm-tan;
-          kept at ~1.9 so it stays the bloom driver and the lit limb is bright but
-          not blown out. */}
-      {/* Soft sun shadow (#104) — the sun is the ONLY shadow caster (one cheap
-          2048 map). Its shadow camera is an orthographic frustum CLAMPED to the
-          ±25-unit worksite (GROUND_SPAN=20 + margin) so the whole map's resolution
-          is spent on the rovers/domes, not the 700-unit plain. SUN_POSITION sits
-          ~7050 units out along the sun direction, so near/far bracket the origin
-          worksite slab along that ray (≈6990 → ≈7110). normalBias is lifted for the
-          airless extreme contrast: it pushes sample points along the surface normal
-          to kill self-shadow acne on the low-poly faces without peter-panning the
-          contact line. Shadows render on invalidate only (demand loop) — 0 idle fps. */}
-      <directionalLight
-        ref={lightRef}
-        position={SUN_POSITION}
-        color="#ffffff"
-        intensity={1.9}
-        castShadow
-        shadow-mapSize-width={2048}
-        shadow-mapSize-height={2048}
-        shadow-camera-near={SUN_POSITION_LEN - SHADOW_WORKSITE_HALF - 35}
-        shadow-camera-far={SUN_POSITION_LEN + SHADOW_WORKSITE_HALF + 35}
-        shadow-camera-left={-SHADOW_WORKSITE_HALF}
-        shadow-camera-right={SHADOW_WORKSITE_HALF}
-        shadow-camera-top={SHADOW_WORKSITE_HALF}
-        shadow-camera-bottom={-SHADOW_WORKSITE_HALF}
-        shadow-normalBias={0.05}
-        shadow-bias={-0.0005}
-      />
-      {/* Earthshine — a cool DESATURATED whisper (pale steel-blue #A8BFDA) emitted
-          FROM Earth's actual position. Now a POINT light with physically-correct
-          inverse-square falloff (decay=2): brightness scales 1/r² with distance to
-          Earth, so the wash is reflected earthlight that genuinely fades with range
-          rather than a flat directional fill. The large base intensities reproduce
-          the prior look at the scene's scale (Earth is ~3000 units away): ≈0.25
-          irradiance at the worksite (surface) / ≈0.16 at the Moon (orbit). NASA
-          earthshine is a faint terminator wash, NOT a blue glow — dimmest in orbit
-          so the shadow side + void stay near-black; a bit more on the surface for
-          shadow legibility. distance={0} = no hard cutoff, falloff is pure 1/r². */}
-      <pointLight
-        position={EARTH_POSITION}
-        color="#a8bfda"
-        decay={2}
-        distance={0}
-        intensity={onSurface ? 2_310_000 : 1_220_000}
-      />
-      {/* SURFACE-ONLY rig (gated onSurface) — separates rover/dome silhouettes from
-          the regolith so they don't read flat against the ground. Skipped in orbit
-          (the Moon must stay a clean, side-lit hero with a near-black void). */}
-      {onSurface && (
-        <>
-          {/* Cool RIM — a dim steel-blue light from BEHIND/opposite the Sun, raking
-              the far edge of silhouettes so they catch a cold backlight against the
-              dark plain (classic three-point separation). Low intensity so it reads
-              as a rim, not a fill. */}
-          <directionalLight position={[-40, 26, -30]} color="#9fb6d8" intensity={0.35} />
-          {/* Warm sun-side FILL — a soft warm bounce on the SAME side as the Sun,
-              lifting the lit faces a touch toward the regolith's warm tan so the
-              sunlit side isn't a flat white clip. Faint — the Sun is still the key. */}
-          <directionalLight position={[36, 22, 28]} color="#ffd9b0" intensity={0.22} />
-        </>
-      )}
+      {/* SPACE LIGHTING rig — shared with the pre-snapshot fallback branch (see the
+          SpaceLights definition above for the full physical rationale of each light
+          and the Wave-4 decoupled-sun / dark-side-Moon tuning). */}
+      <SpaceLights onSurface={onSurface} lightRef={lightRef} />
+      <EnvironmentGrade onSurface={onSurface} />
 
       {/* Surface-only horizon fog — shared SURFACE_FOG_ARGS (#101, see above): one
           consolidated definition (was duplicated across two return branches), warm
@@ -2873,17 +2887,21 @@ export function Scene3D({
     <>
       <Canvas
         className="world-canvas"
-        frameloop="demand"
+        // frameloop="always" (was "demand"): the scene is now a LIVING cinematic
+        // vista — Earth rotates under drifting clouds, oceans shimmer at the
+        // sub-solar point, the atmosphere breathes. ADR-0004's old demand-loop /
+        // 0-idle-fps budget is intentionally dropped (see ADR-0004 + AGENTS.md):
+        // useFrame animation is now unrestricted. The dpr cap below stays as perf
+        // hygiene. Existing invalidate()/document.hidden guards remain harmless.
+        frameloop="always"
         // Soft sun shadows (#104): PCFSoftShadowMap on the renderer's shadow map
-        // gives the directional sun light penumbra-softened edges. Shadows are
-        // re-rendered ONLY on invalidated frames (frameloop="demand"), so the
-        // static scene still holds 0 idle fps — the shadow map bakes on a wake,
-        // then sits idle with the rest of the demand loop.
+        // gives the directional sun light penumbra-softened edges.
         shadows={{ type: THREE.PCFSoftShadowMap }}
         dpr={[1, 1.5]}
         // far raised to ~8000 (issue #49) so the distant Moon + Earth are in-frustum;
-        // near kept at 0.1. Shipping WITHOUT logarithmicDepthBuffer — the low-poly
-        // worksite shows no z-fighting at this range.
+        // near kept at 0.1. That 0.1→8000 span is too wide for a standard depth buffer
+        // at the Earth's ~4.7k distance, so logarithmicDepthBuffer is enabled below (see
+        // its gl note + the logdepthbuf_* chunks in SkyBodies.tsx).
         // fov widened 42→50 (#101) for a more immersive, cinematic field — the
         // surface distance band (VIEW_PRESETS) is pulled in to hold framing.
         camera={{ position: [0, 11, 30], fov: 50, near: 0.1, far: 8000 }}
@@ -2901,10 +2919,25 @@ export function Scene3D({
         // touch more presence while ACES still rolls 0 → 0, so the void stays
         // near-black. Both tone mapping + output color space remain the v8
         // defaults; only the exposure dial is set explicitly here.
+        // logarithmicDepthBuffer: the orbit Earth is THREE near-coincident concentric
+        // shells (surface ×1.0, cloud ×1.012, atmosphere rim ×1.03) sitting at z≈4.7k,
+        // hard against the 8000 far plane. A standard hyperbolic depth buffer spends
+        // almost all its precision near the 0.1 near plane, so out there the shells
+        // share a depth bucket and z-fight — the cloud/rim flicker on/off every frame
+        // (the "black textures appearing/disappearing"). A log depth buffer gives
+        // resolvable precision across the whole 0.1–8000 range, so the shells separate
+        // cleanly. The Earth/cloud/rim custom ShaderMaterials opt in via the
+        // logdepthbuf_* GLSL chunks (see SkyBodies.tsx); built-in materials (Moon, Sun,
+        // worksite, stars) get it automatically. The composer's SMAA + selective-bloom
+        // passes don't sample scene depth, so they're unaffected. NB: a benign
+        // GL_INVALID_OPERATION glBlitFramebuffer warning is logged on ANGLE/macOS (a
+        // pre-existing EffectComposer depth-stencil quirk, present with or without log
+        // depth); it does not affect the render.
         gl={{
           antialias: false,
           powerPreference: "high-performance",
           toneMappingExposure: 1.1,
+          logarithmicDepthBuffer: true,
         }}
       >
         {/* Black background as the GRACEFUL FALLBACK (issue #50): the HDR

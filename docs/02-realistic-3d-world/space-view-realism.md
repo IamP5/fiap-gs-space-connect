@@ -304,8 +304,16 @@ courtesy credit only. Star map adds: "Gaia DR2: ESA/Gaia/DPAC".)
 
 ## 6. Implementation plan — tiered by impact-per-effort
 
-Each is independently shippable, preserves `frameloop="demand"` (load →
-`invalidate()` once → idle), keeps every decorative `raycast={()=>null}`, and
+> **SUPERSEDED 2026-06-07 (Wave 4, "living orbit").** The `frameloop="demand"` /
+> 0-idle-fps budget is **dropped** (see ADR-0004 amendment): the scene is now
+> `frameloop="always"` and `useFrame` animation is unrestricted. The "demand-safe",
+> "load → invalidate() once → idle", and "No new useFrame" guidance throughout this
+> doc is historical — ignore it for new work. Item 8 below (day/night Earth) shipped,
+> extended with an animated living Earth (rotation, ocean sun-glint, drifting clouds)
+> and a decoupled orbit sun (dark-side crescent Moon). The ADR-0004 fallback, bloom-
+> layer, and `raycast={()=>null}` invariants still hold.
+
+Each is independently shippable, keeps every decorative `raycast={()=>null}`, and
 touches neither the bloom layer (HALO_BLOOM_LAYER 11) nor a second bloom pass.
 
 **Tier 1 — highest impact, lowest risk**
@@ -331,13 +339,13 @@ touches neither the bloom layer (HALO_BLOOM_LAYER 11) nor a second bloom pass.
    rim shell (§2).
 
 ### Invariants to assert in every PR
-- No new `useFrame` (and never a `useFrame` that self-`invalidate()`s — that is the
-  exact thing that pins idle fps > 0).
+- ~~No new `useFrame`~~ **(dropped — `frameloop="always"`, animation is free).**
 - Every new textured asset has a primitive fallback (ADR-0004).
 - No new mesh on `HALO_BLOOM_LAYER` (11); no second full-screen bloom pass.
 - All decoratives `raycast={()=>null}` (pick/click-to-kill intact).
-- Each loader calls `invalidate()` exactly once on success and on any visibility
-  toggle; idle fps returns to 0 after load (verify in devtools).
+- Perf hygiene only (no longer a hard gate): keep `dpr ≤ ~1.5`, bound draw calls via
+  instancing/LOD. `useFrame` loops may still early-return on `document.hidden` to
+  save battery, but it is no longer required.
 
 ### Explicitly rejected for this stack
 drei `<Stars>` (ungated `useFrame` + shader twinkle), `<Sparkles>` / `<Cloud>`
