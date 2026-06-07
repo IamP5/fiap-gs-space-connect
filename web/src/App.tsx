@@ -58,10 +58,11 @@ export default function App() {
   // rover to select, then click KILL, so a stray click never kills.
   const [selected, setSelected] = useState<string | null>(null);
 
-  // Camera view-mode (issue #49). Defaults to "surface" — the rehearsed fixed
-  // worksite framing (ADR-0004). The operator can flip to "orbit" to pull the
-  // camera back and take in the distant parked Moon; both framings stay clamped.
-  const [viewMode, setViewMode] = useState<ViewMode>("surface");
+  // Camera view-mode (issue #49). Defaults to "orbit" — on reveal the scene
+  // settles in the distant parked-Moon vista (no auto push-in; the surface intro
+  // fly-in self-disables off-surface). Clicking the base marker flies the descent
+  // to the rehearsed worksite framing (ADR-0004); both framings stay clamped.
+  const [viewMode, setViewMode] = useState<ViewMode>("orbit");
 
   // --- Preload-everything-behind-a-splash (Epic 05 P1). On mount we kick the
   // explicit asset preload (lib/assets) AND warm the lazy Scene3D chunk, both via

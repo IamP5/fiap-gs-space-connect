@@ -2707,8 +2707,16 @@ function CameraFeel({ active, onSurface }: { active: boolean; onSurface: boolean
     };
     document.addEventListener("visibilitychange", onVisibility);
 
-    // Arm the first idle wake from mount.
-    markInput();
+    // Immediate-idle init (05-P2): backdate the last-input stamp by the full
+    // idle delay so idleElapsed > 0 from the very first frame and the sway eases
+    // in right away (IDLE_FADE_MS still ramps the amplitude, so there is no
+    // snap). Scene3D now mounts only after the splash, so this is the reveal
+    // moment — the drift begins exactly when the user first sees the vista. Only
+    // the initial behavior changes: markInput (start/end/DOM input) still arms
+    // the normal ~4s delay after any interaction.
+    lastInputRef.current = performance.now() - IDLE_DELAY_MS;
+    // Still schedule a wake so the drift can start in a fully-settled scene.
+    idleTimer = window.setTimeout(() => invalidate(), 16);
 
     return () => {
       controls.removeEventListener("start", onStart);
