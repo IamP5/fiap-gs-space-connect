@@ -55,6 +55,7 @@ import * as THREE from "three";
 import type { RoverView, Snapshot, TaskView, Vec2 } from "../types/wire";
 import { batteryPercent } from "../lib/format";
 import { suppressRaycast } from "../lib/suppressRaycast";
+import { applyGltfTextureFidelity } from "../lib/textureFidelity";
 import {
   EARTH_POSITION,
   GROUND_SPAN,
@@ -391,6 +392,7 @@ function RoverBody({
   const [scene, setScene] = useState<THREE.Group | null>(null);
   const invalidate = useThree((s) => s.invalidate);
   const bodyRef = useRef<THREE.Group>(null);
+  const gl = useThree((s) => s.gl);
   const bodyColor = dim ? "#2a2a2e" : "#f0f0fa";
 
   // Materials we CLONE for the resurrection flash, so mutating emissive never
@@ -479,6 +481,11 @@ function RoverBody({
         // Normalize the raw NASA model (arbitrary units / off-origin pivot) to a
         // predictable rover size, centered on x/z and seated on y=0.
         fitAndSeatRover(obj, ROVER_MODEL_FIT);
+        // Texture fidelity sweep (#100): max anisotropy on every map + correct
+        // per-channel colourSpace + crisp data-map mip filtering. Runs BEFORE the
+        // dim clone so dead rovers inherit the corrected maps too. Idempotent on
+        // the shared cached materials (live rovers re-assert the same fixes).
+        applyGltfTextureFidelity(obj, gl.capabilities.getMaxAnisotropy());
         // Dead rover ⇒ darken this placement's materials (clones, so the shared
         // cached materials and live rovers are untouched). Alive ⇒ no-op.
         if (dim) ownedMats = dimRoverModel(obj);
@@ -503,7 +510,7 @@ function RoverBody({
       // cached geometry/materials the clone references.
       for (const m of ownedMats) m.dispose();
     };
-  }, [invalidate, dim]);
+  }, [invalidate, dim, gl]);
 
   if (scene) {
     // The model is pre-normalized (centered x/z, base at y=0), so it just sits at
@@ -1227,6 +1234,7 @@ function SpecModel({
 }) {
   const [scene, setScene] = useState<THREE.Group | null>(null);
   const invalidate = useThree((s) => s.invalidate);
+  const gl = useThree((s) => s.gl);
 
   useEffect(() => {
     let disposed = false;
@@ -1253,6 +1261,10 @@ function SpecModel({
             }
           });
         }
+        // Texture fidelity sweep (#100): max anisotropy + per-channel colourSpace
+        // + crisp data-map mip filtering on the model's materials. Idempotent on
+        // the shared cached materials (every placement re-asserts the same fixes).
+        applyGltfTextureFidelity(obj, gl.capabilities.getMaxAnisotropy());
         setScene(obj);
         invalidate();
       })
@@ -1262,7 +1274,7 @@ function SpecModel({
     return () => {
       disposed = true;
     };
-  }, [desc.modelRef, invalidate, built]);
+  }, [desc.modelRef, invalidate, built, gl]);
 
   if (!scene) {
     // Fallback primitive (a box at the op's transform) until/if the glTF loads.
