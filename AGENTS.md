@@ -81,6 +81,10 @@ docker compose -f deploy/docker-compose.yml up --build   # dashboard at :5173
   lives in `lib/` with co-located `*.test.ts`; **no barrel files**; the dashboard stays a
   pure re-render of the server snapshot (ADR-0004). See `vercel-react-best-practices`,
   `web-design-guidelines`, and `r3f-*` (for the future 3D renderer).
+  - **3D render loop:** the r3f scene runs `frameloop="always"` and `useFrame`
+    animation is **unrestricted** (Wave 4 "living orbit" — ADR-0004 invariant (3)'s
+    demand-loop / 0-idle-fps budget was dropped). Keep `dpr ≤ ~1.5` + bounded draw
+    calls as hygiene; ADR-0004's snapshot-purity + primitive-fallback invariants still hold.
 ## Definition of Done
 
 A feature is done only when these pass **in order** (don't proceed to a level if the prior

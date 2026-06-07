@@ -36,13 +36,21 @@
 //   - No custom physics; only LICENSED art (CC0/CC-BY/NASA-PD), each with a
 //     mandatory primitive fallback.
 
-import { memo, useEffect, useMemo, useRef, useState } from "react";
+import { memo, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
 import { Canvas, useFrame, useThree, type ThreeEvent } from "@react-three/fiber";
-import { Line, OrbitControls } from "@react-three/drei";
-import { SpaceEnvironment } from "./SpaceEnvironment";
+import { ContactShadows, Instance, Instances, Line, OrbitControls } from "@react-three/drei";
+import { SpaceEnvironment, STARFIELD_PARALLAX_NAME } from "./SpaceEnvironment";
 import { SkyBodies } from "./SkyBodies";
-import { EffectComposer, SelectiveBloom } from "@react-three/postprocessing";
-import { KernelSize } from "postprocessing";
+import {
+  ChromaticAberration,
+  DepthOfField,
+  EffectComposer,
+  Noise,
+  SelectiveBloom,
+  SMAA,
+  Vignette,
+} from "@react-three/postprocessing";
+import { BlendFunction, KernelSize, type SelectiveBloomEffect } from "postprocessing";
 import * as THREE from "three";
 import type { RoverView, Snapshot, TaskView, Vec2 } from "../types/wire";
 import { batteryPercent } from "../lib/format";
@@ -51,6 +59,7 @@ import {
   EARTH_POSITION,
   GROUND_SPAN,
   MOON_POSITION,
+  ORBIT_SUN_POSITION,
   SUN_POSITION,
   type SceneMap,
   isBuilt,
@@ -61,7 +70,11 @@ import {
 import {
   type ActiveBeat,
   activeBeats,
+  activeBidders,
   beatProgress,
+  bidWarStrobe,
+  earthriseEnvelope,
+  launchShake,
 } from "../lib/choreography";
 import { GLTFLoader } from "three/examples/jsm/loaders/GLTFLoader.js";
 import { DRACOLoader } from "three/examples/jsm/loaders/DRACOLoader.js";
@@ -73,6 +86,14 @@ import {
   interpretBuildSpec,
 } from "../lib/buildspec";
 import { type Ghost, footprintOf } from "../lib/placement";
+import {
+  IDLE_DELAY_MS,
+  ORBIT_EXPOSURE_SCALE,
+  PARALLAX_SETTLE_EPS,
+  advanceParallax,
+  idleSwayOffset,
+  zoomExposure,
+} from "../lib/cameraFeel";
 import { LaunchScenery } from "./LaunchScenery";
 import { DecorRocks } from "./DecorRocks";
 
@@ -89,6 +110,121 @@ const SIGNAL_REVIVE = "#38e1ff"; // recovered — the in-place comeback pulse
 // ONLY objects on this layer, so the glow is confined to status halos and never
 // leaks onto the terrain, rovers, or dome (ADR-0004's "bloom only on halos").
 const HALO_BLOOM_LAYER = 11;
+
+// A SECOND selective-bloom layer for the brightest CELESTIAL bodies — the Sun
+// core and Earth's limb (SkyBodies). The halo bloom (above) is tuned tight for
+// the small status halos; the celestial pass is a separate SelectiveBloom with a
+// lower luminance threshold and a wider kernel so the genuinely bright bodies
+// glow softly, without leaking that glow onto the terrain/rovers (still layer-
+// gated, never full-scene — ADR-0004). Exported so SkyBodies can enable it on the
+// Sun core mesh and Earth rim shell.
+export const CELESTIAL_BLOOM_LAYER = 12;
+
+// Subtle orbit-only chromatic-aberration offset. A module-level constant (stable
+// reference) so it never re-triggers the memoized effect across renders.
+const CHROMATIC_OFFSET = new THREE.Vector2(0.0006, 0.0012);
+
+// Distance from the origin worksite to the sun (#104). The sun's orthographic
+// shadow camera looks from SUN_POSITION toward the origin, so its near/far must
+// bracket the worksite slab at this depth along the sun ray.
+const SUN_POSITION_LEN = Math.hypot(SUN_POSITION[0], SUN_POSITION[1], SUN_POSITION[2]);
+
+// Half-extent of the sun shadow-camera frustum (#104) — clamps the 2048 map to
+// the ±25-unit worksite (GROUND_SPAN=20 + margin) so resolution isn't wasted on
+// the far regolith plain.
+const SHADOW_WORKSITE_HALF = 25;
+
+// SPACE LIGHTING rig — extracted (Wave 4) so it renders IDENTICALLY in BOTH the
+// snapshot-loaded scene and the pre-snapshot fallback branch. Lighting is decorative
+// / snapshot-INDEPENDENT (ADR-0004), so it must never live only inside the
+// snapshot-gated return — otherwise the orbit vista shows a flat-lit Moon until the
+// first snapshot arrives. Three contributions, all VIEW-CONDITIONAL on `onSurface`:
+//   1. SUN — the white key light, DECOUPLED (Wave 4): surface keeps SUN_POSITION
+//      (lights the worksite on the Moon's near face); orbit swings to
+//      ORBIT_SUN_POSITION so the Moon reads dark-with-crescent (SVS #14992). The two
+//      views never co-render, so the swing is unseen. The Moon globe isn't inside the
+//      ±25 worksite shadow frustum, so its terminator is pure diffuse and follows
+//      this light for free.
+//   2. EARTHSHINE — a cool desaturated point light FROM Earth (inverse-square). In
+//      orbit the sun back-lights the Moon, so this faint fill is the ONLY light on the
+//      camera-facing near side (Earth sits in the camera's hemisphere off the Moon,
+//      dot≈0.89). Kept VERY low so the dark side stays dramatically dark with only
+//      barely-readable detail — the brilliant sunlit crescent is the contrast.
+//   3. Ambient + hemisphere floors — near-black in orbit so the void + shadow side
+//      stay dark; lifted on the surface for worksite legibility. Plus surface-only
+//      rim/fill directionals (skipped in orbit — the Moon stays a clean dark hero).
+// Orbit IBL grade (Wave 4) — the HDR <Environment> lights the Moon via scene
+// environment diffuse irradiance, and that (not the named lights) is what set the
+// Moon's overall brightness. We dim it hard in orbit so the Moon's far side reads
+// as a dramatic dark crescent (the sun's back-light + a faint earthshine do the
+// rest); the surface keeps full IBL for the metallic rover/glTF reflections. Set
+// imperatively (drei never touches environmentIntensity, so it sticks once set).
+const ORBIT_ENV_INTENSITY = 0.05;
+
+function EnvironmentGrade({ onSurface }: { onSurface: boolean }) {
+  const scene = useThree((s) => s.scene);
+  // useLayoutEffect (not useEffect): apply the env grade BEFORE the browser paints
+  // the first frame of the new view, so the Moon never flashes one frame at the
+  // wrong (surface=1.0) IBL intensity as the view flips — that one-frame bright/flat
+  // pop is what read as the Moon's shadow "shifting" right after the orbit transition.
+  useLayoutEffect(() => {
+    (scene as unknown as { environmentIntensity: number }).environmentIntensity = onSurface
+      ? 1.0
+      : ORBIT_ENV_INTENSITY;
+  }, [scene, onSurface]);
+  return null;
+}
+
+function SpaceLights({
+  onSurface,
+  lightRef,
+}: {
+  onSurface: boolean;
+  lightRef: React.RefObject<THREE.DirectionalLight>;
+}) {
+  return (
+    <>
+      <ambientLight color="#0e1014" intensity={onSurface ? 0.12 : 0.01} />
+      <hemisphereLight args={["#ffe9cc", "#1a1814", onSurface ? 0.25 : 0.0]} />
+      <directionalLight
+        ref={lightRef}
+        position={onSurface ? SUN_POSITION : ORBIT_SUN_POSITION}
+        color="#ffffff"
+        intensity={1.9}
+        castShadow
+        shadow-mapSize-width={2048}
+        shadow-mapSize-height={2048}
+        shadow-camera-near={SUN_POSITION_LEN - SHADOW_WORKSITE_HALF - 35}
+        shadow-camera-far={SUN_POSITION_LEN + SHADOW_WORKSITE_HALF + 35}
+        shadow-camera-left={-SHADOW_WORKSITE_HALF}
+        shadow-camera-right={SHADOW_WORKSITE_HALF}
+        shadow-camera-top={SHADOW_WORKSITE_HALF}
+        shadow-camera-bottom={-SHADOW_WORKSITE_HALF}
+        shadow-normalBias={0.05}
+        shadow-bias={-0.0005}
+      />
+      <pointLight
+        position={EARTH_POSITION}
+        color="#a8bfda"
+        decay={2}
+        distance={0}
+        // Orbit earthshine LIFTED: in the SVS #14992 reference the Moon's SHADOW side is
+        // not black — its maria/craters are picked out by cool reflected earthlight. This
+        // raking fill from Earth's position reveals that dark-side relief so the near-half-
+        // lit Moon reads as detailed dark rock, never a void. Sized to the (now farther)
+        // Earth berth: decay=2 inverse-square over |Earth→Moon| ≈ 4.5k needs ~1.35M to land
+        // the same illuminance the closer berth got from a smaller number.
+        intensity={onSurface ? 2_310_000 : 1_350_000}
+      />
+      {onSurface && (
+        <>
+          <directionalLight position={[-40, 26, -30]} color="#9fb6d8" intensity={0.35} />
+          <directionalLight position={[36, 22, 28]} color="#ffd9b0" intensity={0.22} />
+        </>
+      )}
+    </>
+  );
+}
 
 // ---- shared geometry buffers ------------------------------------------------
 
@@ -235,10 +371,95 @@ function dimRoverModel(obj: THREE.Object3D): THREE.Material[] {
 // asset never breaks the rover. The `dim` flag (dead rover) dims BOTH paths: the
 // primitives via their material color, the loaded model via dimRoverModel (which
 // clones + darkens the model's materials), so a dead rover always reads as dark.
-function RoverBody({ geo, dim }: { geo: SceneGeo; dim: boolean }) {
+//
+// `revived` is the live "revived" beat progress (a ref, 0 = none, →1 = fading):
+// the body-color half of the resurrection shockwave (#107). During the beat we
+// pulse every body mesh's emissive grey→bright cyan and back, so the rover itself
+// flares as it comes back — driven by ref-mutation in useFrame, never a
+// re-render. Works on BOTH the glTF and the primitive fallback (we traverse
+// whichever is mounted under bodyRef).
+const REVIVE_FLASH = new THREE.Color(SIGNAL_REVIVE);
+function RoverBody({
+  geo,
+  dim,
+  revived,
+}: {
+  geo: SceneGeo;
+  dim: boolean;
+  revived: React.RefObject<number>;
+}) {
   const [scene, setScene] = useState<THREE.Group | null>(null);
   const invalidate = useThree((s) => s.invalidate);
+  const bodyRef = useRef<THREE.Group>(null);
   const bodyColor = dim ? "#2a2a2e" : "#f0f0fa";
+
+  // Materials we CLONE for the resurrection flash, so mutating emissive never
+  // touches the SHARED cached glTF materials (which a live rover reuses — dimming
+  // them would flash every other rover). Cloned lazily on the first flash frame,
+  // then owned + disposed on unmount. The primitive fallback already has its own
+  // per-mesh materials, but we clone uniformly so the reset path is identical.
+  const flashMats = useRef<THREE.MeshStandardMaterial[] | null>(null);
+  const flashing = useRef(false);
+
+  // Resurrection body flash (#107): pulse every body mesh's emissive toward bright
+  // cyan at the comeback and ease back as the shockwave ring expands. A no-op when
+  // no beat is live (progress 0); we reset emissive to 0 exactly once the beat
+  // clears, so this costs nothing between revivals — demand-safe.
+  useFrame(() => {
+    const group = bodyRef.current;
+    if (!group) return;
+    const p = revived.current ?? 0;
+    if (p <= 0) {
+      if (!flashing.current) return; // already idle — nothing to reset
+      flashing.current = false; // fall through once to reset the flash mats to 0
+    } else {
+      flashing.current = true;
+      if (!flashMats.current) {
+        // First flash ever for this body: clone each body material ONCE so we
+        // mutate copies, not the SHARED cached glTF originals (which live rovers
+        // reuse). The clones stay on the meshes and are reused across every later
+        // flash — never re-cloned — and disposed on unmount, so repeated revivals
+        // leak nothing.
+        const owned: THREE.MeshStandardMaterial[] = [];
+        group.traverse((o) => {
+          const mesh = o as THREE.Mesh;
+          if (!mesh.isMesh || !mesh.material) return;
+          if (Array.isArray(mesh.material)) {
+            mesh.material = mesh.material.map((m) => {
+              const c = m.clone() as THREE.MeshStandardMaterial;
+              owned.push(c);
+              return c;
+            });
+          } else {
+            const c = mesh.material.clone() as THREE.MeshStandardMaterial;
+            owned.push(c);
+            mesh.material = c;
+          }
+        });
+        flashMats.current = owned;
+      }
+    }
+    // Brightness peaks early (1 - p) so the flash is strongest at the comeback.
+    const intensity = p > 0 ? (1 - p) * 1.6 : 0;
+    for (const sm of flashMats.current ?? []) {
+      if (!sm.emissive) continue;
+      sm.emissive.copy(REVIVE_FLASH);
+      sm.emissiveIntensity = intensity;
+    }
+  });
+
+  // Dispose the flash material clones we own on unmount/reload (never the shared
+  // cached materials, which the clones replaced on the mesh but did not free). Runs
+  // on a body swap (primitive → glTF) too, resetting `flashing` so the new body
+  // re-clones cleanly if a flash is mid-flight across the swap.
+  useEffect(
+    () => () => {
+      for (const m of flashMats.current ?? []) m.dispose();
+      flashMats.current = null;
+      flashing.current = false;
+    },
+    [scene],
+  );
 
   useEffect(() => {
     let disposed = false;
@@ -261,6 +482,15 @@ function RoverBody({ geo, dim }: { geo: SceneGeo; dim: boolean }) {
         // Dead rover ⇒ darken this placement's materials (clones, so the shared
         // cached materials and live rovers are untouched). Alive ⇒ no-op.
         if (dim) ownedMats = dimRoverModel(obj);
+        // Sun shadows (#104): the loaded model's meshes cast + receive the soft
+        // sun shadow, like the primitive fallback. clone(true) doesn't carry the
+        // flags, so set them per-placement on every mesh in the clone.
+        obj.traverse((o) => {
+          if ((o as THREE.Mesh).isMesh) {
+            o.castShadow = true;
+            o.receiveShadow = true;
+          }
+        });
         setScene(obj);
         invalidate(); // wake the demand loop once so the model shows when loaded
       })
@@ -277,17 +507,24 @@ function RoverBody({ geo, dim }: { geo: SceneGeo; dim: boolean }) {
 
   if (scene) {
     // The model is pre-normalized (centered x/z, base at y=0), so it just sits at
-    // the group origin. It is raycast-suppressed, so it never steals a pick.
-    return <primitive object={scene} />;
+    // the group origin. It is raycast-suppressed, so it never steals a pick. The
+    // wrapping group is the flash traversal root (resurrection body lerp, #107).
+    return (
+      <group ref={bodyRef}>
+        <primitive object={scene} />
+      </group>
+    );
   }
 
   // PRIMITIVE fallback (ADR-0004): a low-poly box body on four short cylinder
   // wheels with a sensor mast, monochrome white, dimmed when dead. Every mesh is
   // raycast-suppressed so only the hit-proxy is pickable.
   return (
-    <group>
-      {/* Body — low-poly box. */}
-      <mesh geometry={geo.body} position={[0, 0.42, 0]} raycast={() => null}>
+    <group ref={bodyRef}>
+      {/* Body — low-poly box. castShadow/receiveShadow (#104): the rover throws a
+          soft sun shadow on the ground and catches shadow from its own mast. */}
+      <mesh geometry={geo.body} position={[0, 0.42, 0]} raycast={() => null} castShadow receiveShadow>
+
         <meshStandardMaterial
           color={bodyColor}
           metalness={0.2}
@@ -296,7 +533,13 @@ function RoverBody({ geo, dim }: { geo: SceneGeo; dim: boolean }) {
         />
       </mesh>
       {/* Sensor mast block, so the rover reads as front-facing. */}
-      <mesh geometry={geo.mast} position={[0, 0.66, -0.18]} raycast={() => null}>
+      <mesh
+        geometry={geo.mast}
+        position={[0, 0.66, -0.18]}
+        raycast={() => null}
+        castShadow
+        receiveShadow
+      >
         <meshStandardMaterial color={bodyColor} metalness={0.2} roughness={0.7} />
       </mesh>
       {/* Four cylinder wheels. */}
@@ -314,11 +557,184 @@ function RoverBody({ geo, dim }: { geo: SceneGeo; dim: boolean }) {
           position={[wx, 0.2, wz]}
           rotation={[0, 0, Math.PI / 2]}
           raycast={() => null}
+          castShadow
+          receiveShadow
         >
           <meshStandardMaterial color={dim ? "#141416" : "#3a3a3f"} roughness={0.9} />
         </mesh>
       ))}
     </group>
+  );
+}
+
+// ---- rover wheel dust (#107) -----------------------------------------------
+//
+// A short regolith puff kicked up when a rover MOVES — fired BY the snapshot (a
+// rover position delta between two snapshots), so it stays a pure function of the
+// world and replays deterministically. ~DUST_COUNT faded particles rise and
+// settle over DUST_MS via ONE drei <Instances> draw call (mirrors DecorRocks's
+// single-draw-call budget), then the burst clears and the loop idles again.
+//
+// DEMAND-SAFE: nothing animates between bursts. On a move we stamp a burst start
+// and invalidate(); the useFrame runs ONLY while a burst is live, keeps the loop
+// alive for its ~600ms, then stops invalidating so the scene returns to 0 idle
+// fps. Per-particle directions come from a burst-seeded deterministic PRNG
+// (decorative jitter, stable for a given rover+burst), so replay is unaffected.
+
+const DUST_COUNT = 15;
+const DUST_MS = 600;
+
+// mulberry32 — the same tiny deterministic PRNG DecorRocks uses, so a burst's
+// scatter is reproducible (decorative jitter only, never world state).
+function dustRand(seed: number) {
+  return () => {
+    seed |= 0;
+    seed = (seed + 0x6d2b79f5) | 0;
+    let t = Math.imul(seed ^ (seed >>> 15), 1 | seed);
+    t = (t + Math.imul(t ^ (t >>> 7), 61 | t)) ^ t;
+    return ((t ^ (t >>> 14)) >>> 0) / 4294967296;
+  };
+}
+
+type DustParticle = {
+  // Ground-plane launch direction + speed, plus a small per-particle scale and a
+  // phase so the puff doesn't read as a single uniform ring.
+  dx: number;
+  dz: number;
+  speed: number;
+  scale: number;
+};
+
+// A burst's particles, seeded once per spawn from the rover id so the jitter is
+// deterministic. The actual positions/opacity are computed per-frame from the
+// burst age in useFrame (no per-frame allocation).
+function makeDustParticles(seed: number): DustParticle[] {
+  const rand = dustRand(seed);
+  const out: DustParticle[] = [];
+  for (let i = 0; i < DUST_COUNT; i++) {
+    const ang = rand() * Math.PI * 2;
+    const speed = 0.5 + rand() * 0.9;
+    out.push({
+      dx: Math.cos(ang),
+      dz: Math.sin(ang),
+      speed,
+      scale: 0.05 + rand() * 0.07,
+    });
+  }
+  return out;
+}
+
+// A stable numeric seed from a rover id string (FNV-1a-ish), so each rover's dust
+// scatter is its own but reproducible across replays.
+function hashId(id: string): number {
+  let h = 0x811c9dc5;
+  for (let i = 0; i < id.length; i++) {
+    h ^= id.charCodeAt(i);
+    h = Math.imul(h, 0x01000193);
+  }
+  return h >>> 0;
+}
+
+// RoverDust emits a fading regolith puff each time the rover's snapshot position
+// changes. Mounted once per rover (inside its group); it watches `pos` and, on a
+// real delta, spawns a burst. The puff is ONE drei <Instances> (a single
+// InstancedMesh draw call): we drive each <Instance> child's transform via refs
+// and let drei compose the instance matrix. The component owns its invalidation
+// so the demand loop wakes for the puff and sleeps again after — no idle
+// animation. Non-pickable (the hit-proxy stays the sole pick target).
+function RoverDust({ pos }: { pos: Vec2 }) {
+  const invalidate = useThree((s) => s.invalidate);
+  const matRef = useRef<THREE.MeshStandardMaterial>(null);
+  // Per-instance transform handles (drei PositionMesh = a Group). We mutate these
+  // each frame; drei reads them to compose the InstancedMesh matrix.
+  const instances = useRef<(THREE.Group | null)[]>([]);
+  // Burst state in refs so a spawn never re-renders the React tree.
+  const burstStart = useRef<number>(0); // performance.now() of the live burst, 0 = idle
+  const particles = useRef<DustParticle[]>([]);
+  // Previous snapshot position, to detect a delta. Null until the first snapshot
+  // so the rover's FIRST appearance never kicks up dust (only real moves do).
+  const prevPos = useRef<Vec2 | null>(null);
+
+  // Detect a position delta on each new snapshot (pos changes only when a new
+  // snapshot arrives). A real move spawns a burst; the first render just records
+  // the start position. Runs in an effect (post-commit), so it reads the freshest
+  // pos and never fires mid-render.
+  useEffect(() => {
+    const prev = prevPos.current;
+    prevPos.current = pos;
+    if (!prev) return; // first snapshot for this rover — no dust
+    if (prev.X === pos.X && prev.Y === pos.Y) return; // no move — no dust
+    // Seed this burst from the rover position so the scatter is deterministic for
+    // a given move (decorative jitter, replay-stable).
+    const seed = (hashId(`${pos.X},${pos.Y}`) ^ 0x9e3779b9) >>> 0;
+    particles.current = makeDustParticles(seed);
+    burstStart.current = performance.now();
+    invalidate(); // wake the demand loop for the puff
+  }, [pos, invalidate]);
+
+  // Animate the live burst: lift + spread each particle and fade the shared
+  // material out over DUST_MS, then clear the burst and stop invalidating. Only
+  // runs while a burst is live, so between puffs this costs nothing (demand-safe).
+  useFrame(() => {
+    const start = burstStart.current;
+    const mat = matRef.current;
+    if (!start || !mat) return;
+    const age = (performance.now() - start) / DUST_MS;
+    if (age >= 1) {
+      // Burst done — collapse every instance to nothing and idle (one final frame
+      // draws them hidden, then we stop invalidating → loop returns to 0 fps).
+      burstStart.current = 0;
+      for (const inst of instances.current) inst?.scale.setScalar(0);
+      mat.opacity = 0;
+      return; // no invalidate → loop idles
+    }
+    const ps = particles.current;
+    const rise = Math.sin(age * Math.PI) * 0.5; // up then settle
+    const spread = age; // outward over the burst
+    for (let i = 0; i < ps.length; i++) {
+      const inst = instances.current[i];
+      if (!inst) continue;
+      const p = ps[i];
+      inst.position.set(
+        p.dx * p.speed * spread,
+        0.06 + rise * p.speed,
+        p.dz * p.speed * spread,
+      );
+      inst.scale.setScalar(p.scale * (1 + age)); // puff billows as it fades
+      // drei's <Instances> composes the instance matrix from each child's
+      // matrixWorld in its own useFrame; force it current NOW so the puff tracks
+      // this frame's transform instead of lagging one frame behind.
+      inst.updateMatrixWorld();
+    }
+    mat.opacity = 0.5 * (1 - age); // fade out
+    invalidate(); // keep the loop alive while the puff animates
+  });
+
+  // ONE InstancedMesh for the whole puff (one draw call). frames={Infinity} so
+  // drei re-composes the instance matrix from our mutated <Instance> transforms
+  // on every rendered frame — but the loop only renders while WE invalidate above,
+  // so it stays demand-safe. Starts collapsed (scale 0, opacity 0); raycast-
+  // suppressed so it never steals a pick.
+  return (
+    <Instances limit={DUST_COUNT} raycast={() => null}>
+      <sphereGeometry args={[1, 6, 6]} />
+      <meshStandardMaterial
+        ref={matRef}
+        color="#b8ac9c"
+        roughness={1}
+        metalness={0}
+        transparent
+        opacity={0}
+        depthWrite={false}
+      />
+      {Array.from({ length: DUST_COUNT }, (_, i) => (
+        <Instance
+          key={i}
+          ref={(el: THREE.Group | null) => (instances.current[i] = el)}
+          scale={0}
+        />
+      ))}
+    </Instances>
   );
 }
 
@@ -354,6 +770,10 @@ function Rover3D({ rover, map, geo, selected, beats, onPick }: Rover3DProps) {
   const wonMatRef = useRef<THREE.MeshStandardMaterial>(null);
   const revivedRef = useRef<THREE.Mesh>(null);
   const revivedMatRef = useRef<THREE.MeshStandardMaterial>(null);
+  // Live "revived" beat progress (0 = none, →1 = fading), written each frame in
+  // useFrame and read by RoverBody so the body itself does the grey→bright lerp
+  // of the resurrection shockwave (#107) without re-rendering.
+  const revivedProgress = useRef<number>(0);
 
   // Put the status halo + winner ring + recovery pulse on the bloom layer so ONLY
   // they glow. Once on mount — the meshes are stable across re-renders.
@@ -381,14 +801,32 @@ function Rover3D({ rover, map, geo, selected, beats, onPick }: Rover3DProps) {
       else if (b.kind === "won") won = beatProgress(b, now);
       else if (b.kind === "revived") revived = beatProgress(b, now);
     }
+    // Share the revived progress with RoverBody (the body color lerp half of the
+    // resurrection shockwave). Written every frame so it tracks the beat exactly.
+    revivedProgress.current = revived;
+
+    // Bid-war strobe (#107): when MULTIPLE rovers are bidding at once (auction
+    // contention), every contending rover's halo strobes faster + harder than the
+    // lone-bid flash. A pure read of the live beats (activeBidders/bidWarStrobe),
+    // so the strobe stays deterministic; 0 when only this rover bids.
+    const strobe = bid > 0 ? bidWarStrobe(activeBidders(list, now)) : 0;
 
     const halo = haloRef.current;
     const haloMat = haloMatRef.current;
     if (halo && haloMat) {
-      halo.scale.setScalar(1 + (bid > 0 ? Math.sin(bid * Math.PI) * 0.35 : 0));
+      // Base bid flash: a single half-sine swell over the beat. During contention,
+      // overlay a fast strobe (≈10 Hz) whose depth scales with the number of
+      // bidders, so a tug-of-war reads as a frantic flicker, not a calm pulse.
+      const basePulse = bid > 0 ? Math.sin(bid * Math.PI) * 0.35 : 0;
+      const strobePulse =
+        strobe > 0 ? (0.5 + 0.5 * Math.sin(now * 0.063)) * strobe * 0.4 : 0;
+      halo.scale.setScalar(1 + basePulse + strobePulse);
       const c = bid > 0 ? SIGNAL_WARN : haloColor;
       haloMat.color.set(c);
       haloMat.emissive.set(c);
+      // Spike the halo's own emissive during contention so the strobe also pumps
+      // brightness (and, via the bloom layer, the selective-bloom glow).
+      haloMat.emissiveIntensity = (dim ? 1.4 : 2.2) + strobePulse * 3.0;
     }
 
     const wonMesh = wonRef.current;
@@ -455,7 +893,12 @@ function Rover3D({ rover, map, geo, selected, beats, onPick }: Rover3DProps) {
       {/* Body — the realistic rover glTF (#54), with the PRIMITIVE box + mast +
           wheels as the FOREVER fallback until/if the model loads. Both are
           raycast-suppressed so the hit-proxy above stays the SOLE pick target. */}
-      <RoverBody geo={geo} dim={dim} />
+      <RoverBody geo={geo} dim={dim} revived={revivedProgress} />
+
+      {/* Wheel dust (#107) — a regolith puff kicked up when this rover MOVES
+          (a snapshot position delta). Demand-safe: it animates only during a
+          burst, then idles. Lives in the rover group so the puff follows it. */}
+      <RoverDust pos={rover.pos} />
 
       {/* Status halo — a thin ring on the ground under the rover. This is the
           ONLY rover element on the bloom layer, so the glow is confined to it.
@@ -654,11 +1097,16 @@ function SpecPrimitive({
   geo,
   color,
   opacity,
+  built,
 }: {
   desc: PrimitiveDesc;
   geo: SceneGeo;
   color: string;
   opacity: number;
+  // Sun shadows (#104): a built op casts/receives the soft sun shadow; a
+  // transparent ghost op does not, so unfinished blueprints don't throw solid
+  // shadows. Defaults true for the model fallback, which is itself only a built op.
+  built?: boolean;
 }) {
   const matRef = useRef<THREE.MeshStandardMaterial>(null);
   const invalidate = useThree((s) => s.invalidate);
@@ -741,6 +1189,8 @@ function SpecPrimitive({
       rotation={desc.rotation}
       scale={desc.scale}
       raycast={() => null}
+      castShadow={built !== false}
+      receiveShadow={built !== false}
     >
       <meshStandardMaterial
         ref={matRef}
@@ -767,11 +1217,13 @@ function SpecModel({
   geo,
   color,
   opacity,
+  built,
 }: {
   desc: ModelDesc;
   geo: SceneGeo;
   color: string;
   opacity: number;
+  built: boolean;
 }) {
   const [scene, setScene] = useState<THREE.Group | null>(null);
   const invalidate = useThree((s) => s.invalidate);
@@ -790,7 +1242,18 @@ function SpecModel({
         // Re-suppress raycast on this clone: clone(true) does not carry over the
         // own-property override applied to the cached source, so every placement
         // must re-apply it to stay non-pickable (see suppressRaycast / loadGLTF).
-        setScene(suppressRaycast(g.clone(true)));
+        const obj = suppressRaycast(g.clone(true));
+        // Sun shadows (#104): a built op's model casts + receives the soft sun
+        // shadow. clone(true) doesn't carry the flags, so set them per-placement.
+        if (built) {
+          obj.traverse((o) => {
+            if ((o as THREE.Mesh).isMesh) {
+              o.castShadow = true;
+              o.receiveShadow = true;
+            }
+          });
+        }
+        setScene(obj);
         invalidate();
       })
       .catch(() => {
@@ -799,11 +1262,13 @@ function SpecModel({
     return () => {
       disposed = true;
     };
-  }, [desc.modelRef, invalidate]);
+  }, [desc.modelRef, invalidate, built]);
 
   if (!scene) {
     // Fallback primitive (a box at the op's transform) until/if the glTF loads.
-    return <SpecPrimitive desc={desc.fallback} geo={geo} color={color} opacity={opacity} />;
+    return (
+      <SpecPrimitive desc={desc.fallback} geo={geo} color={color} opacity={opacity} built={built} />
+    );
   }
 
   return (
@@ -834,9 +1299,9 @@ function SpecMesh({
 }) {
   const color = built ? desc.color : ghostColor;
   if (desc.kind === "model") {
-    return <SpecModel desc={desc} geo={geo} color={color} opacity={opacity} />;
+    return <SpecModel desc={desc} geo={geo} color={color} opacity={opacity} built={built} />;
   }
-  return <SpecPrimitive desc={desc} geo={geo} color={color} opacity={opacity} />;
+  return <SpecPrimitive desc={desc} geo={geo} color={color} opacity={opacity} built={built} />;
 }
 
 // ---- a task / dome block ----------------------------------------------------
@@ -946,7 +1411,16 @@ function TaskBlock({
   // PRIMITIVE FALLBACK — EXACTLY today's tierOf block (unchanged).
   return (
     <group position={[p.x, 0, p.z]}>
-      <mesh ref={meshRef} geometry={blockGeo} position={[0, h, 0]} raycast={() => null}>
+      {/* castShadow/receiveShadow only once BUILT (#104): a transparent blueprint
+          ghost shouldn't throw a solid sun shadow — it grounds only when finished. */}
+      <mesh
+        ref={meshRef}
+        geometry={blockGeo}
+        position={[0, h, 0]}
+        raycast={() => null}
+        castShadow={built}
+        receiveShadow={built}
+      >
         <meshStandardMaterial
           ref={matRef}
           color={color}
@@ -999,6 +1473,34 @@ const GROUND_VISUAL = 700;
 // too large/small.
 const REGOLITH_REPEAT = Math.round(GROUND_VISUAL * 0.3);
 
+// Deterministic 2D value noise (#105): a cheap integer-lattice hash plus
+// bilinear interpolation with a smoothstep fade. No asset, no RNG state — the
+// same (x, y) always returns the same value, so the terrain stays a pure
+// function of its geometry (built once, never per-frame). Used for a
+// high-frequency micro-relief octave on top of the smooth sine swells so the
+// close-up surface reads as chaotic regolith rather than rolling dunes.
+function hashLattice(ix: number, iy: number): number {
+  const h = Math.sin(ix * 127.1 + iy * 311.7) * 43758.5453;
+  return h - Math.floor(h); // [0, 1)
+}
+
+function valueNoise2(x: number, y: number): number {
+  const ix = Math.floor(x);
+  const iy = Math.floor(y);
+  const fx = x - ix;
+  const fy = y - iy;
+  // Smoothstep fade → C1-continuous, no faceting between lattice cells.
+  const ux = fx * fx * (3 - 2 * fx);
+  const uy = fy * fy * (3 - 2 * fy);
+  const a = hashLattice(ix, iy);
+  const b = hashLattice(ix + 1, iy);
+  const c = hashLattice(ix, iy + 1);
+  const d = hashLattice(ix + 1, iy + 1);
+  const top = a + (b - a) * ux;
+  const bottom = c + (d - c) * ux;
+  return top + (bottom - top) * uy; // [0, 1)
+}
+
 // Low-poly lunar ground: a single displaced plane primitive (ADR-0004 allows a
 // "simple ground plane / displaced primitive"). Static — built once, not driven
 // by the snapshot. Subtle deterministic vertex displacement gives a regolith
@@ -1022,7 +1524,18 @@ function LunarTerrain() {
       const fine = Math.sin(x * 0.6) * Math.cos(y * 0.55) * 0.18 + Math.sin(x * 1.7 + y) * 0.05;
       const swellAmp = THREE.MathUtils.smoothstep(Math.hypot(x, y), 30, 200) * 4.0;
       const swell = Math.sin(x * 0.018 + 1.3) * Math.cos(y * 0.021) * swellAmp;
-      pos.setZ(i, fine + swell);
+      // High-frequency micro-relief octave (#105): two value-noise layers near the
+      // mesh's Nyquist limit (~7.3 units/vertex) break the smooth sine dunes into
+      // chaotic, irregular bumps so the close-up surface reads as fine regolith.
+      // Centered to ±1 so it adds no net rise — rovers/tasks at y=0 stay grounded.
+      // Slightly attenuated right under the worksite (<6 units) to keep that floor
+      // readable, then full strength outward across the visible plain.
+      const microMask = 0.55 + 0.45 * THREE.MathUtils.smoothstep(Math.hypot(x, y), 4, 12);
+      const micro =
+        ((valueNoise2(x * 0.31, y * 0.31) - 0.5) * 0.16 +
+          (valueNoise2(x * 0.73 + 19.3, y * 0.73 - 7.1) - 0.5) * 0.07) *
+        microMask;
+      pos.setZ(i, fine + swell + micro);
     }
     g.computeVertexNormals();
     // aoMap reads from uv2; PlaneGeometry's uv works directly as the second set.
@@ -1071,7 +1584,9 @@ function LunarTerrain() {
   }, [gl, invalidate]);
 
   return (
-    <mesh rotation={[-Math.PI / 2, 0, 0]} raycast={() => null}>
+    // receiveShadow (#104): the regolith ground catches the sun shadows cast by
+    // the rovers and domes. It never casts (it's the floor), so castShadow is off.
+    <mesh rotation={[-Math.PI / 2, 0, 0]} raycast={() => null} receiveShadow>
       <primitive object={geom} attach="geometry" />
       {/* Flat #3a3a40 is the fallback until/if the regolith maps load. */}
       <meshStandardMaterial ref={matRef} color="#8a8a8e" roughness={1} metalness={0} />
@@ -1079,25 +1594,55 @@ function LunarTerrain() {
   );
 }
 
-// ---- bloom (selective, halos only) -----------------------------------------
+// ---- cinematic post-processing stack (issue #99) ---------------------------
 
-// SelectiveBloom blooms ONLY meshes on HALO_BLOOM_LAYER (the status/winner
-// halos), never the full scene — ADR-0004's hard guard. Kept cheap: a small
-// blur kernel and no composer MSAA, so it adds minimal GPU cost and plays nicely
-// with frameloop="demand" (it renders only on invalidated frames).
+// A single static EffectComposer carrying the full cinematic stack. It replaces
+// the old halo-only SelectiveBloom pipeline. Every pass is STATIC — none runs a
+// useFrame and none invalidates — so the composer renders ONLY on invalidated
+// frames and 0 idle fps is preserved (frameloop="demand"). All bloom is still
+// layer-gated (HALO + CELESTIAL), never full-scene — ADR-0004's hard guard.
 //
-// MEMOIZED on its single (stable) lightRef prop. Without this, the parent
-// SceneContents re-renders on every snapshot (~12 Hz), which re-renders
-// <SelectiveBloom>, whose internal effect-useMemo depends on a fresh `...props`
-// object each render — so a brand-new SelectiveBloomEffect (and its Selection)
-// was being constructed ~12×/sec. Each Selection pulls from postprocessing's
-// MODULE-GLOBAL layer-id counter; once it climbed past 31 the lib spammed
-// "Layer out of range, resetting to 2" forever. memo() keeps the whole
-// postprocessing subtree stable across snapshots, so the effect is built once.
-const HaloBloom = memo(function HaloBloom({
+// Pass order (composer applies them in declaration order):
+//   1. SMAA          — antialiasing FIRST, since the canvas runs antialias:false
+//                      (the composer owns the framebuffers, so MSAA on the canvas
+//                      backbuffer would be wasted and trips the ANGLE/macOS
+//                      glBlitFramebuffer depth/stencil error).
+//   2. SelectiveBloom (halos)     — tight, small kernel, just the status halos.
+//                      Its intensity is spiked above base during a bid-war (#107).
+//   3. SelectiveBloom (celestial) — Sun core + Earth limb, lower threshold,
+//                      wider kernel, SCREEN blend + smoothed luminance.
+//   4. DepthOfField  — surface-only (mounted only on the surface): the distant
+//                      Earth/horizon fall soft while the worksite stays sharp. In
+//                      orbit it is OFF so the Moon hero stays deep-focus/crisp.
+//   5. ChromaticAberration — orbit-only (mounted only in orbit): a subtle lens
+//                      fringe on the deep-space vista; off on the surface so the
+//                      worksite UI/telemetry stays clean.
+//   6. Vignette      — gentle corner darkening, both views.
+//   7. Noise         — faint film grain, SCREEN blend, very low opacity.
+//
+// MEMOIZED on its (stable) props. Without this, the parent SceneContents
+// re-renders on every snapshot (~12 Hz), which re-renders the effects, whose
+// internal effect-useMemos depend on a fresh `...props` object each render — so
+// brand-new effects (and Selections) were being constructed ~12×/sec. Each
+// Selection pulls from postprocessing's MODULE-GLOBAL layer-id counter; once it
+// climbed past 31 the lib spammed "Layer out of range, resetting to 2" forever.
+// memo() keeps the whole postprocessing subtree stable across snapshots, so the
+// effects are built once. onSurface DOES change (a real remount on view flip),
+// which is the only time the stack legitimately rebuilds.
+//
+// Base selective-bloom intensity (the calm-scene value). The bid-war strobe (#107)
+// briefly spikes ABOVE this during auction contention, then eases back to it.
+const BLOOM_BASE_INTENSITY = 2.2;
+const BLOOM_WAR_SPIKE = 2.6; // added at full contention
+
+const CinematicFX = memo(function CinematicFX({
   lightRef,
+  onSurface,
+  beats,
 }: {
   lightRef: React.RefObject<THREE.DirectionalLight>;
+  onSurface: boolean;
+  beats: React.RefObject<ActiveBeat[]>;
 }) {
   // The directional light mounts in the same pass as this component, so its ref
   // is null on first render. Force exactly one re-render after mount so the ref
@@ -1105,26 +1650,96 @@ const HaloBloom = memo(function HaloBloom({
   // until then.
   const [, ready] = useState(0);
   useEffect(() => ready(1), []);
+  const bloomRef = useRef<SelectiveBloomEffect>(null);
+
+  // Bid-war bloom spike (#107): while multiple rovers contend, pump the bloom
+  // intensity above its base in proportion to the strobe, easing back to base as
+  // the contention clears. A pure read of the live beats (no random), and it only
+  // ever runs on already-invalidated frames (the bid beats keep the loop alive),
+  // so it adds no idle work — when no bids are live it settles to base and stops.
+  const spiked = useRef(false);
+  useFrame(() => {
+    const effect = bloomRef.current;
+    const list = beats.current;
+    if (!effect) return;
+    let strobe = 0;
+    if (list && list.length > 0) {
+      strobe = bidWarStrobe(activeBidders(list, performance.now()));
+    }
+    if (strobe <= 0) {
+      if (!spiked.current) return; // already at base — nothing to reset
+      spiked.current = false;
+      effect.intensity = BLOOM_BASE_INTENSITY; // settle back exactly once
+      return;
+    }
+    spiked.current = true;
+    effect.intensity = BLOOM_BASE_INTENSITY + BLOOM_WAR_SPIKE * strobe;
+  });
+
   const light = lightRef.current;
   if (!light) return null;
   return (
-    // multisampling={0}: SelectiveBloom does its own threshold/blur, so composer
-    // MSAA buys nothing here. A SMALL kernel keeps the blur passes (and their
-    // render targets) light — the halos are tiny, so a wide kernel would be
-    // wasted GPU memory. (The depth/stencil glBlitFramebuffer error ANGLE/macOS
-    // drivers throw comes from the CANVAS's antialias:true backbuffer, not this
-    // composer — see the Canvas gl props below, where antialias is off.)
+    // multisampling={0}: SMAA does the antialiasing inside the composer, so
+    // composer MSAA buys nothing and would only cost a multisampled target.
     <EffectComposer multisampling={0}>
+      {/* SMAA first — the canvas runs antialias:false (composer owns framebuffers). */}
+      <SMAA />
+      {/* Halo bloom — status/winner halos only. Tight: small kernel, high-ish
+          threshold so only the bright halo cores glow. SCREEN blend, smoothed. */}
       <SelectiveBloom
+        ref={bloomRef}
         lights={[light]}
         selectionLayer={HALO_BLOOM_LAYER}
-        intensity={2.2}
+        blendFunction={BlendFunction.SCREEN}
+        intensity={BLOOM_BASE_INTENSITY}
         luminanceThreshold={0.1}
         luminanceSmoothing={0.2}
         mipmapBlur
         kernelSize={KernelSize.SMALL}
         radius={0.6}
       />
+      {/* Celestial bloom — the genuinely bright bodies (Sun core, Earth limb) on
+          CELESTIAL_BLOOM_LAYER. Lower threshold + wider kernel so they glow softly;
+          SCREEN blend with smoothed luminance for a clean, additive halo. */}
+      <SelectiveBloom
+        lights={[light]}
+        selectionLayer={CELESTIAL_BLOOM_LAYER}
+        blendFunction={BlendFunction.SCREEN}
+        intensity={1.1}
+        luminanceThreshold={0.08}
+        luminanceSmoothing={0.35}
+        mipmapBlur
+        kernelSize={KernelSize.LARGE}
+        radius={0.85}
+      />
+      {/* Surface-gated DoF — distant Earth/horizon soften while the worksite stays
+          sharp. Mounted ONLY on the surface; in orbit the Moon hero stays crisp. */}
+      {onSurface ? (
+        <DepthOfField
+          focusDistance={0.0}
+          focalLength={0.02}
+          bokehScale={2.2}
+          height={480}
+        />
+      ) : (
+        <></>
+      )}
+      {/* Orbit-only chromatic aberration — a subtle lens fringe on the deep-space
+          vista. Off on the surface so worksite telemetry stays crisp. */}
+      {onSurface ? (
+        <></>
+      ) : (
+        <ChromaticAberration
+          blendFunction={BlendFunction.NORMAL}
+          offset={CHROMATIC_OFFSET}
+          radialModulation={false}
+          modulationOffset={0}
+        />
+      )}
+      {/* Gentle corner vignette — both views. */}
+      <Vignette offset={0.3} darkness={0.4} blendFunction={BlendFunction.NORMAL} />
+      {/* Faint film grain — SCREEN blend, very low opacity, both views. */}
+      <Noise blendFunction={BlendFunction.SCREEN} opacity={0.018} />
     </EffectComposer>
   );
 });
@@ -1172,8 +1787,12 @@ const VIEW_PRESETS: Record<
   }
 > = {
   surface: {
-    minDistance: 10,
-    maxDistance: 40,
+    // FOV widened 42→50 (#101) makes the worksite subtend more of the frame, so
+    // the surface distance band is pulled IN by ~tan(21°)/tan(25°) ≈ 0.82 (10→8,
+    // 40→33) to hold the rehearsed framing — the dome/rovers fill the same screen
+    // area at the wider lens.
+    minDistance: 8,
+    maxDistance: 33,
     minPolarAngle: Math.PI / 6,
     // Allow a flatter, more horizon-facing look (up to ~80° from vertical) so the
     // plain + sky + distant Earth read; still clamped short of dipping under it.
@@ -1185,7 +1804,7 @@ const VIEW_PRESETS: Record<
     // globe's berth, imported from SkyBodies so the two can never drift apart).
     // The worksite is hidden in this mode (it's "on" the Moon), so there is no
     // floating diorama in frame — just the Moon, distant Earth, and stars. The
-    // distance band keeps a radius-90 globe filling a good part of the 42° fov.
+    // distance band keeps a radius-90 globe filling a good part of the 50° fov.
     minDistance: 220,
     maxDistance: 640,
     minPolarAngle: Math.PI / 4,
@@ -1245,6 +1864,29 @@ const MOON_CLOSE_POSE: Pose = {
 };
 
 const TRANSITION_MS = 1500;
+// The cinematic intro fly-in (#108) reuses the descent rig but stretched, so the
+// experience opens as a slow deep-space arrival rather than a snappy mode toggle.
+const INTRO_MS = 4500;
+
+// ---- Earthrise hero pose (#108) --------------------------------------------
+// The `earthrise-hero` beat lerps the SURFACE camera from its current pose to a
+// framing that holds Earth over the lunar horizon: aim down the azimuth TOWARD
+// Earth (so Earth's disc sits in frame above the regolith line), at a low pitch
+// so a band of horizon reads beneath it. Derived from EARTH_POSITION so the aim
+// can never drift from the rendered Earth. Camera backs off slightly along the
+// opposite (away-from-Earth) heading and lifts a touch for a hero vantage.
+const EARTHRISE_HERO_POSE: Pose = (() => {
+  // Horizontal heading from the worksite toward Earth (ignore Earth's depth/Y).
+  const dir = new THREE.Vector2(EARTH_POSITION[0], EARTH_POSITION[2]).normalize();
+  // Look at a far point on that heading, raised so Earth's disc frames ABOVE the
+  // horizon (Earth is far + slightly below the plane, but its apparent disc rides
+  // the limb when aimed up the heading) — a touch of lift keeps the horizon in shot.
+  const target = new THREE.Vector3(dir.x * 60, 9, dir.y * 60);
+  // Camera sits behind the worksite, opposite Earth's heading, at surface height
+  // so the regolith plain leads the eye out to the Earthrise.
+  const position = new THREE.Vector3(-dir.x * 22, 8, -dir.y * 22);
+  return { position, target };
+})();
 
 // ---- descent easing (#84, SVS 4444) ----------------------------------------
 // The descent is choreographed with ASYMMETRIC easing instead of the old
@@ -1373,6 +2015,218 @@ function PlacementPlane({
   );
 }
 
+// Surface-only horizon fog — SINGLE SOURCE OF TRUTH (#101). Previously the same
+// <fog> was declared twice in two SceneContents return branches (the loading
+// fallback + the main render) and could drift apart; consolidated here so both
+// branches render the identical fog. Tinted a warm deep blue-grey (#0a0f1a)
+// instead of pure black for atmospheric depth — the far regolith plain dissolves
+// into a faint dusk rather than a hard black void, while the worksite (within
+// ~30 units, well inside the 180 near plane) stays unaffected. Surface-only;
+// orbit skips it so the Moon globe stays crisp.
+const SURFACE_FOG_ARGS: [string, number, number] = ["#0a0f1a", 180, 680];
+
+// ---- cinematic camera beats (#108) -----------------------------------------
+//
+// CinematicCamera drives the camera-affecting Wave-3 beats (earthrise-hero +
+// launch shake) from the live beat list. It lives INSIDE the Canvas so it can
+// reach the camera/OrbitControls via useThree and animate them in a useFrame.
+// Like every beat it only DECORATES the snapshot — it never invents world state,
+// and it returns the camera to its base pose (and re-enables controls) the moment
+// the last beat clears, so the demand loop idles at 0 fps (the invariant; SceneⅭ
+// ontents' own useFrame keeps the loop alive while beats are live).
+//
+// EARTHRISE-HERO: disables controls, lerps the camera from its current pose to
+// EARTHRISE_HERO_POSE (Earth over the horizon), holds, then lerps back and
+// restores controls at the pose it left — driven by earthriseEnvelope (0 at both
+// ends, 1 in the hold), so the move is fully reversible with no residual offset.
+//
+// LAUNCH: leaves OrbitControls in charge and adds a DECAYING positional shake
+// (launchShake) on top of the camera each frame — applied as a transient offset
+// that is removed before the next frame's read, so it never accumulates and
+// settles to exactly zero (pick/click-to-kill stay intact: the shake never
+// touches controls.enabled or the raycaster).
+type CinematicControls = {
+  target: THREE.Vector3;
+  update: () => void;
+  enabled: boolean;
+};
+
+function CinematicCamera({ beats }: { beats: React.RefObject<ActiveBeat[]> }) {
+  const camera = useThree((s) => s.camera);
+  const controls = useThree((s) => s.controls) as CinematicControls | null;
+  const invalidate = useThree((s) => s.invalidate);
+
+  // Earthrise takeover state: the pose the camera was at when the beat began, so
+  // we can lerp out and restore it exactly. Null when no earthrise beat is active.
+  const heroFrom = useRef<Pose | null>(null);
+  // The shake offset applied last frame, removed at the top of the next frame so
+  // the shake is purely additive and never accumulates into the base pose.
+  const shakeOffset = useRef(new THREE.Vector3(0, 0, 0));
+  const tmpPos = useRef(new THREE.Vector3());
+  const tmpTgt = useRef(new THREE.Vector3());
+
+  useFrame(() => {
+    const list = beats.current;
+    // Always undo last frame's shake offset first so the base pose is clean,
+    // whether or not a launch beat is still active this frame.
+    if (shakeOffset.current.lengthSq() > 0) {
+      camera.position.sub(shakeOffset.current);
+      shakeOffset.current.set(0, 0, 0);
+    }
+    if (!list || list.length === 0) {
+      // No beats: if we were mid-earthrise (e.g. the beat was pruned), restore.
+      if (heroFrom.current) {
+        if (controls) {
+          controls.enabled = true;
+          controls.update();
+        }
+        heroFrom.current = null;
+        invalidate();
+      }
+      return;
+    }
+
+    const now = performance.now();
+    let hero = 0;
+    let launch = 0;
+    for (const b of list) {
+      if (b.kind === "earthrise-hero") hero = Math.max(hero, beatProgress(b, now));
+      else if (b.kind === "launch") launch = Math.max(launch, beatProgress(b, now));
+    }
+
+    // EARTHRISE-HERO — disable controls, lerp toward the hero framing, hold, then
+    // lerp back. earthriseEnvelope is 0 at both ends so we land back on `heroFrom`.
+    const heroActive = hero > 0 && hero < 1;
+    if (heroActive) {
+      if (!heroFrom.current) {
+        // Capture the pose to fly FROM (and back TO). Disable controls for the move.
+        heroFrom.current = {
+          position: camera.position.clone(),
+          target: controls ? controls.target.clone() : new THREE.Vector3(0, 4, 0),
+        };
+        if (controls) controls.enabled = false;
+      }
+      const k = earthriseEnvelope(hero);
+      tmpPos.current.lerpVectors(heroFrom.current.position, EARTHRISE_HERO_POSE.position, k);
+      tmpTgt.current.lerpVectors(heroFrom.current.target, EARTHRISE_HERO_POSE.target, k);
+      camera.position.copy(tmpPos.current);
+      camera.up.set(0, 1, 0);
+      camera.lookAt(tmpTgt.current);
+      if (controls) controls.target.copy(tmpTgt.current);
+    } else if (heroFrom.current) {
+      // Earthrise just finished — settle exactly back on the captured pose and
+      // hand the camera back to OrbitControls.
+      camera.position.copy(heroFrom.current.position);
+      camera.up.set(0, 1, 0);
+      camera.lookAt(heroFrom.current.target);
+      if (controls) {
+        controls.target.copy(heroFrom.current.target);
+        controls.enabled = true;
+        controls.update();
+      }
+      heroFrom.current = null;
+    }
+
+    // LAUNCH — decaying screen shake. A small positional jitter that decays to 0;
+    // applied AFTER any earthrise pose so a launch during the hold still rattles.
+    if (launch > 0 && launch < 1) {
+      const SHAKE = 0.5; // peak amplitude in scene units (subtle, not nauseating)
+      shakeOffset.current.set(
+        launchShake(launch, 0) * SHAKE,
+        launchShake(launch, 1) * SHAKE,
+        launchShake(launch, 2) * SHAKE * 0.5,
+      );
+      camera.position.add(shakeOffset.current);
+    }
+
+    invalidate();
+  });
+
+  return null;
+}
+
+// LaunchFlare draws the launch beat's additive exhaust + godray flare: a stack of
+// emissive, non-tone-mapped billboards at the launch pad that bloom up and fade
+// over the beat. Always mounted but hidden; visibility/scale/opacity are driven
+// in useFrame so it costs nothing between beats (mirrors the winner/recovery
+// rings). On the bloom layer so the flare glows. Snapshot-INDEPENDENT decoration.
+function LaunchFlare({ beats }: { beats: React.RefObject<ActiveBeat[]> }) {
+  const groupRef = useRef<THREE.Group>(null);
+  const coreMatRef = useRef<THREE.MeshBasicMaterial>(null);
+  const plumeMatRef = useRef<THREE.MeshBasicMaterial>(null);
+
+  // Put the flare on the bloom layer so it glows like the halos.
+  useEffect(() => {
+    groupRef.current?.traverse((o) => o.layers.enable(HALO_BLOOM_LAYER));
+  }, []);
+
+  useFrame(() => {
+    const group = groupRef.current;
+    if (!group) return;
+    const list = beats.current;
+    let launch = 0;
+    if (list) {
+      const now = performance.now();
+      for (const b of list) {
+        if (b.kind === "launch") {
+          launch = Math.max(launch, beatProgress(b, now));
+        }
+      }
+    }
+    const active = launch > 0 && launch < 1;
+    if (!active) {
+      if (group.visible) group.visible = false;
+      return;
+    }
+    group.visible = true;
+    // Ignition flash ramps up fast then the plume climbs and fades over the beat.
+    const ignite = Math.min(1, launch / 0.12); // quick flash-up in the first 12%
+    const fade = 1 - launch; // overall decay toward the end
+    const core = coreMatRef.current;
+    const plume = plumeMatRef.current;
+    if (core) core.opacity = ignite * fade;
+    if (plume) plume.opacity = ignite * fade * 0.8;
+    // The plume billboard stretches upward as the launch climbs.
+    group.scale.set(1, 1 + launch * 2.2, 1);
+  });
+
+  // Placed at the launch-pad corner of the worksite (matches LaunchScenery's
+  // edge placement). Two stacked emissive quads: a tight bright core + a taller
+  // soft plume, both additive + non-tone-mapped so they read as raw light.
+  return (
+    <group ref={groupRef} position={[GROUND_SPAN * 0.7, 0, GROUND_SPAN * 0.7]} visible={false}>
+      {/* Bright ignition core at the pad base. */}
+      <mesh position={[0, 1.2, 0]} raycast={() => null}>
+        <planeGeometry args={[2.2, 2.6]} />
+        <meshBasicMaterial
+          ref={coreMatRef}
+          color="#fff3d8"
+          transparent
+          opacity={0}
+          blending={THREE.AdditiveBlending}
+          depthWrite={false}
+          toneMapped={false}
+          side={THREE.DoubleSide}
+        />
+      </mesh>
+      {/* Taller soft exhaust plume climbing above the core. */}
+      <mesh position={[0, 3.4, 0]} raycast={() => null}>
+        <planeGeometry args={[1.6, 5.0]} />
+        <meshBasicMaterial
+          ref={plumeMatRef}
+          color="#ffd29a"
+          transparent
+          opacity={0}
+          blending={THREE.AdditiveBlending}
+          depthWrite={false}
+          toneMapped={false}
+          side={THREE.DoubleSide}
+        />
+      </mesh>
+    </group>
+  );
+}
+
 // The actual scene contents (inside <Canvas>). The snapshot → meshes mapping is
 // a single pure pass that re-renders ONLY when a new snapshot arrives. Beats
 // animate via per-mesh useFrame ref-mutation (in Rover3D/TaskBlock), so the
@@ -1464,10 +2318,13 @@ function SceneContents({
   if (!snapshot || !map || !taskById) {
     return (
       <>
-        <ambientLight intensity={0.4} />
-        {/* Surface-only horizon fog: dissolves the far ground edge into the black
-            sky for a clean horizon. Skipped in orbit (the Moon must stay crisp). */}
-        {onSurface && <fog attach="fog" args={["#000000", 180, 680]} />}
+        {/* Same decorative lighting rig as the main branch (snapshot-independent), so
+            the orbit vista's dark-side Moon reads correctly even before the first
+            snapshot arrives. */}
+        <SpaceLights onSurface={onSurface} lightRef={lightRef} />
+        <EnvironmentGrade onSurface={onSurface} />
+        {/* Surface-only horizon fog — shared SURFACE_FOG_ARGS (#101, see above). */}
+        {onSurface && <fog attach="fog" args={SURFACE_FOG_ARGS} />}
         {onSurface && <LunarTerrain />}
         <SpaceEnvironment />
         <SkyBodies viewMode={viewMode} onBaseClick={onBaseClick} />
@@ -1477,46 +2334,16 @@ function SceneContents({
 
   return (
     <group>
-      {/* SPACE LIGHTING — one harsh white sun + faint reflected fills, the way
-          airless space really lights a scene (no atmosphere to scatter, so high
-          contrast and near-black shadows). Three contributions:
-          1. SUN — the key light, FROM the visible Sun body (shared SUN_POSITION),
-             WHITE (0xffffff, sunlight in vacuum), strong. Also drives the bloom.
-          2. EARTHSHINE — a dim COOL-BLUE light FROM the visible Earth
-             (EARTH_POSITION): Earth reflects sunlight back, faintly lighting the
-             Moon's night side (the classic "earthshine") and filling the
-             worksite's shadow side. This is the "bodies reflect their sunlight"
-             effect the scene is replicating.
-          3. Regolith bounce — a low hemisphere (lit ground colour from below,
-             black sky from above) standing in for sunlight bouncing off the bright
-             lunar surface, plus a tiny ambient floor so nothing is pure black
-             (ADR-0004 readability). */}
-      {/* Ambient floor — VIEW-CONDITIONAL. In orbit the Moon is airless and has
-          essentially NO fill but faint earthshine, so the void + shadow side must
-          go near-black for crater relief and a dramatic terminator to read (the
-          SVS look) → 0.04. On the surface a touch more (0.12) keeps the worksite's
-          shadow side legible. Cool near-black tint. */}
-      <ambientLight color="#0e1014" intensity={onSurface ? 0.12 : 0.04} />
-      {/* Hemisphere regolith bounce — VIEW-CONDITIONAL for the same reason: a
-          whisper on the surface (0.25, regolith bounce under the worksite), all but
-          OFF in orbit (0.05) so the Moon's shadow side isn't washed flat. */}
-      <hemisphereLight args={["#ffe9cc", "#1a1814", onSurface ? 0.25 : 0.05]} />
-      {/* SUN — the key light, PURE WHITE (#FFFFFF): sunlight in vacuum has no
-          atmosphere to redden it (see lib/scene.ts), so a white key keeps the lit
-          Moon a neutral cool grey (the NASA reference look) instead of warm-tan;
-          kept at ~1.9 so it stays the bloom driver and the lit limb is bright but
-          not blown out. */}
-      <directionalLight ref={lightRef} position={SUN_POSITION} color="#ffffff" intensity={1.9} />
-      {/* Earthshine — a cool DESATURATED whisper (pale steel-blue #A8BFDA), from
-          Earth's actual position. NASA earthshine is a faint wash on the night-side
-          terminator, NOT a blue glow — dimmest in orbit (0.16) so the shadow side
-          stays near-black; a bit more on the surface (0.25) for shadow legibility. */}
-      <directionalLight position={EARTH_POSITION} color="#a8bfda" intensity={onSurface ? 0.25 : 0.16} />
+      {/* SPACE LIGHTING rig — shared with the pre-snapshot fallback branch (see the
+          SpaceLights definition above for the full physical rationale of each light
+          and the Wave-4 decoupled-sun / dark-side-Moon tuning). */}
+      <SpaceLights onSurface={onSurface} lightRef={lightRef} />
+      <EnvironmentGrade onSurface={onSurface} />
 
-      {/* Surface-only horizon fog: dissolves the far ground edge into the black
-          sky for a clean horizon + sense of vastness. The worksite (within ~30
-          units) is unaffected. Skipped in orbit so the Moon stays crisp. */}
-      {onSurface && <fog attach="fog" args={["#000000", 180, 680]} />}
+      {/* Surface-only horizon fog — shared SURFACE_FOG_ARGS (#101, see above): one
+          consolidated definition (was duplicated across two return branches), warm
+          deep blue-grey tint for atmospheric depth. Skipped in orbit. */}
+      {onSurface && <fog attach="fog" args={SURFACE_FOG_ARGS} />}
 
       {/* Static, snapshot-independent backdrop: hand-rolled starfield + self-
           hosted HDR skybox/IBL (issue #50). Shown in BOTH views. Encodes no world
@@ -1535,6 +2362,25 @@ function SceneContents({
       {onSurface && (
         <>
           <LunarTerrain />
+
+          {/* Contact shadows (#104) — drei bakes a soft ambient-occlusion-like
+              contact shadow under the rovers + domes so they read as GROUNDED, not
+              floating, even where the directional sun shadow is grazing. Sits a hair
+              above the regolith (y=0.02) to avoid z-fighting the displaced plane.
+              frames={1} bakes the shadow exactly ONCE (on the first rendered
+              frame), so it never forces a continuous render loop — 0 idle fps holds.
+              width/height span the ~±18-unit worksite detail zone; the soft blur +
+              ~0.6 opacity keep it a subtle ground occlusion, not a hard disc. */}
+          <ContactShadows
+            position={[0, 0.02, 0]}
+            scale={40}
+            resolution={1024}
+            far={6}
+            blur={3}
+            opacity={0.6}
+            color="#000000"
+            frames={1}
+          />
 
           {/* Tasks / rising dome. */}
           {snapshot.tasks.map((t) => (
@@ -1566,6 +2412,10 @@ function SceneContents({
               worksite edge. Snapshot-INDEPENDENT decoration, raycast-suppressed. */}
           <LaunchScenery />
 
+          {/* Launch-beat flare (#108): additive exhaust + godray billboards at the
+              pad, hidden until a `launch` beat ramps them in useFrame. */}
+          <LaunchFlare beats={beats} />
+
           {/* Instanced decorative rock field (#58a) — snapshot-INDEPENDENT scatter of
               low-poly rocks in ONE draw call via <Instances frames={1}>, non-pickable. */}
           <DecorRocks />
@@ -1580,8 +2430,18 @@ function SceneContents({
         <PlacementPlane map={map} onMove={onPlaceMove} onConfirm={onPlaceConfirm} />
       ) : null}
 
-      {/* Selective bloom — halos ONLY (ADR-0004). Rendered last; reads lightRef. */}
-      <HaloBloom lightRef={lightRef} />
+      {/* Cinematic camera beats (#108): earthrise-hero framing + decaying launch
+          shake. Reads the live beat list; idles (no camera motion) when no beat
+          is active, so the demand loop stays at 0 fps. */}
+      <CinematicCamera beats={beats} />
+
+      {/* Cinematic post-processing stack (#99) — layer-gated bloom (halos +
+          celestial Sun/Earth), SMAA, surface-gated DoF, orbit-only chromatic
+          aberration, vignette, film grain. Rendered last; reads lightRef. All
+          passes static (demand-loop safe). Supersedes the standalone HaloBloom —
+          the halo SelectiveBloom is now one pass inside this stack, and it reads
+          the live beats to spike intensity during a bid-war (#107). */}
+      <CinematicFX lightRef={lightRef} onSurface={onSurface} beats={beats} />
     </group>
   );
 }
@@ -1628,6 +2488,204 @@ function RigBridge({
   return null;
 }
 
+// CameraFeel — slice #109. Decorative camera polish that NEVER touches the
+// snapshot (ADR-0004 purity intact): a gentle idle azimuth sway after ~4s of no
+// input, a zoom-coupled tone-mapping-exposure lift, and a subtle starfield
+// parallax as the orbit azimuth moves. The actual numbers are pure helpers in
+// lib/cameraFeel.ts; this component only wires them to the live camera/scene.
+//
+// Demand-loop discipline (Wave-3 relaxation): the idle sway is the only piece
+// that needs an ongoing loop, so it self-sustains by calling invalidate() each
+// frame WHILE drifting and STOPS (returns to 0 idle fps) the moment the user
+// interacts OR the tab is hidden. Exposure + parallax are cheap reads applied on
+// frames the loop is already painting (interaction, drift, snapshots), so they
+// add no idle cost of their own. A timer wakes the loop once at the 4s mark so
+// the drift can begin from a fully-settled, otherwise-idle scene.
+//
+// `active` is false while placing or during the descent transition — those own
+// the camera — so the feel layer stays out of their way.
+// The OrbitControls surface CameraFeel reads/subscribes to. Kept as a hand-rolled
+// interface (rather than OrbitLike, whose EventDispatcher event-map types the
+// listener param as `never`) with a loose, string-keyed add/removeEventListener.
+type FeelControls = {
+  target: THREE.Vector3;
+  enabled: boolean;
+  minDistance: number;
+  maxDistance: number;
+  getDistance: () => number;
+  getAzimuthalAngle: () => number;
+  addEventListener: (type: string, listener: () => void) => void;
+  removeEventListener: (type: string, listener: () => void) => void;
+};
+
+function CameraFeel({ active, onSurface }: { active: boolean; onSurface: boolean }) {
+  const controls = useThree((s) => s.controls) as FeelControls | null;
+  const camera = useThree((s) => s.camera);
+  const scene = useThree((s) => s.scene);
+  const gl = useThree((s) => s.gl);
+  const invalidate = useThree((s) => s.invalidate);
+  const domElement = gl.domElement;
+
+  // Mutable feel state, kept in refs so it never triggers a React re-render.
+  // Timestamp of the last user input; the idle clock counts up from here.
+  const lastInputRef = useRef<number>(performance.now());
+  // The azimuth captured the first idle frame; the sway oscillates AROUND it and
+  // it's cleared on every interaction so the next idle re-captures from wherever
+  // the user left the camera. null = not currently drifting.
+  const restAzimuthRef = useRef<number | null>(null);
+  // The settled camera offset (position − target) at rest; the idle sway rotates
+  // a CLONE of this around the target's up-axis so amplitude can't accumulate.
+  const restOffsetRef = useRef(new THREE.Vector3());
+  // True between OrbitControls 'start' and 'end' (a drag/zoom in progress). The
+  // idle sway is suppressed while dragging so a long (>4s) continuous drag can't
+  // start drifting under the user's own gesture.
+  const draggingRef = useRef(false);
+  // --- starfield parallax state (trailing model; see cameraFeel.advanceParallax) ---
+  // The yaw offset (radians) currently applied to the dim points starfield. It
+  // trails the camera azimuth and relaxes back to 0 — there is no anchor to reset,
+  // so it can't snap. We OWN this object's rotation.y outright (nothing else sets
+  // it), so we write it absolutely rather than as a relative delta.
+  const parallaxRef = useRef(0);
+  // Last frame's azimuth, to derive the per-frame delta. null until the first
+  // frame captures it (so the first delta is 0, never a spurious jump).
+  const lastAzimuthRef = useRef<number | null>(null);
+  // Cached lookup of the points layer (mounts via SpaceEnvironment, possibly after
+  // this component). Re-resolved each frame until found, then reused.
+  const starsRef = useRef<THREE.Object3D | null>(null);
+
+  useEffect(() => {
+    if (!controls || !active) return;
+
+    const markInput = () => {
+      lastInputRef.current = performance.now();
+      // Cancel any in-progress sway instantly; the next idle frame re-captures.
+      restAzimuthRef.current = null;
+      // Schedule a single wake at the idle threshold so the drift can start even
+      // when nothing else is invalidating (a fully-settled scene).
+      if (idleTimer) clearTimeout(idleTimer);
+      idleTimer = window.setTimeout(() => invalidate(), IDLE_DELAY_MS + 16);
+    };
+    // A gesture begins: mark input and flag the drag so drift stays suppressed
+    // for its whole duration (however long the user holds it).
+    const onStart = () => {
+      draggingRef.current = true;
+      markInput();
+    };
+    // A gesture ends (release / wheel settle): clear the flag and RESTART the
+    // idle clock from the release moment, so the ~4s countdown is measured from
+    // when the user actually stopped — not from when the gesture began.
+    const onEnd = () => {
+      draggingRef.current = false;
+      markInput();
+    };
+
+    // User-input signals only (NOT OrbitControls' 'change', which our own idle
+    // update() would re-fire and pin the loop awake forever). 'start'/'end' frame
+    // each gesture; the raw DOM events cover the very first touch and wheel.
+    let idleTimer = 0;
+    controls.addEventListener("start", onStart);
+    controls.addEventListener("end", onEnd);
+    domElement.addEventListener("pointerdown", markInput);
+    domElement.addEventListener("wheel", markInput, { passive: true });
+    domElement.addEventListener("touchstart", markInput, { passive: true });
+
+    // Tab visibility: while hidden the useFrame is parked (no invalidate), so the
+    // drift pauses and idle fps drops to 0. On RETURN, treat it like fresh input
+    // so the idle clock restarts from now (no phase jump) and the wake is re-armed.
+    const onVisibility = () => {
+      if (!document.hidden) markInput();
+    };
+    document.addEventListener("visibilitychange", onVisibility);
+
+    // Arm the first idle wake from mount.
+    markInput();
+
+    return () => {
+      controls.removeEventListener("start", onStart);
+      controls.removeEventListener("end", onEnd);
+      domElement.removeEventListener("pointerdown", markInput);
+      domElement.removeEventListener("wheel", markInput);
+      domElement.removeEventListener("touchstart", markInput);
+      document.removeEventListener("visibilitychange", onVisibility);
+      if (idleTimer) clearTimeout(idleTimer);
+      // Return the star layer to its framed orientation when the feel layer
+      // deactivates (placing / transitioning own the camera), and reset the
+      // trailing state so it re-arms cleanly on the next activation.
+      const stars = starsRef.current ?? scene.getObjectByName(STARFIELD_PARALLAX_NAME);
+      if (stars) stars.rotation.y = 0;
+      parallaxRef.current = 0;
+      lastAzimuthRef.current = null;
+    };
+  }, [controls, domElement, invalidate, active, scene]);
+
+  // Reusable scratch so the per-frame path allocates nothing.
+  const qRef = useRef(new THREE.Quaternion());
+  const offRef = useRef(new THREE.Vector3());
+
+  useFrame((_, dt) => {
+    if (!controls || !active) return;
+    // Pause ALL idle motion while the tab is hidden — never wake the loop when
+    // nothing is visible (the Wave-3 visibility guard).
+    if (typeof document !== "undefined" && document.hidden) return;
+
+    // --- zoom-coupled exposure (cheap read; applied every painted frame) ------
+    // Orbit is scaled down (ORBIT_EXPOSURE_SCALE) so the deep-space vista reads
+    // darker — the sunlit limb + celestial bloom stop blowing out and the void
+    // rolls to black. Surface stays at full exposure for worksite legibility.
+    gl.toneMappingExposure =
+      zoomExposure(
+        controls.getDistance(),
+        controls.minDistance,
+        controls.maxDistance,
+      ) * (onSurface ? 1 : ORBIT_EXPOSURE_SCALE);
+
+    const azimuth = controls.getAzimuthalAngle();
+
+    // --- idle sway ------------------------------------------------------------
+    // Suppressed while a gesture is in progress (draggingRef) so the user's own
+    // drag is never fought; only kicks in once they've settled for ~4s.
+    const idleElapsed = performance.now() - lastInputRef.current - IDLE_DELAY_MS;
+    if (idleElapsed > 0 && !draggingRef.current) {
+      // Capture the rest pose on the first idle frame so the sway oscillates
+      // around where the user left the camera.
+      if (restAzimuthRef.current === null) {
+        restAzimuthRef.current = azimuth;
+        restOffsetRef.current.copy(camera.position).sub(controls.target);
+      }
+      const sway = idleSwayOffset(idleElapsed);
+      // Rotate the rest offset around the target's up-axis by the sway angle and
+      // reposition the camera; drei's OrbitControls.update() (same frame) reads
+      // this as the new baseline, so it sticks with no damping fight.
+      const off = offRef.current.copy(restOffsetRef.current);
+      off.applyQuaternion(qRef.current.setFromAxisAngle(camera.up, sway));
+      camera.position.copy(controls.target).add(off);
+      // Keep the demand loop alive for the next sway frame.
+      invalidate();
+    }
+
+    // --- starfield parallax ---------------------------------------------------
+    // Trail the dim points layer behind the camera azimuth (the bright equirect
+    // band stays locked). A velocity model: nudge opposite this frame's azimuth
+    // turn, relax back to neutral. No anchor → no snap. We keep invalidating while
+    // the offset is still easing back so it settles even after OrbitControls and
+    // the idle sway have both gone quiet.
+    const stars =
+      starsRef.current ??
+      (starsRef.current = scene.getObjectByName(STARFIELD_PARALLAX_NAME) ?? null);
+    if (stars) {
+      const last = lastAzimuthRef.current;
+      const azimuthDelta = last === null ? 0 : azimuth - last;
+      lastAzimuthRef.current = azimuth;
+      const next = advanceParallax(parallaxRef.current, azimuthDelta, dt);
+      parallaxRef.current = next;
+      stars.rotation.y = next;
+      if (Math.abs(next) > PARALLAX_SETTLE_EPS) invalidate();
+    }
+  });
+
+  return null;
+}
+
 // The canonical settled pose for a mode (start/end of the descent transition).
 const poseFor = (m: ViewMode): Pose => (m === "orbit" ? ORBIT_POSE : SURFACE_POSE);
 
@@ -1658,15 +2716,17 @@ export function Scene3D({
   // re-render per frame) so the demand loop is never woken by React state churn.
   const glareRef = useRef<HTMLDivElement>(null);
 
-  // Glare-masked descent: on a view-mode change, fly the camera in two eased
-  // half-beats through a white sunlit flash that masks the scene swap. Runs a
-  // plain rAF loop (NOT a useFrame) only for its ~1.5s, invalidating each tick;
-  // when idle nothing renders, so the demand loop stays at 0 fps.
-  useEffect(() => {
-    const to = viewMode;
-    const from = shownRef.current;
-    if (to === from) return;
-
+  // Glare-masked descent runner (#84, reused by #108). Flies the camera in two
+  // eased half-beats through a white sunlit flash that masks the scene swap. Runs
+  // a plain rAF loop (NOT a useFrame) only for its `durationMs`, invalidating each
+  // tick; when idle nothing renders, so the demand loop stays at 0 fps. Returns a
+  // cleanup that cancels the rAF and re-enables controls if interrupted. The
+  // CINEMATIC INTRO (#108) reuses this exact rig — an orbit→surface descent
+  // stretched to ~4.5s — so the experience opens from deep space.
+  const runDescent = useRef<(from: ViewMode, to: ViewMode, durationMs: number) => () => void>(
+    () => () => {},
+  );
+  runDescent.current = (from, to, durationMs) => {
     const camera = cameraRef.current;
     const invalidate = invalidateRef.current;
     const controls = controlsRef.current;
@@ -1674,7 +2734,7 @@ export function Scene3D({
     if (!camera || !invalidate) {
       shownRef.current = to;
       setShown(to);
-      return;
+      return () => {};
     }
 
     // Beat 1 flies toward the Moon (descent) or lifts off the worksite (ascent);
@@ -1710,7 +2770,7 @@ export function Scene3D({
 
     const step = (now: number) => {
       if (!start) start = now;
-      const t = Math.min(1, (now - start) / TRANSITION_MS);
+      const t = Math.min(1, (now - start) / durationMs);
 
       // Slim glare (#84): a BRIEF off-center sun-bloom that only fully occludes the
       // scene swap for a few frames, rather than a full triangular wash. A narrow
@@ -1770,10 +2830,56 @@ export function Scene3D({
     raf = requestAnimationFrame(step);
     return () => {
       cancelAnimationFrame(raf);
+      if (glareRef.current) glareRef.current.style.opacity = "0";
       if (controls) controls.enabled = true; // never leave controls disabled if interrupted
     };
-    // Driven by viewMode only; the refs/state setters captured above are stable.
+  };
+
+  // View-mode change ⇒ play the glare-masked descent between modes.
+  useEffect(() => {
+    const to = viewMode;
+    const from = shownRef.current;
+    if (to === from) return;
+    return runDescent.current(from, to, TRANSITION_MS);
+    // Driven by viewMode only; the runDescent ref + state setters are stable.
   }, [viewMode]);
+
+  // CINEMATIC INTRO FLY-IN (#108): on first mount in surface view, open from deep
+  // space — reuse the descent rig (orbit→surface) stretched to ~4.5s so the
+  // experience arrives, rather than cutting in flat. Runs exactly ONCE; if the rig
+  // isn't ready on the first effect tick we retry on the next animation frame
+  // (RigBridge captures the camera/controls on commit, which may land after this
+  // effect). Controls are disabled by the rig for the duration, then restored.
+  const introPlayed = useRef(false);
+  useEffect(() => {
+    // Only auto-fly-in when the app opens directly on the surface (the default).
+    // If it opens in orbit, the user's own toggle drives the first descent instead.
+    if (introPlayed.current || viewMode !== "surface") return;
+    let cleanup: (() => void) | undefined;
+    let raf = 0;
+    const tryStart = () => {
+      if (introPlayed.current) return;
+      // Wait for the rig; without a live camera the descent would just snap.
+      if (!cameraRef.current || !invalidateRef.current) {
+        raf = requestAnimationFrame(tryStart);
+        return;
+      }
+      introPlayed.current = true;
+      // Render the surface immediately (shown is already "surface"), but fly the
+      // camera in from the orbit vantage — `from` only seeds the look target, and
+      // the start position is read live from the camera, so seed it at orbit.
+      const camera = cameraRef.current;
+      camera.position.set(ORBIT_POSE.position.x, ORBIT_POSE.position.y, ORBIT_POSE.position.z);
+      cleanup = runDescent.current("orbit", "surface", INTRO_MS);
+    };
+    tryStart();
+    return () => {
+      cancelAnimationFrame(raf);
+      cleanup?.();
+    };
+    // Once only — viewMode default is surface; the ref guards re-runs.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
 
   // Clamps + target follow the RENDERED mode so they match the visible scene.
   const preset = VIEW_PRESETS[shown];
@@ -1781,12 +2887,24 @@ export function Scene3D({
     <>
       <Canvas
         className="world-canvas"
-        frameloop="demand"
+        // frameloop="always" (was "demand"): the scene is now a LIVING cinematic
+        // vista — Earth rotates under drifting clouds, oceans shimmer at the
+        // sub-solar point, the atmosphere breathes. ADR-0004's old demand-loop /
+        // 0-idle-fps budget is intentionally dropped (see ADR-0004 + AGENTS.md):
+        // useFrame animation is now unrestricted. The dpr cap below stays as perf
+        // hygiene. Existing invalidate()/document.hidden guards remain harmless.
+        frameloop="always"
+        // Soft sun shadows (#104): PCFSoftShadowMap on the renderer's shadow map
+        // gives the directional sun light penumbra-softened edges.
+        shadows={{ type: THREE.PCFSoftShadowMap }}
         dpr={[1, 1.5]}
         // far raised to ~8000 (issue #49) so the distant Moon + Earth are in-frustum;
-        // near kept at 0.1. Shipping WITHOUT logarithmicDepthBuffer — the low-poly
-        // worksite shows no z-fighting at this range.
-        camera={{ position: [0, 11, 30], fov: 42, near: 0.1, far: 8000 }}
+        // near kept at 0.1. That 0.1→8000 span is too wide for a standard depth buffer
+        // at the Earth's ~4.7k distance, so logarithmicDepthBuffer is enabled below (see
+        // its gl note + the logdepthbuf_* chunks in SkyBodies.tsx).
+        // fov widened 42→50 (#101) for a more immersive, cinematic field — the
+        // surface distance band (VIEW_PRESETS) is pulled in to hold framing.
+        camera={{ position: [0, 11, 30], fov: 50, near: 0.1, far: 8000 }}
         // While placing, a click on empty space confirms the drop; otherwise it
         // deselects a rover (the existing behaviour).
         onPointerMissed={() => (placing ? onPlaceConfirm?.() : onPick(null))}
@@ -1801,10 +2919,25 @@ export function Scene3D({
         // touch more presence while ACES still rolls 0 → 0, so the void stays
         // near-black. Both tone mapping + output color space remain the v8
         // defaults; only the exposure dial is set explicitly here.
+        // logarithmicDepthBuffer: the orbit Earth is THREE near-coincident concentric
+        // shells (surface ×1.0, cloud ×1.012, atmosphere rim ×1.03) sitting at z≈4.7k,
+        // hard against the 8000 far plane. A standard hyperbolic depth buffer spends
+        // almost all its precision near the 0.1 near plane, so out there the shells
+        // share a depth bucket and z-fight — the cloud/rim flicker on/off every frame
+        // (the "black textures appearing/disappearing"). A log depth buffer gives
+        // resolvable precision across the whole 0.1–8000 range, so the shells separate
+        // cleanly. The Earth/cloud/rim custom ShaderMaterials opt in via the
+        // logdepthbuf_* GLSL chunks (see SkyBodies.tsx); built-in materials (Moon, Sun,
+        // worksite, stars) get it automatically. The composer's SMAA + selective-bloom
+        // passes don't sample scene depth, so they're unaffected. NB: a benign
+        // GL_INVALID_OPERATION glBlitFramebuffer warning is logged on ANGLE/macOS (a
+        // pre-existing EffectComposer depth-stencil quirk, present with or without log
+        // depth); it does not affect the render.
         gl={{
           antialias: false,
           powerPreference: "high-performance",
           toneMappingExposure: 1.1,
+          logarithmicDepthBuffer: true,
         }}
       >
         {/* Black background as the GRACEFUL FALLBACK (issue #50): the HDR
@@ -1844,9 +2977,17 @@ export function Scene3D({
           minPolarAngle={preset.minPolarAngle}
           maxPolarAngle={preset.maxPolarAngle}
           target={preset.target}
+          // Inertial damping (#109): the controls glide to a stop instead of
+          // snapping, so orbiting/zooming feels weighty. drei runs update() each
+          // awake frame, so this also smooths the idle sway hand-off.
           enableDamping
           dampingFactor={0.08}
         />
+        {/* Camera feel (#109): idle drift, zoom-coupled exposure, parallax. OFF
+            while placing or transitioning — those own the camera. Decorative;
+            never reads the snapshot. Orbit exposure is scaled down so deep space
+            reads darker (the sunlit limb + celestial bloom stop blowing out). */}
+        <CameraFeel active={!placing && !transitioning} onSurface={shown === "surface"} />
       </Canvas>
       {/* Glare overlay for the descent transition. A child of .stage (position:
           relative), so it fills the stage; pointer-events:none keeps clicks going

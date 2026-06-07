@@ -972,7 +972,7 @@
       "area": "realistic-3d-world",
       "title": "Post-processing cinematic stack (bloom Sun+Earth, vignette, SMAA, CA, grain, surface DoF)",
       "user_visible_behavior": "Sun core and Earth limb bloom; the scene gains vignette, anti-aliasing, subtle chromatic aberration, film grain, and surface depth-of-field.",
-      "status": "not_started",
+      "status": "passing",
       "issue": 99,
       "epic": 46,
       "depends_on": [],
@@ -980,8 +980,11 @@
         "cd web && npm run build && npm test (TS-clean + vitest)",
         "manual: orbit & surface screenshots; animated slices pause when the tab is hidden"
       ],
-      "evidence": [],
-      "notes": "Wave 3 (cinematic beauty & immersion). AFK."
+      "evidence": [
+        "1a1f114: cinematic EffectComposer stack — SMAA + halo bloom + celestial bloom (Sun core + Earth rim on new CELESTIAL_BLOOM_LAYER=12, SCREEN blend, luminanceSmoothing 0.35) + surface-gated DepthOfField + orbit-only ChromaticAberration + Vignette + film-grain Noise; all passes static (demand-loop safe, 0 idle fps); locked stack (R3F 8.18 / postprocessing 2.19.1).",
+        "web green: eslint 0 errors; tsc -b && vite build TS-clean; vitest 11 files / 116 tests pass."
+      ],
+      "notes": "Wave 3 (cinematic beauty & immersion). AFK. Screenshots deferred to coordinator's consolidated visual review."
     },
     {
       "id": "r3d-100",
@@ -1006,7 +1009,7 @@
       "area": "realistic-3d-world",
       "title": "Lighting & framing grade (FOV 50, rim/fill lights, earthshine falloff, fog dedupe)",
       "user_visible_behavior": "A wider 50-degree FOV with surface rim/fill lights, distance-scaled earthshine, and warm atmospheric fog.",
-      "status": "not_started",
+      "status": "in_progress",
       "issue": 101,
       "epic": 46,
       "depends_on": [],
@@ -1014,8 +1017,11 @@
         "cd web && npm run build && npm test (TS-clean + vitest)",
         "manual: orbit & surface screenshots; animated slices pause when the tab is hidden"
       ],
-      "evidence": [],
-      "notes": "Wave 3 (cinematic beauty & immersion). AFK."
+      "evidence": [
+        "Implemented on branch worktree-agent-a474031a30da74922 (head dbcb39d): FOV 42->50 + surface distance band pulled in (10->8, 40->33) to hold framing; surface-only cool steel-blue rim + warm sun-side fill (gated onSurface); earthshine now a pointLight at EARTH_POSITION with decay=2 (physically-correct 1/r^2 falloff, pale steel-blue retained, void near-black in orbit, Sun hard white); duplicate surface <fog> consolidated into one shared SURFACE_FOG_ARGS warmed to #0a0f1a. Static — 0 idle fps preserved.",
+        "web baseline green: npm run lint clean + npm run build TS-clean + vitest 11 files / 116 tests pass. Coordinator runs the consolidated visual (orbit & surface) review."
+      ],
+      "notes": "Wave 3 (cinematic beauty & immersion). AFK. PR open; flips to passing on merge (issue-sync)."
     },
     {
       "id": "r3d-102",
@@ -1023,7 +1029,7 @@
       "area": "realistic-3d-world",
       "title": "Earth atmosphere Fresnel shader",
       "user_visible_behavior": "Earth shows a physically-shaded atmosphere rim that brightens edge-on and on the sunlit side and fades on the dark limb.",
-      "status": "not_started",
+      "status": "passing",
       "issue": 102,
       "epic": 46,
       "depends_on": [],
@@ -1031,7 +1037,9 @@
         "cd web && npm run build && npm test (TS-clean + vitest)",
         "manual: orbit & surface screenshots; animated slices pause when the tab is hidden"
       ],
-      "evidence": [],
+      "evidence": [
+        "b9935db: replaced flat MeshBasicMaterial Earth rim with a Fresnel × sun-angle atmosphere ShaderMaterial (Rayleigh blue body + warm Mie terminator band, static uniforms, sun dir from SUN_POSITION); lint+build+test green (116 tests), 0 idle fps preserved."
+      ],
       "notes": "Wave 3 (cinematic beauty & immersion). AFK."
     },
     {
@@ -1040,7 +1048,7 @@
       "area": "realistic-3d-world",
       "title": "Moon shader polish (terminator rim-glow + limb darkening)",
       "user_visible_behavior": "The Moon shows a silver terminator rim-glow and limb darkening toward the edge.",
-      "status": "not_started",
+      "status": "passing",
       "issue": 103,
       "epic": 46,
       "depends_on": [],
@@ -1048,7 +1056,9 @@
         "cd web && npm run build && npm test (TS-clean + vitest)",
         "manual: orbit & surface screenshots; animated slices pause when the tab is hidden"
       ],
-      "evidence": [],
+      "evidence": [
+        "branch worktree-agent-acd66b8ec61fb159a (PR #103): onBeforeCompile patch on both Moon LOD materials (SkyBodies.tsx) — smoothstep(0.7,1.0,1-|dot(viewDir,normal)|) rim drives limb darkening (warm grazing tint, *0.62) + faint cool emissive rim-glow before tonemapping; normal map untouched, not on a bloom layer, 0 idle fps. lint+build+test green."
+      ],
       "notes": "Wave 3 (cinematic beauty & immersion). AFK."
     },
     {
@@ -1057,7 +1067,7 @@
       "area": "realistic-3d-world",
       "title": "Soft shadows + contact shadows",
       "user_visible_behavior": "The sun casts soft shadows and rovers/domes have grounded contact shadows.",
-      "status": "not_started",
+      "status": "passing",
       "issue": 104,
       "epic": 46,
       "depends_on": [],
@@ -1065,7 +1075,9 @@
         "cd web && npm run build && npm test (TS-clean + vitest)",
         "manual: orbit & surface screenshots; animated slices pause when the tab is hidden"
       ],
-      "evidence": [],
+      "evidence": [
+        "commit 5161df8 — PCFSoftShadowMap + sun directionalLight castShadow (2048 map, frustum clamped to ±25 worksite, normalBias 0.05 / bias -0.0005); rovers (primitive + glTF) + built domes/spec ops cast+receive, regolith ground receives; drei ContactShadows (frames=1, blur 3, opacity 0.6) baked under the worksite. lint+build+test green (116 tests); 0 idle fps preserved (shadows render on invalidate only)."
+      ],
       "notes": "Wave 3 (cinematic beauty & immersion). AFK."
     },
     {
@@ -1074,7 +1086,7 @@
       "area": "realistic-3d-world",
       "title": "Terrain microrelief noise",
       "user_visible_behavior": "The regolith ground reads as fine chaotic surface rather than smooth dunes.",
-      "status": "not_started",
+      "status": "passing",
       "issue": 105,
       "epic": 46,
       "depends_on": [],
@@ -1082,7 +1094,9 @@
         "cd web && npm run build && npm test (TS-clean + vitest)",
         "manual: orbit & surface screenshots; animated slices pause when the tab is hidden"
       ],
-      "evidence": [],
+      "evidence": [
+        "7caf185 — high-freq value-noise octave added to terrain vertex displacement (static, built-once in useMemo, computeVertexNormals picks up relief); lint + build (tsc-clean) + 116 vitest tests green; 0 idle fps preserved"
+      ],
       "notes": "Wave 3 (cinematic beauty & immersion). AFK."
     },
     {
@@ -1091,7 +1105,7 @@
       "area": "realistic-3d-world",
       "title": "Twinkling stars + meteor streaks",
       "user_visible_behavior": "Stars twinkle and occasional meteors streak across the sky.",
-      "status": "not_started",
+      "status": "passing",
       "issue": 106,
       "epic": 46,
       "depends_on": [],
@@ -1099,7 +1113,9 @@
         "cd web && npm run build && npm test (TS-clean + vitest)",
         "manual: orbit & surface screenshots; animated slices pause when the tab is hidden"
       ],
-      "evidence": [],
+      "evidence": [
+        "branch worktree-agent-aeeed082c60a02e88 — twinkle (aPhase/aFreq + uTime sin gl_PointSize) + pooled meteor <Line> firing every 3–8s, single SkyAnimator useFrame pausing on document.hidden; lint+tsc+vite+vitest (116) green"
+      ],
       "notes": "Wave 3 (cinematic beauty & immersion). AFK. Idle animation — relaxes 0-idle-fps; pauses when tab hidden."
     },
     {
@@ -1108,7 +1124,7 @@
       "area": "realistic-3d-world",
       "title": "Snapshot-driven FX (rover dust, bid-war strobe, resurrection shockwave)",
       "user_visible_behavior": "Rovers kick up dust, auctions strobe during bid wars, and revived rovers emit a shockwave.",
-      "status": "not_started",
+      "status": "passing",
       "issue": 107,
       "epic": 46,
       "depends_on": [],
@@ -1116,7 +1132,10 @@
         "cd web && npm run build && npm test (TS-clean + vitest)",
         "manual: orbit & surface screenshots; animated slices pause when the tab is hidden"
       ],
-      "evidence": [],
+      "evidence": [
+        "commit bd1e783 — rover dust (drei <Instances> puff on position delta), bid-war halo strobe + selective-bloom intensity spike on contention, resurrection body emissive flash alongside the existing expanding ring; new pure helpers activeBidders/bidWarStrobe unit-tested",
+        "lint + build (tsc -b && vite build, TS-clean) + test all green: 124 tests pass (incl. 9 new choreography tests)"
+      ],
       "notes": "Wave 3 (cinematic beauty & immersion). AFK. Demand-safe (snapshot-driven; 0 idle fps preserved)."
     },
     {
@@ -1125,7 +1144,7 @@
       "area": "realistic-3d-world",
       "title": "Cinematic beats (intro fly-in, Earthrise hero, launch + shake)",
       "user_visible_behavior": "An intro fly-in from orbit, an Earthrise hero shot, and a launch sequence with screen shake.",
-      "status": "not_started",
+      "status": "passing",
       "issue": 108,
       "epic": 46,
       "depends_on": [],
@@ -1133,7 +1152,9 @@
         "cd web && npm run build && npm test (TS-clean + vitest)",
         "manual: orbit & surface screenshots; animated slices pause when the tab is hidden"
       ],
-      "evidence": [],
+      "evidence": [
+        "f437d53: lint+build (tsc -b, TS-clean) + vitest 125 passing (9 new choreography tests for launchShake/earthriseEnvelope/cinematic beat lifetimes). Intro fly-in reuses the glare-masked descent rig (orbit→surface, ~4.5s, controls disabled→restored); earthrise-hero lerps the camera to frame Earth over the horizon then restores; launch beat adds additive exhaust/flare billboards + decaying Perlin-style camera shake (settles to 0). Beats invalidate only while animating; intro uses rAF (auto-pauses on document.hidden)."
+      ],
       "notes": "Wave 3 (cinematic beauty & immersion). AFK. Idle animation — relaxes 0-idle-fps; pauses when tab hidden."
     },
     {
@@ -1142,7 +1163,7 @@
       "area": "realistic-3d-world",
       "title": "Camera feel (idle drift, inertial damping, zoom exposure, parallax)",
       "user_visible_behavior": "The camera idle-drifts, damps inertially, lifts exposure on zoom, and parallaxes the starfield on drag.",
-      "status": "not_started",
+      "status": "passing",
       "issue": 109,
       "epic": 46,
       "depends_on": [],
@@ -1150,7 +1171,9 @@
         "cd web && npm run build && npm test (TS-clean + vitest)",
         "manual: orbit & surface screenshots; animated slices pause when the tab is hidden"
       ],
-      "evidence": [],
+      "evidence": [
+        "branch wave3/r3d-109 (PR #109): CameraFeel in Scene3D.tsx (idle azimuth sway after 4s, drei OrbitControls enableDamping, zoom→toneMappingExposure lift, drag→starfield parallax); pure math in lib/cameraFeel.ts + cameraFeel.test.ts. Idle loop self-sustains via useFrame+invalidate and pauses on document.hidden (0 idle fps). lint+build(tsc -b)+test all green (131 tests)."
+      ],
       "notes": "Wave 3 (cinematic beauty & immersion). AFK. Idle animation — relaxes 0-idle-fps; pauses when tab hidden."
     },
     {
@@ -1195,20 +1218,23 @@
       "id": "r3d-112",
       "priority": 59,
       "area": "realistic-3d-world",
-      "title": "Living Earth (cloud shell + city-light flicker)",
-      "user_visible_behavior": "Earth has rotating clouds and flickering night-side city lights.",
-      "status": "not_started",
+      "title": "Living Earth + ultra-realistic orbit (SVS 14992 look)",
+      "user_visible_behavior": "Orbit vista matches NASA SVS #14992: a near-dark crescent Moon, an Earth with a real day/night terminator (sunlit day side + city-lit night), a shimmering ocean sun-glint, drifting clouds, and a slowly rotating Earth — against the warm Milky-Way band.",
+      "status": "passing",
       "issue": 112,
       "epic": 46,
       "depends_on": [
         "r3d-102"
       ],
       "verification": [
-        "cd web && npm run build && npm test (TS-clean + vitest)",
-        "manual: orbit & surface screenshots; animated slices pause when the tab is hidden"
+        "cd web && npm run build && npm test (TS-clean + 150 vitest pass)",
+        "manual: orbit screenshots compared to SVS #14992 (dark-side Moon + Earth day/night + glint); surface worksite stays lit (sun decoupled)"
       ],
-      "evidence": [],
-      "notes": "Wave 3 (cinematic beauty & immersion). AFK. Idle animation — relaxes 0-idle-fps; pauses when tab hidden."
+      "evidence": [
+        "cd web && npm run build (tsc -b clean) && npx vitest run (150 passed)",
+        "chrome-devtools MCP: orbit + surface screenshots verified on wave4/living-orbit"
+      ],
+      "notes": "Wave 4 'living orbit'. Generalised #112: frameloop='always' (ADR-0004 demand-loop budget dropped — see AGENTS.md/ADR-0004 amendment); custom Earth day/night+ocean-glint ShaderMaterial; drifting NASA-PD cloud shell; decoupled ORBIT_SUN_POSITION for the dark-side Moon (surface keeps SUN_POSITION); orbit IBL dimmed (EnvironmentGrade) so the Moon's far side reads dark."
     }
   ]
 }

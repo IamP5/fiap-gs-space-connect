@@ -20,9 +20,13 @@
 //      (a few bright, many faint) + slight color variance (mostly white, a few
 //      warm/cool) baked into static attributes. The Milky-Way band now carries
 //      most of the sky detail, so the point count is REDUCED — this field is a
-//      sparse near-shell of foreground stars. NO useFrame: twinkling would pin
-//      the demand loop at 60fps. (drei's <Stars> animates per-frame, so it is
-//      intentionally NOT used here.)
+//      sparse near-shell of foreground stars. As of issue #106 the stars TWINKLE:
+//      a per-star `aPhase` attribute + per-star `aFreq` and a `uTime` uniform let
+//      the onBeforeCompile patch scale gl_PointSize by 0.7 + 0.3*sin(uTime*freq +
+//      aPhase). The animation is driven by SkyAnimator's single useFrame, which
+//      also fires occasional meteor streaks. It PAUSES while the tab is hidden so
+//      the demand loop only burns frames when the page is actually visible (the
+//      Wave-3 motion relaxation of ADR-0004's idle-fps invariant).
 //   3. A SELF-HOSTED HDR via drei's <Environment files=...> used for PBR
 //      image-based lighting ONLY (no `background`), so metallic glTFs (the
 //      Kenney hangar dome) show real reflections. We use files= (a vendored CC0
@@ -40,9 +44,18 @@
 // invalidate() is called ONCE when each texture finishes loading so the demand
 // loop paints the new skybox/IBL; after that the loop returns to 0 idle fps.
 
-import { Component, Suspense, useEffect, useMemo, type ReactNode } from "react";
-import { Environment } from "@react-three/drei";
-import { useThree } from "@react-three/fiber";
+import {
+  Component,
+  Suspense,
+  useEffect,
+  useMemo,
+  useRef,
+  useState,
+  type ReactNode,
+} from "react";
+import { Environment, Line } from "@react-three/drei";
+import { useFrame, useThree } from "@react-three/fiber";
+import type { Line2 } from "three-stdlib";
 import * as THREE from "three";
 
 // Self-hosted CC0 HDRI (Poly Haven "Moonless Golf", 2k). See public/assets/CREDITS.md.
@@ -67,8 +80,9 @@ const STAR_BG_YAW_DEG = 180; // swing galactic centre into the orbit view
 const STAR_BG_ROLL_DEG = 28; // diagonal tilt of the band
 // scene.backgroundIntensity (three r0.169): scales the band/star map brightness.
 // Kept below 1 so the galaxy reads as a faint deep-space backdrop, not a bright
-// wash — the Moon/Earth stay the focus.
-const STAR_BG_INTENSITY = 0.8;
+// wash — the Moon/Earth stay the focus. Wave 4: nudged 0.8→0.9 so the warm galactic
+// dust band reads a touch richer behind the dark-side crescent Moon (SVS #14992).
+const STAR_BG_INTENSITY = 0.9;
 
 // The Milky-Way band carries most of the sky detail, so the hand-rolled points
 // shell is a sparse near-field of foreground stars layered ON TOP of the band
@@ -80,6 +94,25 @@ const STAR_SHELL_RADIUS = 4000; // well inside the camera far plane (~8000, issu
 // stars read bright/large and many stay faint/small. Kept small so stars read as
 // crisp pinpoints (the NASA reference) rather than soft blobs.
 const STAR_BASE_SIZE = 1.4;
+
+// Twinkle (issue #106): each star carries a random PHASE and a random angular
+// FREQUENCY (rad/s). The vertex shader scales gl_PointSize by
+// 0.7 + 0.3*sin(uTime*aFreq + aPhase) — a gentle ±30% size shimmer. The slow,
+// varied frequencies keep the field from pulsing in unison.
+const TWINKLE_FREQ_MIN = 0.6; // rad/s — slowest twinkle
+const TWINKLE_FREQ_MAX = 2.2; // rad/s — fastest twinkle
+
+// Meteor streaks (issue #106): every few seconds a short bright streak shoots
+// across the foreground star shell and fades over ~800ms. Reusing ONE <Line>
+// (pooled): we reposition/orient it and ramp its opacity rather than mounting a
+// new object per streak.
+const METEOR_FADE_MS = 800; // a streak is fully faded ~800ms after it fires
+const METEOR_MIN_GAP_MS = 3000; // earliest next streak after the previous one
+const METEOR_MAX_GAP_MS = 8000; // latest next streak
+const METEOR_LENGTH = 520; // streak length in world units (on the star shell)
+const METEOR_TRAVEL = 900; // how far the streak slides along its heading
+const METEOR_SHELL = STAR_SHELL_RADIUS * 0.92; // just inside the star shell
+const METEOR_COLOR = new THREE.Color("#dfe9ff"); // cool white, faint blue tint
 
 // A tiny error boundary so a missing/failed HDR can never blank the scene: if
 // the <Environment> loader throws, we render nothing and the Canvas's black
@@ -189,11 +222,19 @@ const WARM_STAR = new THREE.Color("#ffd8b0");
 const COOL_STAR = new THREE.Color("#cfe0ff");
 const WHITE_STAR = new THREE.Color("#ffffff");
 
-function Starfield() {
+// scene-graph name for the dim points shell, so the decorative <CameraFeel> layer
+// (Scene3D, #109) can find it via scene.getObjectByName and apply a tiny trailing
+// parallax yaw to THIS layer only — the bright equirect band stays locked. Nothing
+// else sets this object's rotation, so CameraFeel owns its rotation.y outright.
+export const STARFIELD_PARALLAX_NAME = "starfield-parallax";
+
+function Starfield({ uTime }: { uTime: { value: number } }) {
   const geometry = useMemo(() => {
     const positions = new Float32Array(STAR_COUNT * 3);
     const sizes = new Float32Array(STAR_COUNT);
     const colors = new Float32Array(STAR_COUNT * 3);
+    const phases = new Float32Array(STAR_COUNT);
+    const freqs = new Float32Array(STAR_COUNT);
     const tmp = new THREE.Color();
     for (let i = 0; i < STAR_COUNT; i++) {
       // Uniform-ish direction on the unit sphere, then push out to the shell.
@@ -221,11 +262,17 @@ function Starfield() {
       colors[i * 3] = tmp.r;
       colors[i * 3 + 1] = tmp.g;
       colors[i * 3 + 2] = tmp.b;
+
+      // Twinkle phase/frequency (issue #106): random so stars shimmer out of sync.
+      phases[i] = Math.random() * Math.PI * 2;
+      freqs[i] = TWINKLE_FREQ_MIN + Math.random() * (TWINKLE_FREQ_MAX - TWINKLE_FREQ_MIN);
     }
     const g = new THREE.BufferGeometry();
     g.setAttribute("position", new THREE.BufferAttribute(positions, 3));
     g.setAttribute("aSize", new THREE.BufferAttribute(sizes, 1));
     g.setAttribute("color", new THREE.BufferAttribute(colors, 3));
+    g.setAttribute("aPhase", new THREE.BufferAttribute(phases, 1));
+    g.setAttribute("aFreq", new THREE.BufferAttribute(freqs, 1));
     return g;
   }, []);
 
@@ -242,14 +289,26 @@ function Starfield() {
       depthWrite: false,
     });
     m.onBeforeCompile = (shader) => {
+      // Share the SkyAnimator-driven clock so the twinkle advances in lockstep
+      // with the meteor timing (one useFrame for the whole sky).
+      shader.uniforms.uTime = uTime;
       shader.vertexShader =
         "attribute float aSize;\n" +
+        "attribute float aPhase;\n" +
+        "attribute float aFreq;\n" +
+        "uniform float uTime;\n" +
         shader.vertexShader.replace(
           "gl_PointSize = size;",
-          "gl_PointSize = aSize;",
+          // Per-star ±30% size shimmer (issue #106). 0.7 + 0.3*sin keeps the
+          // factor in [0.4, 1.0] so stars only ever dim/shrink from their baked
+          // size — they never balloon past the crisp pinpoint look.
+          "gl_PointSize = aSize * (0.7 + 0.3 * sin(uTime * aFreq + aPhase));",
         );
     };
     return m;
+    // uTime is a stable object ref (created once in SpaceEnvironment); the patch
+    // reads it by reference, so the material is still built exactly once.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
   // Dispose the geometry AND the hand-rolled material on unmount.
@@ -259,21 +318,177 @@ function Starfield() {
   }, [geometry, material]);
 
   return (
-    <points raycast={() => null}>
+    <points name={STARFIELD_PARALLAX_NAME} raycast={() => null}>
       <primitive object={geometry} attach="geometry" />
       <primitive object={material} attach="material" />
     </points>
   );
 }
 
+// One live meteor streak. State lives in refs (mutated in SkyAnimator's useFrame)
+// so a firing streak never triggers a React re-render — the demand loop only
+// wakes via invalidate() while the streak is actually visible.
+type MeteorState = {
+  active: boolean;
+  start: number; // performance.now() when this streak fired
+  // World-space origin and a unit heading; the streak slides origin → origin +
+  // heading*METEOR_TRAVEL over its life and fades out over METEOR_FADE_MS.
+  origin: THREE.Vector3;
+  heading: THREE.Vector3;
+};
+
+// SkyAnimator owns the SINGLE useFrame for the sky (issue #106): it advances the
+// shared `uTime` clock (twinkle) and animates one pooled meteor <Line>. Per the
+// Wave-3 motion relaxation it PAUSES while the tab is hidden — the rAF/useFrame
+// loop only invalidates while the page is visible. The twinkle invalidates every
+// visible frame; the meteor adds invalidations only while it is mid-streak.
+//
+// Snapshot purity (ADR-0004): nothing here reads or writes snapshot state — the
+// timing is pure wall-clock + Math.random, so the sky is decorative and stays
+// independent of the world snapshot.
+function SkyAnimator({ uTime }: { uTime: { value: number } }) {
+  const invalidate = useThree((s) => s.invalidate);
+  const groupRef = useRef<THREE.Group>(null);
+  const lineRef = useRef<Line2>(null);
+
+  // Reusable scratch vectors for orienting the streak (built once, no per-frame
+  // allocation). X_AXIS is the streak's local heading before we rotate the group.
+  const tmpDir = useMemo(() => new THREE.Vector3(), []);
+  const xAxis = useMemo(() => new THREE.Vector3(1, 0, 0), []);
+
+  // Meteor scheduling/state in a ref (no re-render on fire). `nextAt` is the next
+  // scheduled fire time; it is (re)seeded relative to performance.now() so pauses
+  // don't dump a backlog of streaks the moment the tab returns.
+  const meteor = useRef<MeteorState>({
+    active: false,
+    start: 0,
+    origin: new THREE.Vector3(),
+    heading: new THREE.Vector3(),
+  });
+  const nextAt = useRef(0);
+
+  // Seed/track tab visibility so the loop pauses while hidden. We re-anchor the
+  // meteor schedule on each resume so it doesn't immediately fire a backlog, and
+  // wake the loop once on resume so twinkle picks back up.
+  const visibleRef = useRef(!document.hidden);
+  useEffect(() => {
+    const onVisibility = () => {
+      const visible = !document.hidden;
+      visibleRef.current = visible;
+      if (visible) {
+        // Re-anchor the next meteor relative to now (drop any while-hidden backlog).
+        nextAt.current =
+          performance.now() +
+          METEOR_MIN_GAP_MS +
+          Math.random() * (METEOR_MAX_GAP_MS - METEOR_MIN_GAP_MS);
+        invalidate(); // resume the demand loop → twinkle ticks again
+      }
+    };
+    document.addEventListener("visibilitychange", onVisibility);
+    return () => document.removeEventListener("visibilitychange", onVisibility);
+  }, [invalidate]);
+
+  // Fire a fresh streak: a random origin on the upper star shell and a heading
+  // that mostly sweeps sideways-and-down (the classic shooting-star look).
+  const fireMeteor = (now: number) => {
+    const m = meteor.current;
+    // Random point on the shell, biased to the upper hemisphere so streaks read.
+    const u = Math.random() * 0.9 + 0.05; // cos(theta) ∈ (0.05, 0.95): upper sky
+    const phi = Math.random() * Math.PI * 2;
+    const r = Math.sqrt(1 - u * u);
+    m.origin.set(r * Math.cos(phi), u, r * Math.sin(phi)).multiplyScalar(METEOR_SHELL);
+    // Heading: tangent-ish, pulled downward, then normalised. Avoid the radial
+    // direction so the streak slides across the sky rather than toward the camera.
+    m.heading
+      .set(Math.random() * 2 - 1, -(Math.random() * 0.6 + 0.2), Math.random() * 2 - 1)
+      .normalize();
+    m.start = now;
+    m.active = true;
+  };
+
+  useFrame(() => {
+    if (!visibleRef.current) return; // paused while the tab is hidden
+    const now = performance.now();
+    uTime.value = now / 1000;
+
+    // Schedule the first streak lazily (after mount) so it doesn't fire instantly.
+    if (nextAt.current === 0) {
+      nextAt.current =
+        now + METEOR_MIN_GAP_MS + Math.random() * (METEOR_MAX_GAP_MS - METEOR_MIN_GAP_MS);
+    }
+
+    const m = meteor.current;
+    if (!m.active && now >= nextAt.current) {
+      fireMeteor(now);
+      nextAt.current =
+        now + METEOR_MIN_GAP_MS + Math.random() * (METEOR_MAX_GAP_MS - METEOR_MIN_GAP_MS);
+    }
+
+    const group = groupRef.current;
+    const line = lineRef.current;
+    if (m.active && group && line) {
+      const t = (now - m.start) / METEOR_FADE_MS; // 0 → 1 over the streak's life
+      if (t >= 1) {
+        m.active = false;
+        group.visible = false;
+      } else {
+        group.visible = true;
+        // Slide the streak along its heading and orient local +X to that heading.
+        tmpDir.copy(m.heading);
+        group.position.copy(m.origin).addScaledVector(tmpDir, t * METEOR_TRAVEL);
+        // local +X (the line runs along X) → world heading
+        group.quaternion.setFromUnitVectors(xAxis, tmpDir);
+        // Ease-out fade: bright at birth, gone by ~800ms.
+        const mat = line.material as THREE.Material & { opacity: number };
+        mat.opacity = (1 - t) * (1 - t);
+      }
+    }
+
+    // Twinkle repaints every visible frame; an active meteor keeps it alive too.
+    invalidate();
+  });
+
+  // Two-point segment along local +X; the group positions/orients/fades it.
+  const points = useMemo<[number, number, number][]>(
+    () => [
+      [-METEOR_LENGTH / 2, 0, 0],
+      [METEOR_LENGTH / 2, 0, 0],
+    ],
+    [],
+  );
+
+  return (
+    <group ref={groupRef} visible={false}>
+      <Line
+        ref={lineRef}
+        points={points}
+        color={METEOR_COLOR}
+        lineWidth={1.6}
+        transparent
+        opacity={0}
+        depthWrite={false}
+        raycast={() => null}
+      />
+    </group>
+  );
+}
+
 export function SpaceEnvironment() {
+  // Shared twinkle clock: one stable uniform object read by the star shader patch
+  // and mutated each frame by SkyAnimator. Created once so the material compiles
+  // exactly once (no shader rebuilds).
+  const [uTime] = useState(() => ({ value: 0 }));
   return (
     <>
       {/* Milky-Way equirect on scene.background (imperative loader, black
           fallback). Separate from the IBL environment below. */}
       <StarBackground />
-      {/* Sparse foreground star points (per-vertex size/brightness/color). */}
-      <Starfield />
+      {/* Sparse foreground star points (per-vertex size/brightness/color),
+          twinkled by the shared uTime clock (issue #106). */}
+      <Starfield uTime={uTime} />
+      {/* The single sky useFrame: drives twinkle + meteor streaks, pauses while
+          the tab is hidden (issue #106). */}
+      <SkyAnimator uTime={uTime} />
       {/* HDR under Suspense (never block paint) + error boundary (never blank). */}
       <EnvErrorBoundary>
         <Suspense fallback={null}>

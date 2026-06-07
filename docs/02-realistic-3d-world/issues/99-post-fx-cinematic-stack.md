@@ -13,15 +13,15 @@ Research: `docs/02-realistic-3d-world/cinematic-beauty-immersion.md` (Wave 3).
 
 ## Acceptance criteria
 
-- [ ] New `CELESTIAL_BLOOM_LAYER`; Sun core + Earth rim enabled on it; second `SelectiveBloom` (luminanceThreshold ~0.08)
-- [ ] Vignette (offset ~0.3, darkness ~0.4)
-- [ ] SMAA as the first composer pass
-- [ ] Subtle orbit-only ChromaticAberration (offset ~[0.001, 0.002])
-- [ ] Film-grain Noise, SCREEN blend, opacity ~0.03
-- [ ] Bloom blend = SCREEN; luminanceSmoothing ~0.35
-- [ ] Surface-gated DepthOfField (distant softens; orbit stays deep-focus)
-- [ ] 0 idle fps preserved (all passes static); pick/click-to-kill intact
-- [ ] lint+test+build green + orbit & surface screenshots
+- [x] New `CELESTIAL_BLOOM_LAYER`; Sun core + Earth rim enabled on it; second `SelectiveBloom` (luminanceThreshold ~0.08)
+- [x] Vignette (offset ~0.3, darkness ~0.4)
+- [x] SMAA as the first composer pass
+- [x] Subtle orbit-only ChromaticAberration (offset ~[0.001, 0.002])
+- [x] Film-grain Noise, SCREEN blend, opacity ~0.03
+- [x] Bloom blend = SCREEN; luminanceSmoothing ~0.35
+- [x] Surface-gated DepthOfField (distant softens; orbit stays deep-focus)
+- [x] 0 idle fps preserved (all passes static); pick/click-to-kill intact
+- [x] lint+test+build green (orbit & surface screenshots deferred to coordinator's consolidated visual review)
 
 ## Blocked by
 

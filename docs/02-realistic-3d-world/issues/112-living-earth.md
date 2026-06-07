@@ -1,5 +1,13 @@
 # Living Earth: rotating cloud shell + city-light flicker
 
+> **Wave 4 update (2026-06-07):** shipped as part of the "living orbit" pass and
+> expanded well beyond the original gated `useFrame`. ADR-0004's demand-loop budget
+> is dropped (`frameloop="always"`), so the `document.hidden` pause is now optional,
+> not required. Delivered: rotating Earth body + independently drifting cloud shell,
+> a custom day/night + masked-city-lights + warm-terminator shader, an **ocean sun-
+> glint** ("sun waves reflecting"), city-light flicker, and a **decoupled orbit sun**
+> giving the reference's dark-side crescent Moon (SVS #14992).
+
 - **Issue:** [#112](https://github.com/IamP5/fiap-gs-space-connect/issues/112)
 - **Labels:** `area:frontend`, `type:feature`
 - **Type:** AFK
