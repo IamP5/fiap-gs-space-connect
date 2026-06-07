@@ -35,14 +35,14 @@
 // Both bodies are raycast={() => null} (non-pickable) so click-to-kill / pick is
 // unaffected.
 
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import { Detailed } from "@react-three/drei";
 import { useThree } from "@react-three/fiber";
 import * as THREE from "three";
 
 import type { ThreeEvent } from "@react-three/fiber";
 
-import type { ViewMode } from "./Scene3D";
+import { CELESTIAL_BLOOM_LAYER, type ViewMode } from "./Scene3D";
 import {
   EARTH_POSITION,
   EARTH_RADIUS,
@@ -365,6 +365,8 @@ function MoonGlobe({ visible }: { visible: boolean }) {
 function EarthBody({ visible }: { visible: boolean }) {
   const invalidate = useThree((s) => s.invalidate);
   const gl = useThree((s) => s.gl);
+  // Earth's atmospheric rim shell glows in the celestial bloom pass (#99).
+  const rimRef = useRef<THREE.Mesh>(null);
 
   const { geometry, material, rimGeometry, rimMaterial } = useMemo(() => {
     const geometry = new THREE.SphereGeometry(EARTH_RADIUS, 48, 48);
@@ -451,13 +453,21 @@ function EarthBody({ visible }: { visible: boolean }) {
     invalidate();
   }, [visible, invalidate]);
 
+  // Enable the celestial-bloom layer on Earth's rim shell so its cool-blue limb
+  // glows softly in the cinematic bloom pass (#99). Layer-gated, so the glow is
+  // confined to the rim — never the whole scene (ADR-0004). Runs after the mesh
+  // mounts (and whenever visibility flips it back in).
+  useEffect(() => {
+    rimRef.current?.layers.enable(CELESTIAL_BLOOM_LAYER);
+  }, [visible]);
+
   if (!visible) return null;
 
   return (
     <group position={EARTH_POSITION} raycast={() => null}>
       <mesh geometry={geometry} material={material} raycast={() => null} />
-      {/* Atmospheric rim shell (cool-blue limb glow). */}
-      <mesh geometry={rimGeometry} material={rimMaterial} raycast={() => null} />
+      {/* Atmospheric rim shell (cool-blue limb glow) — on CELESTIAL_BLOOM_LAYER. */}
+      <mesh ref={rimRef} geometry={rimGeometry} material={rimMaterial} raycast={() => null} />
     </group>
   );
 }
@@ -593,6 +603,8 @@ function makeTintGlowTexture(r: number, g: number, b: number): THREE.Texture | n
 
 function SunBody() {
   const invalidate = useThree((s) => s.invalidate);
+  // The Sun core mesh glows in the celestial bloom pass (#99).
+  const coreRef = useRef<THREE.Mesh>(null);
 
   const { geometry, material } = useMemo(() => {
     const geometry = new THREE.SphereGeometry(SUN_RADIUS, 48, 48);
@@ -649,6 +661,14 @@ function SunBody() {
     },
     [geometry, material],
   );
+
+  // Enable the celestial-bloom layer on the Sun core so the brightest body in the
+  // scene blooms in the cinematic pass (#99). Layer-gated (ADR-0004) — only the
+  // core disc glows, not the whole scene. The additive flare sprites already
+  // brighten on their own, so they stay off this layer.
+  useEffect(() => {
+    coreRef.current?.layers.enable(CELESTIAL_BLOOM_LAYER);
+  }, []);
 
   return (
     <group position={SUN_POSITION} raycast={() => null}>
@@ -732,8 +752,9 @@ function SunBody() {
           />
         </sprite>
       )}
-      {/* Core disc — the body itself (always present: ADR-0004 fallback). */}
-      <mesh geometry={geometry} material={material} raycast={() => null} />
+      {/* Core disc — the body itself (always present: ADR-0004 fallback).
+          On CELESTIAL_BLOOM_LAYER so it glows in the cinematic bloom pass (#99). */}
+      <mesh ref={coreRef} geometry={geometry} material={material} raycast={() => null} />
     </group>
   );
 }

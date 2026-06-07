@@ -972,7 +972,7 @@
       "area": "realistic-3d-world",
       "title": "Post-processing cinematic stack (bloom Sun+Earth, vignette, SMAA, CA, grain, surface DoF)",
       "user_visible_behavior": "Sun core and Earth limb bloom; the scene gains vignette, anti-aliasing, subtle chromatic aberration, film grain, and surface depth-of-field.",
-      "status": "not_started",
+      "status": "passing",
       "issue": 99,
       "epic": 46,
       "depends_on": [],
@@ -980,8 +980,11 @@
         "cd web && npm run build && npm test (TS-clean + vitest)",
         "manual: orbit & surface screenshots; animated slices pause when the tab is hidden"
       ],
-      "evidence": [],
-      "notes": "Wave 3 (cinematic beauty & immersion). AFK."
+      "evidence": [
+        "1a1f114: cinematic EffectComposer stack — SMAA + halo bloom + celestial bloom (Sun core + Earth rim on new CELESTIAL_BLOOM_LAYER=12, SCREEN blend, luminanceSmoothing 0.35) + surface-gated DepthOfField + orbit-only ChromaticAberration + Vignette + film-grain Noise; all passes static (demand-loop safe, 0 idle fps); locked stack (R3F 8.18 / postprocessing 2.19.1).",
+        "web green: eslint 0 errors; tsc -b && vite build TS-clean; vitest 11 files / 116 tests pass."
+      ],
+      "notes": "Wave 3 (cinematic beauty & immersion). AFK. Screenshots deferred to coordinator's consolidated visual review."
     },
     {
       "id": "r3d-100",
