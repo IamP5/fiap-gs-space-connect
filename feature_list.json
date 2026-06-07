@@ -1142,7 +1142,7 @@
       "area": "realistic-3d-world",
       "title": "Camera feel (idle drift, inertial damping, zoom exposure, parallax)",
       "user_visible_behavior": "The camera idle-drifts, damps inertially, lifts exposure on zoom, and parallaxes the starfield on drag.",
-      "status": "not_started",
+      "status": "passing",
       "issue": 109,
       "epic": 46,
       "depends_on": [],
@@ -1150,7 +1150,9 @@
         "cd web && npm run build && npm test (TS-clean + vitest)",
         "manual: orbit & surface screenshots; animated slices pause when the tab is hidden"
       ],
-      "evidence": [],
+      "evidence": [
+        "branch wave3/r3d-109 (PR #109): CameraFeel in Scene3D.tsx (idle azimuth sway after 4s, drei OrbitControls enableDamping, zoom→toneMappingExposure lift, drag→starfield parallax); pure math in lib/cameraFeel.ts + cameraFeel.test.ts. Idle loop self-sustains via useFrame+invalidate and pauses on document.hidden (0 idle fps). lint+build(tsc -b)+test all green (131 tests)."
+      ],
       "notes": "Wave 3 (cinematic beauty & immersion). AFK. Idle animation — relaxes 0-idle-fps; pauses when tab hidden."
     },
     {
