@@ -16,20 +16,19 @@ stop. `feature_list.json` is the per-feature source of truth; this file is the n
 - **End-to-end:** ✅ verified this session — live compose stack up; coordinator logs assert `msg=expiry task=wall-1 … returned to UNCLAIMED` (self-heal) then `msg=complete task=dome-cap by=R1` (dome closed). The `deploy/smoke.sh` *wrapper* can't pass its host `/healthz` gate on this laptop: a stale `kubectl port-forward` (kind cluster, `swarmbuild-control-plane`) is holding `127.0.0.1:8080` and shadows the compose gateway — environment collision, not a regression. Kill that port-forward (or run smoke on a clean host) to get a green wrapper.
 - **MVP (issues 01–11):** all `passing` in `feature_list.json`; GitHub issues #13–#23 closed; milestone "SwarmBuild MVP" closed.
 - **Build-harness (bh-01..bh-08):** all `passing` in `feature_list.json` with evidence; GitHub issues #24–#38 closed; milestone "Build Harness" closed. **All 19 features now `passing` — no open work in the tracker.**
-- **Realistic-3d-world (epic #46):** ✅ **Wave 3 cinematic polish (#99,#101–109) + Wave 4 living orbit (#112) MERGED to `main` 2026-06-07**; **r3d-100 (Texture fidelity, PR #120) MERGED** (HEAD `6edf789`). `feature_list.json`: **57/59 `passing`**, **2 `in_progress`** (r3d-110, r3d-111 — implemented this session on a branch, awaiting visual sign-off; see below).
-- **Current open realistic-3d-world work (2 items, epic #46):** **r3d-110** (Sun GodRays + anamorphic lens-flare streak) and **r3d-111** (Material tier polish) — **implemented + verified green on branch `wave3/godrays-material-polish` (Session 009), NOT yet merged.** Both are subjective-visual AFK slices, so per the operator-review convention they await a screenshot sign-off before merging → then flip to `passing` + close #110/#111. Epic #46 stays OPEN until they land. (Build-harness + MVP milestones remain closed; backend baseline unchanged.)
+- **Realistic-3d-world (epic #46): ✅ COMPLETE — all 59 features `passing`.** Wave 3 cinematic polish (#99,#101–109) + Wave 4 living orbit (#112) + r3d-100 (Texture fidelity) all on `main`; **r3d-110 (Sun GodRays + anamorphic streak) + r3d-111 (Material tier polish) merged to `main` 2026-06-07** (operator signed off) via branch `wave3/godrays-material-polish` (feat `96221e0` + perf `737a6cd`). `feature_list.json`: **59/59 `passing`**. Epic #46 can close (its three remaining children — #100/#110/#111 — are all done). Build-harness + MVP milestones remain closed; backend baseline unchanged.
 
 ## Next Steps
 
-1. **r3d-110 + r3d-111 sign-off + merge:** review the Session-009 screenshots
-   (`.screenshots/r3d-110-godrays-orbit.png`, `.screenshots/r3d-111-surface-materials.png`)
-   on branch `wave3/godrays-material-polish`. To see the god-rays: enter ORBIT, then
-   orbit the camera around toward the Sun (it sits off-frame in the default Wave-4
-   dark-crescent pose by design). On sign-off, open a PR → merge → flip r3d-110/111
-   to `passing` + close #110/#111 → epic #46 can close. **Don't auto-merge** (subjective visual).
-2. **Branch hygiene:** `wave4/living-orbit` + `wave3/integration` + the merged
-   `worktree-agent-*` heads are fully in `main` and can be deleted. Keep the invariant
-   sacred on the backend self-heal core (ADR-0009); re-run `./deploy/smoke.sh` before any demo.
+1. **Close epic #46** on GitHub (all 59 children `passing`/merged) and close issues
+   #110/#111 if the merge auto-close didn't fire (the merge commit carries `Closes
+   #110`/`Closes #111`). Realism milestone is feature-complete.
+2. **Push `main`** when ready — the r3d-110/111 merge is local only (commits
+   `96221e0`, `737a6cd`, and the merge commit). Nothing has been pushed to the remote.
+3. **Branch hygiene:** `wave3/godrays-material-polish` (now merged) plus the older
+   `wave4/living-orbit` + `wave3/integration` + merged `worktree-agent-*` heads can be
+   deleted. Keep the invariant sacred on the backend self-heal core (ADR-0009); re-run
+   `./deploy/smoke.sh` before any demo.
 
 ## Session Log
 
@@ -42,7 +41,8 @@ stop. `feature_list.json` is the per-feature source of truth; this file is the n
 - **Files/artifacts updated:** `web/src/lib/textureFidelity.ts`, `web/src/components/{Scene3D,SkyBodies,DecorRocks,LaunchScenery}.tsx`, `web/public/assets/textures/rock_boulder_dry_{nor_gl,rough}_512.jpg` (new) + `CREDITS.md`, `docs/02-realistic-3d-world/issues/{110,111}-*.md`, `feature_list.json` (r3d-110/111 → in_progress + evidence), `PROGRESS.md`.
 - **Perf follow-up (same session):** operator flagged a perf drop from the new effects. Profiling (chrome-devtools): main thread/JS clean (CLS 0, nothing flagged) and **surface holds the 120fps vsync cap** → the regression is **GPU-fragment-bound and orbit-only**, dominated by the new GodRays multi-pass (this dev machine has too much headroom to expose it via FPS, so it bites only on weaker hardware). Fix in `Scene3D.tsx`: **frustum-cull GodRays** — a cheap per-frame NDC projection of the Sun toggles `resolution.scale` 0.5↔0.05 on transition only (no shader recompile), so the *default off-frame orbit pose* (the common view) pays ≈nothing; plus **samples 80→60** (lib default, identical look). Surface untouched (GodRays is orbit-only); #111 material quality untouched. Re-verified green + no console errors + rays preserved when the Sun is in frame.
 - **Known risk / unresolved:** (1) Emissive windows + solar glint are wired but **latent** on the current vendored asset set (no `*window*` submeshes; `solar-panel.glb` isn't in the default mock scene) — a correct ADR-0004 no-op until such assets are placed. (2) `MeshPhysicalMaterial` upgrade runs once per cached source; the upgraded materials live for the session like the originals. (3) Pre-existing benign ANGLE/macOS `glBlitFramebuffer` EffectComposer warning persists (documented Session 008).
-- **Next best step:** operator screenshot sign-off → PR + merge → flip r3d-110/111 to `passing`, close #110/#111, epic #46.
+- **Merged (end of session):** operator signed off on the screenshots → branch `wave3/godrays-material-polish` (feat `96221e0` + perf `737a6cd`) merged to `main` via a `--no-ff` merge; flipped r3d-110/111 → `passing` (59/59) and ticked the epic checklist. Local only — not yet pushed.
+- **Next best step:** push `main` + close epic #46 / issues #110/#111 on GitHub; delete the merged branch.
 
 ### Session 008 — 2026-06-07
 - **Goal:** Polish the living Earth marble on `wave4/living-orbit` — the operator caught it "collapsing": flickering black textures looping as it turned, a hard warm "double-image" terminator stripe, a too-bright/blown-out day side, an over-fast spin, and a too-gross day/night divide. Iterated by eye across five commits against operator screenshots.
