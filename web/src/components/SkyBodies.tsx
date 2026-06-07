@@ -186,6 +186,7 @@ const EARTH_FRAGMENT = /* glsl */ `
   uniform float uGlintStrength;  // glint brightness
   uniform float uAmbient;        // faint day-side floor so the disc is never pure black
   uniform float uDayExposure;    // day-side brightness scale (tames the bright Blue Marble)
+  uniform float uNightFill;      // earthshine wash on the dark side (smooths the terminator)
   varying vec3 vWorldNormal;
   varying vec3 vViewDir;
   varying vec2 vUv;
@@ -206,9 +207,10 @@ const EARTH_FRAGMENT = /* glsl */ `
 
     // Day diffuse with a faint ambient floor, scaled DOWN by uDayExposure so the
     // sunlit hemisphere reads as a soft lit marble rather than a blown-out, bloom-
-    // amplified disc (the "day side too bright" the user flagged). A gamma-softened
-    // diffuse (pow 0.8) widens the bright zone gently instead of a hard lambert peak.
-    float diff = pow(max(ndl, 0.0), 0.8);
+    // amplified disc (the "day side too bright" the user flagged). A >1 exponent makes
+    // the brightness rise SLOWLY just past the terminator (the old 0.8 rose too fast
+    // and re-sharpened the edge), so the day eases in over a broad dusk band.
+    float diff = pow(max(ndl, 0.0), 1.3);
     vec3 lit = day * (uAmbient + (1.0 - uAmbient) * diff) * uDayExposure;
 
     // City lights — NIGHT side only (masked by 1−dayF so they never bleed onto the
@@ -245,11 +247,20 @@ const EARTH_FRAGMENT = /* glsl */ `
     float spec = pow(max(dot(N, H), 0.0), uGlintShininess);
     vec3 glint = uGlintColor * spec * ocean * dayF * uGlintStrength * shimmer;
 
+    // Earthshine night fill — a faint COOL wash of the day geography across the dark
+    // hemisphere, so the night side reads as dim, blue-lit earth rather than a pure-
+    // black cutout. THIS is what makes the day/night boundary smooth: the same trick
+    // that softens the MOON's terminator (its dark side is filled by earthshine + IBL,
+    // so the edge is a grey→grey gradient, not lit→black). Kept low + cool; on the lit
+    // side dayF→1 so the mix below weights it out → the day side is unaffected.
+    vec3 nightFill = day * uNightFill * vec3(0.7, 0.85, 1.15);
+    vec3 darkSide = nightFill + city;
+
     // Fade the whole surface shader at the EXTREME grazing limb — foreshortened
     // equirect texels alias into a bright vertical streak there. The atmosphere rim
     // shell carries the limb glow, so fading the surface a few degrees in is invisible.
     float surfFade = smoothstep(0.0, 0.06, NdotV);
-    vec3 color = (mix(city, lit, dayF) + termGlow + glint) * surfFade;
+    vec3 color = (mix(darkSide, lit, dayF) + termGlow + glint) * surfFade;
     gl_FragColor = vec4(color, 1.0);
 
     #include <tonemapping_fragment>
@@ -629,9 +640,9 @@ function EarthBody({ visible, viewMode }: { visible: boolean; viewMode: ViewMode
         uTime: { value: 0 },
         // Wide, soft terminator (Wave 4.1) — Earth's thick atmosphere scatters the
         // day/night boundary into a gentle gradient, not the crisp Moon edge. The
-        // old 0.12 read as a hard line; widened again 0.24→0.40 so the day/night
+        // old 0.12 read as a hard line; widened again 0.24→0.45 so the day/night
         // hand-off is a broad, smooth dusk band like the NASA reference.
-        uTermWidth: { value: 0.4 }, // soft terminator half-width
+        uTermWidth: { value: 0.45 }, // soft terminator half-width
         // Broader sub-solar highlight (60→30): a tight specular speckled at the small
         // marble size; a softer, wider glint reads cleanly as "sun on the oceans".
         uGlintShininess: { value: 30.0 },
@@ -640,6 +651,10 @@ function EarthBody({ visible, viewMode }: { visible: boolean; viewMode: ViewMode
         // Day-side exposure (Wave 4.1): pull the sunlit hemisphere down to ~0.6 so the
         // bright Blue Marble + bloom no longer blows out the day side.
         uDayExposure: { value: 0.6 },
+        // Earthshine night fill (Wave 4.1): a faint cool wash of the day geography on
+        // the dark side so the terminator is a smooth grey→grey gradient (like the
+        // Moon), not a hard lit→black edge.
+        uNightFill: { value: 0.08 },
       },
       fog: false,
     });
