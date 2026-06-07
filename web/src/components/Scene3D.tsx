@@ -1644,6 +1644,102 @@ function LunarTerrain({ terrainTint }: { terrainTint: string }) {
   );
 }
 
+// ---- Shackleton long-shadow fakes (Epic 04 P4) -----------------------------
+// At the lunar south pole the sun grazes the horizon, so structures throw very long
+// shadows. We FAKE them (real shadow maps on a grazing pole sun balloon the shadow-
+// camera frustum + fight the EffectComposer + the dpr≤1.5 budget — see the plan's P2
+// "Shadows" note) with static, snapshot-INDEPENDENT decals: soft dark elongated
+// blobs laid flat on the regolith, stretched + rotated to point AWAY from the sun.
+//
+// The decal texture is a PROCEDURAL canvas radial gradient (NO image asset, so no
+// lib/assets.ts manifest entry is needed and nothing can pop in on descent — the
+// hard ASSETS RULE). One texture is shared by all blobs; each blob is a flat plane
+// scaled long in the shadow direction. Anchored under the Shackleton set-pieces.
+//
+// Shadow heading is derived from SITE_FRAMES.shackleton.sunDir so it can never drift
+// from the actual key light: shadows fall along the GROUND projection of −sunDir.
+
+// Anchor points (scene units, on the y=0 plane) under the Shackleton structures +
+// the worksite cluster, each with a relative length multiplier for visual variety.
+const SHACKLETON_SHADOW_ANCHORS: { at: [number, number]; len: number }[] = [
+  { at: [-10, -16], len: 1.25 }, // shk-base-station
+  { at: [14, -18], len: 1.15 }, // shk-lander
+  { at: [-26, -30], len: 1.4 }, // shk-crawler
+  { at: [3.2, -5], len: 0.8 }, // shk-astronaut
+  { at: [0, 0], len: 1.0 }, // dome cluster centre
+];
+
+// Build the soft radial-gradient shadow blob once (procedural CanvasTexture — no
+// manifest asset). Dark, soft-edged, transparent at the rim so it never reads as a
+// hard disc on the regolith. Returns null in non-DOM (SSR/test) so callers fall back.
+function makeShadowBlobTexture(): THREE.Texture | null {
+  if (typeof document === "undefined") return null;
+  const size = 128;
+  const cv = document.createElement("canvas");
+  cv.width = cv.height = size;
+  const ctx = cv.getContext("2d");
+  if (!ctx) return null;
+  const g = ctx.createRadialGradient(size / 2, size / 2, 0, size / 2, size / 2, size / 2);
+  g.addColorStop(0, "rgba(0,0,0,0.55)");
+  g.addColorStop(0.55, "rgba(0,0,0,0.32)");
+  g.addColorStop(1, "rgba(0,0,0,0)");
+  ctx.fillStyle = g;
+  ctx.fillRect(0, 0, size, size);
+  const tex = new THREE.CanvasTexture(cv);
+  tex.colorSpace = THREE.SRGBColorSpace;
+  return tex;
+}
+
+function ShackletonShadows() {
+  // The shadow falls OPPOSITE the sun: project −sunDir onto the ground (x,z) plane.
+  // (sunDir is [x,y,z] in scene space; the ground heading ignores y.)
+  const { heading, blobLen } = useMemo(() => {
+    const [sx, , sz] = SITE_FRAMES.shackleton.sunDir;
+    // Shadow direction on the ground = away from the sun's horizontal heading.
+    const shadowAngle = Math.atan2(-sz, -sx); // around +y
+    // A long base blob length; the grazing pole sun → very long shadows.
+    return { heading: shadowAngle, blobLen: 18 };
+  }, []);
+
+  const tex = useMemo(makeShadowBlobTexture, []);
+  useEffect(() => () => tex?.dispose(), [tex]);
+  if (!tex) return null;
+
+  return (
+    <group>
+      {SHACKLETON_SHADOW_ANCHORS.map((a, i) => {
+        const len = blobLen * a.len;
+        const width = 5 * a.len;
+        // The plane lies flat (rotateX −90°) then yaws to the shadow heading; it is
+        // stretched LONG along its local x (the shadow's length) so it reads as a
+        // raking streak. Offset the blob centre out along the heading so the streak
+        // begins at the structure's foot and trails away from the sun.
+        const ox = a.at[0] + Math.cos(heading) * len * 0.45;
+        const oz = a.at[1] + Math.sin(heading) * len * 0.45;
+        return (
+          <mesh
+            key={i}
+            position={[ox, 0.03, oz]}
+            rotation={[-Math.PI / 2, 0, -heading]}
+            scale={[len, width, 1]}
+            raycast={() => null}
+            renderOrder={1}
+          >
+            <planeGeometry args={[1, 1]} />
+            <meshBasicMaterial
+              map={tex}
+              transparent
+              opacity={0.85}
+              depthWrite={false}
+              toneMapped={false}
+            />
+          </mesh>
+        );
+      })}
+    </group>
+  );
+}
+
 // ---- cinematic post-processing stack (issue #99) ---------------------------
 
 // A single static EffectComposer carrying the full cinematic stack. It replaces
@@ -1965,6 +2061,15 @@ const SURFACE_POSE: Pose = {
   position: new THREE.Vector3(2.5, 5, 6),
   target: new THREE.Vector3(2.5, 0.5, -2),
 };
+// Per-site surface poses (Epic 04 P4). Lunar reuses the rehearsed worksite framing
+// above. Shackleton sits LOWER + a touch further BACK so the low grazing pole sun
+// (SITE_FRAMES.shackleton.sunDir) rakes its long shadow fakes TOWARD the camera —
+// the shadows lead the eye INTO the frame (the pole-outpost read), not away from it.
+const LUNAR_SURFACE_POSE: Pose = SURFACE_POSE;
+const SHACKLETON_SURFACE_POSE: Pose = {
+  position: new THREE.Vector3(2.5, 3.4, 8.5),
+  target: new THREE.Vector3(2.5, 0.4, -3),
+};
 // A high vantage straight over the worksite — the start/end of the descent half,
 // so the surface "drops in" from above rather than cutting in flat.
 const SURFACE_HIGH_POSE: Pose = {
@@ -2004,6 +2109,32 @@ const TRANSITION_MS = 1500;
 // The cinematic intro fly-in (#108) reuses the descent rig but stretched, so the
 // experience opens as a slow deep-space arrival rather than a snappy mode toggle.
 const INTRO_MS = 4500;
+// Surface→surface site swap (Epic 04 P4): a short lateral glare MATCH-CUT — NOT a
+// fly-to-Moon. A quick dolly/whip toward the new site, flip the rendered site under
+// the glare peak, settle on the destination surface pose. Kept brief so it reads as
+// a cut, not a journey.
+const MATCH_CUT_MS = 900;
+
+// ---- match-cut envelope (Epic 04 P4) ---------------------------------------
+// The lateral whip for the surface→surface match-cut, as a function of progress
+// t∈[0,1]. Returns the glare opacity, the eased path parameter `k` for lerpPose,
+// the lateral whip offset (a half-sine bump, 0 at both ends so it never leaves the
+// camera off-axis), and whether the content swap has passed (t≥0.5). Kept a pure
+// helper so the envelope shape is unit-testable. `whipUnits` scales the bump.
+export function matchCutEnvelope(t: number, whipUnits = 6) {
+  const c = Math.min(1, Math.max(0, t));
+  // Glare: a narrow spike around the t=0.5 swap, same shape as the descent glare
+  // but tighter (the cut is shorter). Raised to a power so it peaks hard and falls
+  // off fast — it only needs to mask a few swap frames.
+  const GLARE_HALF = 0.22;
+  const glare = Math.pow(Math.max(0, 1 - Math.abs(c - 0.5) / GLARE_HALF), 1.6);
+  // Path easing: ease-in-out so the whip accelerates out of the old pose and
+  // decelerates HARD into the new one (settles cleanly, no overshoot).
+  const k = c * c * (3 - 2 * c);
+  // Lateral whip: a half-sine bump, max at mid-cut, exactly 0 at t=0 and t=1.
+  const whip = Math.sin(c * Math.PI) * whipUnits;
+  return { glare, k, whip, swapped: c >= 0.5 };
+}
 
 // ---- Earthrise hero pose (#108) --------------------------------------------
 // The `earthrise-hero` beat lerps the SURFACE camera from its current pose to a
@@ -2534,6 +2665,11 @@ function SceneContents({
         <>
           <LunarTerrain terrainTint={frame.terrainTint} />
 
+          {/* Shackleton long-shadow fakes (Epic 04 P4): static decals raking AWAY
+              from the grazing pole sun. Snapshot-independent + procedural (no asset),
+              so they never pop in on descent. Lunar's high key light needs none. */}
+          {activeSite === "shackleton" && <ShackletonShadows />}
+
           {/* Contact shadows (#104) — drei bakes a soft ambient-occlusion-like
               contact shadow under the rovers + domes so they read as GROUNDED, not
               floating, even where the directional sun shadow is grazing. Sits a hair
@@ -2867,8 +3003,15 @@ function CameraFeel({ active, onSurface }: { active: boolean; onSurface: boolean
   return null;
 }
 
-// The canonical settled pose for a mode (start/end of the descent transition).
-const poseFor = (m: ViewMode): Pose => (m === "orbit" ? ORBIT_POSE : SURFACE_POSE);
+// The canonical settled pose for a (view, site) pair — the start/end of every
+// transition. Orbit is site-agnostic (one Moon vista for both markers); the
+// surface picks the active site's framing (Epic 04 P4: Shackleton lower/back).
+export const poseFor = (m: ViewMode, site: SiteId = "lunar"): Pose =>
+  m === "orbit"
+    ? ORBIT_POSE
+    : site === "shackleton"
+      ? SHACKLETON_SURFACE_POSE
+      : LUNAR_SURFACE_POSE;
 
 export function Scene3D({
   snapshot,
@@ -2883,12 +3026,17 @@ export function Scene3D({
   activeSite = "lunar",
   onActiveSiteChange,
 }: Scene3DProps) {
-  // `viewMode` (prop) is the DESIRED mode; `shown` is the mode currently RENDERED.
-  // They differ only during the descent transition: `shown` flips at the glare
-  // peak, so the content/sky swap is hidden behind the flash. Clamps + the OrbitⅭ
-  // ontrols target track `shown` so they always match the visible scene.
+  // `viewMode`/`activeSite` (props) are the DESIRED state; `shown`/`shownSite` are
+  // what is currently RENDERED. They differ only DURING a transition: each flips at
+  // its glare peak, so the content/sky swap is hidden behind the flash. Clamps + the
+  // OrbitControls target track `shown` so they always match the visible scene. The
+  // pair is generalized (Epic 04 P4) so ONE driver, keyed on [viewMode, activeSite],
+  // owns both the view change (descent/ascent) and the surface→surface site swap
+  // (match-cut) — two separate effects would race over the camera (Risk #3).
   const [shown, setShown] = useState<ViewMode>(viewMode);
   const shownRef = useRef<ViewMode>(viewMode);
+  const [shownSite, setShownSite] = useState<SiteId>(activeSite);
+  const shownSiteRef = useRef<SiteId>(activeSite);
   const [transitioning, setTransitioning] = useState(false);
 
   // Live handles to the in-Canvas camera/controls/invalidate, captured by RigBridge.
@@ -2906,10 +3054,10 @@ export function Scene3D({
   // cleanup that cancels the rAF and re-enables controls if interrupted. The
   // CINEMATIC INTRO (#108) reuses this exact rig — an orbit→surface descent
   // stretched to ~4.5s — so the experience opens from deep space.
-  const runDescent = useRef<(from: ViewMode, to: ViewMode, durationMs: number) => () => void>(
-    () => () => {},
-  );
-  runDescent.current = (from, to, durationMs) => {
+  const runDescent = useRef<
+    (from: ViewMode, to: ViewMode, durationMs: number, toSite?: SiteId) => () => void
+  >(() => () => {});
+  runDescent.current = (from, to, durationMs, toSite = shownSiteRef.current) => {
     const camera = cameraRef.current;
     const invalidate = invalidateRef.current;
     const controls = controlsRef.current;
@@ -2917,6 +3065,8 @@ export function Scene3D({
     if (!camera || !invalidate) {
       shownRef.current = to;
       setShown(to);
+      shownSiteRef.current = toSite;
+      setShownSite(toSite);
       return () => {};
     }
 
@@ -2925,11 +3075,15 @@ export function Scene3D({
     // glare. Beat 1 starts from wherever the user actually left the camera.
     const startPose: Pose = {
       position: camera.position.clone(),
-      target: controls ? controls.target.clone() : poseFor(from).target.clone(),
+      target: controls
+        ? controls.target.clone()
+        : poseFor(from, shownSiteRef.current).target.clone(),
     };
     const beat1To = to === "surface" ? MOON_CLOSE_POSE : SURFACE_HIGH_POSE;
     const beat2From = to === "surface" ? SURFACE_HIGH_POSE : MOON_CLOSE_POSE;
-    const destPose = poseFor(to);
+    // On a descent the dest is the TARGET site's surface pose (orbit-marker click
+    // lands there); on an ascent the site is irrelevant (orbit is site-agnostic).
+    const destPose = poseFor(to, toSite);
 
     // Descent vs. ascent. The pitch ramp (#84) puts the horizon-rise in the FINAL
     // ~15% of the whole move on a descent (beat 2, t∈[0.85,1] → its last 30%), and
@@ -2973,6 +3127,10 @@ export function Scene3D({
           swapped = true;
           shownRef.current = to;
           setShown(to); // swap content + sky under the brief full-glare peak
+          // Land on the target site too (orbit-marker click descends to it). On an
+          // ascent toSite == the current site, so this is a no-op.
+          shownSiteRef.current = toSite;
+          setShownSite(toSite);
         }
         // Beat 2 — arrive: ease-out (fast in, hard deceleration into the landing).
         // On DESCENT this beat owns the pitch ramp (horizon rises in its last 30%).
@@ -3018,14 +3176,129 @@ export function Scene3D({
     };
   };
 
-  // View-mode change ⇒ play the glare-masked descent between modes.
+  // Surface→surface MATCH-CUT runner (Epic 04 P4). A short lateral glare whip — NO
+  // fly-to-Moon — that swaps the rendered site under the glare peak (t=0.5) and
+  // settles on the destination site's surface pose. Reuses lerpPose with pitchHold=1
+  // (a plain pose lerp — the horizon stays put; this is a CUT between two surface
+  // framings, not a descent). Same rig discipline as runDescent: it OWNS the camera
+  // (controls disabled), `transitioning` suspends CameraFeel's input clock so the
+  // tween doesn't fight the idle drift, and at t=1 it settles EXACTLY on the dest
+  // pose, re-enables controls, and clears `transitioning` so CameraFeel re-arms and
+  // eases idle drift back in (its IDLE_FADE ramp means no snap — #130 handoff).
+  const runMatchCut = useRef<(toSite: SiteId, durationMs: number) => () => void>(
+    () => () => {},
+  );
+  runMatchCut.current = (toSite, durationMs) => {
+    const camera = cameraRef.current;
+    const invalidate = invalidateRef.current;
+    const controls = controlsRef.current;
+    // Rig not ready: snap the site with no animation.
+    if (!camera || !invalidate) {
+      shownSiteRef.current = toSite;
+      setShownSite(toSite);
+      return () => {};
+    }
+
+    // Start from wherever the camera actually is (it may be mid-idle-drift — #130),
+    // so the whip takes the camera CLEANLY from the drifting state. Dest is the
+    // destination site's settled surface pose.
+    const startPose: Pose = {
+      position: camera.position.clone(),
+      target: controls
+        ? controls.target.clone()
+        : poseFor("surface", shownSiteRef.current).target.clone(),
+    };
+    const destPose = poseFor("surface", toSite);
+    // Whip sideways TOWARD the new site's heading (sign from the X delta of the two
+    // poses, falls back to +1) so the dolly reads as a move to the neighbouring
+    // site, not a random jolt.
+    const dir = Math.sign(destPose.position.x - startPose.position.x) || 1;
+
+    const tmpPos = new THREE.Vector3();
+    const tmpTgt = new THREE.Vector3();
+    let raf = 0;
+    let start = 0;
+    let swapped = false;
+    if (controls) controls.enabled = false; // own the camera for the cut
+    setTransitioning(true); // suspends CameraFeel + OrbitControls rotate
+
+    const step = (now: number) => {
+      if (!start) start = now;
+      const t = Math.min(1, (now - start) / durationMs);
+      const env = matchCutEnvelope(t, 6);
+
+      if (glareRef.current) glareRef.current.style.opacity = String(env.glare);
+
+      if (env.swapped && !swapped) {
+        swapped = true;
+        // Swap the rendered site (content + lighting + fog + scenery) under the
+        // glare peak, so the cut is unseen.
+        shownSiteRef.current = toSite;
+        setShownSite(toSite);
+      }
+
+      // Plain pose lerp (pitchHold=1): a CUT between two surface framings.
+      lerpPose(startPose, destPose, env.k, tmpPos, tmpTgt, 1);
+      // Lateral whip: a half-sine bump toward the new site, zeroed at both ends.
+      tmpPos.x += dir * env.whip;
+      camera.position.copy(tmpPos);
+      camera.lookAt(tmpTgt);
+      if (controls) controls.target.copy(tmpTgt);
+      invalidate();
+
+      if (t < 1) {
+        raf = requestAnimationFrame(step);
+      } else {
+        if (glareRef.current) glareRef.current.style.opacity = "0";
+        // Settle EXACTLY on the destination pose (whip is 0 at t=1) so OrbitControls
+        // + CameraFeel resume from the canon pose with no snap and no drift-fight.
+        camera.position.copy(destPose.position);
+        camera.up.set(0, 1, 0);
+        camera.lookAt(destPose.target);
+        if (controls) {
+          controls.target.copy(destPose.target);
+          controls.enabled = true;
+          controls.update();
+        }
+        setTransitioning(false); // re-arms CameraFeel; idle drift eases back in
+        invalidate();
+      }
+    };
+    raf = requestAnimationFrame(step);
+    return () => {
+      cancelAnimationFrame(raf);
+      if (glareRef.current) glareRef.current.style.opacity = "0";
+      if (controls) controls.enabled = true;
+    };
+  };
+
+  // SINGLE transition driver (Epic 04 P4) — keyed on [viewMode, activeSite] so ONE
+  // effect owns every transition and two effects can never race the camera (Risk
+  // #3). Three branches:
+  //   1. view changed (orbit↔surface): the glare-masked descent/ascent. If the site
+  //      ALSO changed (orbit-marker click → site + surface), descend to that site.
+  //   2. same view (surface) + site changed: the lateral glare MATCH-CUT.
+  //   3. same view (orbit) + site changed: orbit is site-agnostic — just sync the
+  //      shown site silently (no camera move; the markers don't depend on it).
   useEffect(() => {
-    const to = viewMode;
-    const from = shownRef.current;
-    if (to === from) return;
-    return runDescent.current(from, to, TRANSITION_MS);
-    // Driven by viewMode only; the runDescent ref + state setters are stable.
-  }, [viewMode]);
+    const toView = viewMode;
+    const fromView = shownRef.current;
+    const toSite = activeSite;
+    const fromSite = shownSiteRef.current;
+    if (toView !== fromView) {
+      // Branch 1 (+3-combined): descend/ascend; on a descent land on the target site.
+      return runDescent.current(fromView, toView, TRANSITION_MS, toSite);
+    }
+    if (toSite === fromSite) return; // nothing changed
+    if (toView === "surface") {
+      // Branch 2: surface→surface site swap — the match-cut.
+      return runMatchCut.current(toSite, MATCH_CUT_MS);
+    }
+    // Branch 3: orbit + site change — no visible camera move; sync silently.
+    shownSiteRef.current = toSite;
+    setShownSite(toSite);
+    // Driven by [viewMode, activeSite]; the runner refs + setters are stable.
+  }, [viewMode, activeSite]);
 
   // CINEMATIC INTRO FLY-IN (#108): on first mount in surface view, open from deep
   // space — reuse the descent rig (orbit→surface) stretched to ~4.5s so the
@@ -3138,7 +3411,9 @@ export function Scene3D({
           onPlaceConfirm={onPlaceConfirm}
           viewMode={shown}
           onViewModeChange={onViewModeChange}
-          activeSite={activeSite}
+          // The RENDERED site (flips under the match-cut/descent glare), so the
+          // worksite + per-site lighting/fog/scenery swap unseen behind the flash.
+          activeSite={shownSite}
           onActiveSiteChange={onActiveSiteChange}
         />
         <RigBridge
