@@ -981,7 +981,7 @@
         "manual: orbit & surface screenshots; animated slices pause when the tab is hidden"
       ],
       "evidence": [
-        "45332ed: cinematic EffectComposer stack — SMAA + halo bloom + celestial bloom (Sun core + Earth rim on new CELESTIAL_BLOOM_LAYER=12, SCREEN blend, luminanceSmoothing 0.35) + surface-gated DepthOfField + orbit-only ChromaticAberration + Vignette + film-grain Noise; all passes static (demand-loop safe, 0 idle fps); locked stack (R3F 8.18 / postprocessing 2.19.1).",
+        "1a1f114: cinematic EffectComposer stack — SMAA + halo bloom + celestial bloom (Sun core + Earth rim on new CELESTIAL_BLOOM_LAYER=12, SCREEN blend, luminanceSmoothing 0.35) + surface-gated DepthOfField + orbit-only ChromaticAberration + Vignette + film-grain Noise; all passes static (demand-loop safe, 0 idle fps); locked stack (R3F 8.18 / postprocessing 2.19.1).",
         "web green: eslint 0 errors; tsc -b && vite build TS-clean; vitest 11 files / 116 tests pass."
       ],
       "notes": "Wave 3 (cinematic beauty & immersion). AFK. Screenshots deferred to coordinator's consolidated visual review."
