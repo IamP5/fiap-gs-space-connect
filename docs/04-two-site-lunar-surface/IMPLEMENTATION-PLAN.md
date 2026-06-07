@@ -14,7 +14,11 @@
   (recenter/rotate, no per-snapshot autoscale). Keeps `at`/`invert` exact and the
   hero composition stable.
 - Honor **ADR-0004**: scene is a pure function of the snapshot; mandatory
-  primitive/box fallbacks; `frameloop="demand"` idles at 0fps.
+  primitive/box fallbacks. **NB:** invariant (3)'s demand-loop / 0-idle-fps budget
+  was **dropped** — the scene runs `frameloop="always"` and `useFrame` is
+  unrestricted (Wave 4 "living orbit"; see `AGENTS.md`). So this plan no longer needs
+  `invalidate()`-per-tween or "no `useFrame`" gymnastics; keep `dpr ≤ ~1.5` + bounded
+  draw calls as hygiene instead.
 
 ## Ground-truth confirmations (verified by reading source)
 
@@ -34,10 +38,20 @@
   positions — perfect for two sites.
 - Transition machinery: `Scene3D` useEffect keyed on `[viewMode]`, glare DOM
   overlay driven imperatively, `shown` flips at glare peak (t=0.5), poseFor/
-  lerpPose/rAF. `frameloop="demand"`, `antialias:false`, EffectComposer.
-- Orbit marker: `LunarBaseMarker` in `SkyBodies.tsx`, seated on the globe near-face,
-  click → `onViewModeChange("surface")`.
+  lerpPose/rAF. `frameloop="always"` (was `"demand"` — Scene3D.tsx:2995), EffectComposer.
+- Orbit marker: `LunarBaseMarker` in `SkyBodies.tsx`, seated on the globe near-face
+  (`new THREE.Vector3(0, 80, 410).normalize()`, ~1177), click →
+  `onViewModeChange("surface")`. **Epic 05 #131 reseats this to the lit hemisphere —
+  P3 below supersedes it (two lat/lon markers).**
 - Mock: `web/src/mocks/snapshot.ts` is flat (must carry both sites for dev).
+- **Epic 05 (#127–#131, not yet built) is in flight in parallel** and changes the
+  ground under P2–P4: 2D `WorldCanvas`/`hitTest` are deleted (#128); `App.tsx` gains
+  a loading-gate + `<LoadingScreen>` and `viewMode` defaults to `"orbit"` (#129/#130);
+  a new `lib/assets.ts` preload manifest + `lib/textureCache.ts` warm **all** assets
+  before the Canvas mounts (#129); `CameraFeel` starts idle-drift immediately (#130).
+  None of these files/states exist yet on `main` (verified: `assets.ts`,
+  `textureCache.ts`, `LoadingScreen.tsx` absent; `viewMode` still `"surface"`;
+  `WorldCanvas`/`hitTest` present). See "Coordination with Epic 05" at the end.
 
 ---
 
@@ -151,7 +165,10 @@ correct). Keep a single scripted kill for v1.
 `viewMode` (orthogonal: orbit shows both markers, surface shows one site). Thread
 `activeSite` + setter into `Scene3D` and `ControlsPanel`. The obstacles/placement
 derivation must also filter to `activeSite` (else drag-to-place collides with the
-other site's tasks).
+other site's tasks). **Rebase onto the post-#128 `App.tsx`** (2D toggle/state/branch
+removed) and note `viewMode` now defaults to `"orbit"` (#130) — so the surface mounts
+only after a descent, and `activeSite` must already be set when the descent fires
+(the orbit marker click sets both; default `activeSite="lunar"`).
 
 **`SceneContents` filtering:** slice the snapshot by site
 (`(r.site ?? "lunar") === activeSite`, same for tasks); build `map` from
@@ -176,13 +193,21 @@ shackleton: { cx:400, cy:0, rot:0.3, worksiteUnitsToMeters:1,
   (surface only uses an off-screen directional light). `LunarTerrain` takes a
   `terrainTint` prop; fog becomes per-site.
 
-**Shadows:** do **not** enable real shadow maps (they fight `frameloop="demand"` +
-EffectComposer). Fake Shackleton's long shadows with static blob/gradient decals
-oriented opposite the grazing sun (snapshot-independent ⇒ demand-safe). Real shadows
-are a flagged follow-up (per-site shadow-camera framing on a grazing sun can balloon).
+**Shadows:** still **fake** Shackleton's long shadows with static blob/gradient
+decals oriented opposite the grazing sun — but the reason is now **cost/complexity**,
+not the render loop (the old "they fight `frameloop="demand"`" rationale is void;
+the loop is always-on). Real shadow maps remain a flagged follow-up because per-site
+shadow-camera framing on a grazing pole sun balloons, and shadow passes fight the
+EffectComposer pipeline + the `dpr ≤ ~1.5` hygiene budget. Decals stay
+snapshot-independent regardless.
 
 **Mock (`web/src/mocks/snapshot.ts`):** add `site` to every rover/task; include
 **both** sites in the one snapshot so `VITE_MOCK=1` dev shows both.
+
+**Assets:** any new Shackleton decal/"in construction" texture **must be registered
+in Epic 05's `lib/assets.ts` manifest** and loaded via `lib/textureCache.ts`, or it
+pops in on descent (defeating #129's preload-everything). The dome GLBs are reused
+(already in the manifest); no new GLBs.
 
 **UI:** add a Surface **site toggle** (Lunar Base / Shackleton) in
 `web/src/components/ControlsPanel.tsx` near the existing Surface/Orbit toggle.
@@ -191,15 +216,25 @@ are a flagged follow-up (per-site shadow-camera framing on a grazing sun can bal
 
 ## Phase P3 — Orbit markers + descend-to-site
 
+> **Supersedes Epic 05 #131** (single-marker reseat to the lit hemisphere). This
+> phase replaces the one `LunarBaseMarker` with two lat/lon markers — but must carry
+> #131's lesson forward: **both markers must land on the lit hemisphere**, not the
+> terminator (the near-face seat under orbit lighting falls dark). Coordinate so only
+> one of {#131, P3} lands; if #131 ships first, P3 rebases on top and removes the
+> blend-hack.
+
 - Add `latLonToGlobePoint(lat, lon)` (sphere param around `MOON_POSITION`,
   `MOON_RADIUS`). Coords: Shackleton `lat −89.9, lon 0`; Lunar Base `lat 0.7,
-  lon 23.5`. Verify markers land on the visible near face for the default orbit
-  camera (tune a global lon offset to the moon texture seam by eye).
+  lon 23.5`. Verify markers land on the visible **and lit** near face for the default
+  orbit camera (tune a global lon offset to the moon texture seam by eye; cross-check
+  against `ORBIT_SUN_POSITION` so neither marker sits in shadow — this is the #131
+  requirement, now applied to both).
 - Generalize `LunarBaseMarker` (`SkyBodies.tsx`) → `SiteMarker({ position,
   quaternion, color, label, onSelect })`, oriented to the local surface normal.
   Render two: lunar (cyan), Shackleton (amber, "in construction").
 - Click → set **both** `activeSite=siteId` and `viewMode="surface"` → the combined
-  "descend to that site" transition (P4).
+  "descend to that site" transition (P4). With orbit as the default view (#130), this
+  is now the **primary** entry into the surface — not a secondary toggle.
 
 ---
 
@@ -215,8 +250,13 @@ to `{view, site}` to avoid two racing effects). Branches:
 - both changed (orbit marker click): descend and land on the target site.
 - Add `LUNAR_SURFACE_POSE` / `SHACKLETON_SURFACE_POSE` (Shackleton lower/back so
   shadows rake toward camera); `poseFor(view, site)`.
-- Driver must `invalidate()` each rAF tick, disable `controls` during the tween,
-  settle exactly on the dest pose at t=1 then stop — no `useFrame` (demand-safe).
+- Driver disables `controls` during the tween and settles exactly on the dest pose at
+  t=1, then hands back to `CameraFeel` idle-drift. The loop is **always-on** now, so
+  drop the old `invalidate()`-per-tick + "no `useFrame`" constraints — a `useFrame`
+  tween (or the existing rAF) is fine; just guard against fighting `CameraFeel`
+  (suspend its input clock while the tween owns the camera, resume at t=1). Beware the
+  #130 immediate-idle-drift change: the surface↔surface tween must take the camera
+  cleanly from a drifting state and return it to one.
 
 **Polish:** Shackleton long-shadow fakes, amber "in construction" styling, marker
 labels.
@@ -230,18 +270,64 @@ labels.
    switch to the fixed scale together; keep/extend the proxy-covers-rover test;
    verify drag-to-place `invert`.
 3. **Transition driver race** (med): one driver keyed `[viewMode, activeSite]`.
-4. **Demand-loop regressions** (med): site/lighting/marker changes `invalidate()`
-   once and never `useFrame`; shadows deferred for this reason.
-5. **South-pole marker visibility** (low-med): lat −89.9 may hide near the lower
-   limb — nudge marker / slight globe tilt if needed.
-6. **Wire desync** (low): TS `wire.ts` and Go `wire.go` in lockstep; new fields
+4. **Camera-feel handoff** (med, replaces the old demand-loop risk): the loop is
+   always-on, so the risk is no longer idle-fps regressions but the tween **fighting
+   `CameraFeel`** (esp. with #130's immediate idle-drift). Suspend the input clock
+   during the tween, resume at t=1; keep `dpr ≤ ~1.5` + bounded draws as hygiene.
+5. **Parallel-merge churn with Epic 05** (med): `App.tsx`, `Scene3D.tsx`, and the
+   `SkyBodies.tsx` marker are edited by both epics. Sequence per "Coordination with
+   Epic 05"; P1 (Go) and P0 (`scene.ts`) are the safe-to-parallelize beachheads.
+6. **South-pole marker visibility / lighting** (low-med): lat −89.9 may hide near the
+   lower limb **or fall in shadow** — nudge marker / slight globe tilt, and honor the
+   #131 lit-hemisphere requirement.
+7. **Wire desync** (low): TS `wire.ts` and Go `wire.go` in lockstep; new fields
    omitempty/optional.
+8. **Manifest drift** (low): new Shackleton textures absent from Epic 05's
+   `lib/assets.ts` → pop-in on descent. Register them with the manifest + a dupe check.
 
 ## Scope-balloon flags (OUT of v1)
 
-Real shadow maps (faked) · two coordinators (rejected) · distinct blueprints/asset
-sets per site (reuse the same dome twice) · moon globe tilt (only if marker
-visibility forces it) · multi-target scripted kills.
+Real shadow maps (faked — deferred for cost/complexity, not the old demand-loop
+reason) · two coordinators (rejected) · distinct blueprints/asset sets per site
+(reuse the same dome twice) · moon globe tilt (only if marker visibility forces it) ·
+multi-target scripted kills.
+
+---
+
+## Coordination with Epic 05 (#127–#131, parallel)
+
+Epic 05 is frontend-only and **not yet built**. Both epics land on `main` in
+parallel; the convergence target is: **boot → splash preloads everything → orbit
+vista with two site markers → click → pop-in-free descent to that site.**
+
+**File-overlap matrix** (◆ = heavy edit, • = light/region-disjoint):
+
+| File | This epic (04) | Epic 05 | Collision? |
+|---|---|---|---|
+| `internal/**` (Go) | ◆ P1 | — | none — land anytime |
+| `web/src/lib/scene.ts` | ◆ P0/P2 (`siteMap`, `SITE_FRAMES`) | • reads `ORBIT_SUN_POSITION` | low |
+| `web/src/App.tsx` | ◆ P2 (`activeSite`) | ◆ #128/#129/#130 (2D removal, loading-gate, orbit default) | **high — rebase P2 after #128** |
+| `web/src/components/Scene3D.tsx` | ◆ P0/P2/P4 | ◆ #129/#130 (export URLs, texture cache, immediate idle) | **high — disjoint regions, merge carefully** |
+| `web/src/components/SkyBodies.tsx` | ◆ P3 (two `SiteMarker`s) | ◆ #131 (marker reseat) | **high — P3 supersedes #131** |
+| `web/src/components/LaunchScenery.tsx` | • P0 (`fit`→`realMeters`) | • #129 (export `loadScenery`/URLs) | low |
+| `web/src/components/ControlsPanel.tsx` | • P2 (site toggle) | • #128 (drop 2D-fallback comment) | low |
+| `web/src/styles/dashboard.css` | • P2 (site-toggle styles) | • #128/#129 (drop renderer-toggle, add loading styles) | low |
+| `web/src/mocks/snapshot.ts` | ◆ P2 | — | none |
+| `web/src/lib/assets.ts` (new, Epic 05) | • register Shackleton textures | ◆ #129 (manifest) | **dependency — add our assets to it** |
+
+**Recommended landing order:** (1) **04-P1 backend** + **04-P0 scale** (independent
+beachheads, parallel with all of Epic 05); (2) **Epic 05 #128** (2D removal shrinks
+`App.tsx`); (3) **04-P2** rebased on the slimmer `App.tsx`, alongside Epic 05
+#129/#130; (4) **Epic 05 #131 absorbed into 04-P3** (one marker change, not two);
+(5) **04-P4** transition, honoring #130's immediate idle-drift handoff.
+
+**Hard coordination rules:**
+- New surface textures → **register in `lib/assets.ts`** (#129) or they pop in on
+  descent.
+- Only **one** of {#131, 04-P3} edits the orbit marker — P3 is the superset.
+- `viewMode` default is `"orbit"` (#130); 04-P2 must not assume a surface-first boot.
+- Don't reintroduce `frameloop="demand"` / `invalidate()` / "no `useFrame`" framing —
+  that budget is retired repo-wide.
 
 ---
 
@@ -275,9 +361,11 @@ navigate, hide UI panels via injected CSS, screenshot:
   rover (kill) registers; drag-to-place ghost tracks the cursor.
 - **P2:** toggle Lunar Base ↔ Shackleton — each frames cleanly; Shackleton reads
   darker with long raking shadows; both show live rovers/tasks.
-- **P3/P4:** orbit shows two markers at the right spots; clicking one descends to
-  that site; the surface↔surface toggle plays a smooth ~900 ms glare match-cut and
-  ends idle (DevTools perf trace shows 0fps at rest).
+- **P3/P4:** orbit shows two markers at the right spots **on the lit hemisphere**;
+  clicking one descends to that site; the surface↔surface toggle plays a smooth
+  ~900 ms glare match-cut and **settles on the destination pose** (tween stops, idle
+  drift resumes). No 0fps check — the loop is always-on; instead confirm the camera
+  comes to rest on the dest pose and `CameraFeel` resumes without a snap.
 
 **Backend (real coordinator, not mock):** snapshot carries `site` on every
 rover/task; a lunar standby heals `lunar/wall-1`; no rover bids on the other site's

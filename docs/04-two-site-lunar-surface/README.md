@@ -1,13 +1,22 @@
 # [Epic] Two-site live lunar surface — Lunar Base + Shackleton Crater Base
 
-- **Issue:** TBD (break into vertical slices via `/to-issues` when scheduled)
+- **Issue:** [#133](https://github.com/IamP5/fiap-gs-space-connect/issues/133) (epic)
 - **Labels:** `area:frontend`, `area:backend`, `type:feature`
 - **Type:** Epic (full-stack — backend SiteID + frontend scale/views/transition)
 - **Builds on:** the [realistic-3d-world](../02-realistic-3d-world/README.md)
   milestone (orbit hero vista #81–91, vendored NASA Assets #54–#57, Asset catalog
   #59–#61) and [NL Blueprint authoring](../03-nl-blueprint-authoring/README.md)
 - **ADR(s) to honor:** ADR-0004 (scene is a pure function of the snapshot; mandatory
-  fallbacks; demand-loop idles at 0fps)
+  primitive/box fallbacks). NB: ADR-0004 invariant (3)'s demand-loop / 0-idle-fps
+  budget was **dropped** (Wave 4 "living orbit") — the scene now runs
+  `frameloop="always"` and `useFrame` is unrestricted (see `AGENTS.md` render-loop
+  note). Anywhere this plan once said "demand-safe / idle at 0fps", read "always-on,
+  keep `dpr ≤ ~1.5` + bounded draw calls as hygiene".
+- **Runs in parallel with:** [Epic 05 — app-init refactor](../05-app-init-refactor/README.md)
+  (#127–#131: 2D removed, loading-screen preload-everything, **orbit is the default
+  view**, base marker on the sunlit hemisphere). The two epics **converge** — see
+  "Coordination with Epic 05" below — and share heavy edits in `App.tsx`,
+  `Scene3D.tsx`, and the orbit marker in `SkyBodies.tsx`.
 
 ## What to build
 
@@ -67,11 +76,40 @@ breakdown: see [IMPLEMENTATION-PLAN.md](./IMPLEMENTATION-PLAN.md).
 - [ ] **P3** Orbit view shows two site markers at correct lat/long; clicking one
       descends to that site.
 - [ ] **P4** Surface↔surface toggle plays a smooth ~900 ms glare match-cut and
-      returns to 0fps idle; Shackleton long-shadow + "in construction" polish.
-- [ ] Broken into vertical slices via `/to-issues` when scheduled.
+      **settles cleanly on the destination pose** (tween stops, idle drift resumes —
+      no 0fps requirement now that the loop is always-on); Shackleton long-shadow +
+      "in construction" polish.
+- [x] Broken into vertical slices via `/to-issues` (epic #133): #134 (P0 scale),
+      #135 (P1 backend), #136 (P2 surface), #137 (P3 markers), #138 (P4 transition).
+
+## Coordination with Epic 05 (parallel execution)
+
+Epic 05 (#127–#131) is **frontend-only** and not yet implemented. It reshapes the
+boot sequence; this epic restructures the surface. They **converge** into one
+experience: boot → splash preloads **everything** → **orbit** vista with **two**
+site markers → click either → pop-in-free descent to that site. Run them in
+parallel with these guard-rails:
+
+- **Backend P1 is fully independent** — Go only, zero overlap with Epic 05. Land it
+  whenever.
+- **P0 (scale) is near-independent** — `scene.ts` is ours alone; the `Scene3D.tsx` /
+  `LaunchScenery.tsx` edits touch sizing regions, not Epic 05's preload/2D-removal
+  regions. Safe to land early in parallel.
+- **P2 threads `activeSite` through `App.tsx` _after_ #128** (2D removal simplifies
+  `App.tsx` — rebasing onto the smaller file avoids a churned merge). Orbit is the
+  default (#130), so the two-site surface is reached **via descent**, not on boot.
+- **New assets must register in Epic 05's `lib/assets.ts` manifest** — preload-
+  everything only covers what the manifest lists. We reuse the same dome twice
+  (no new GLBs), but any Shackleton long-shadow decal / "in construction" texture
+  must be added to the manifest or it will pop in on descent (defeating #129).
+- **P3 supersedes #131.** Both reseat the orbit marker in `SkyBodies.tsx`. Our two
+  lat/lon `SiteMarker`s replace the single `LunarBaseMarker`, but must inherit
+  #131's lesson — **markers must land on the lit hemisphere**, not the terminator.
+  Whichever lands first, the other rebases; ideally P3 absorbs #131 outright.
 
 ## Scope-balloon flags (OUT of v1)
 
-Real shadow maps (faked instead) · two coordinators (rejected) · distinct
-blueprints/asset sets per site (reuse the same dome twice) · moon globe tilt (only
-if marker visibility forces it) · multi-target scripted kills.
+Real shadow maps (faked instead — still deferred for cost/complexity, _not_ the old
+demand-loop reason) · two coordinators (rejected) · distinct blueprints/asset sets
+per site (reuse the same dome twice) · moon globe tilt (only if marker visibility
+forces it) · multi-target scripted kills.
