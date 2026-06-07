@@ -51,7 +51,12 @@ import {
   SMAA,
   Vignette,
 } from "@react-three/postprocessing";
-import { BlendFunction, KernelSize, type SelectiveBloomEffect } from "postprocessing";
+import {
+  BlendFunction,
+  KernelSize,
+  type GodRaysEffect,
+  type SelectiveBloomEffect,
+} from "postprocessing";
 import * as THREE from "three";
 import type { RoverView, Snapshot, TaskView, Vec2 } from "../types/wire";
 import { batteryPercent } from "../lib/format";
@@ -1658,6 +1663,21 @@ function LunarTerrain() {
 const BLOOM_BASE_INTENSITY = 2.2;
 const BLOOM_WAR_SPIKE = 2.6; // added at full contention
 
+// GodRays perf (#110): the effect is a multi-pass GPU cost that runs EVERY frame
+// while mounted (orbit), even when the Sun is off-screen — which is the DEFAULT
+// Wave-4 orbit pose (decoupled dark-crescent hero). So we frustum-cull it: when
+// the Sun's projected position leaves the frame (+ a margin so edge rays still
+// show), we shrink the god-rays render target to a tiny buffer (≈free) instead of
+// half-res; we restore half-res only when the Sun is on/near screen. Setting
+// `resolution.scale` resizes the target WITHOUT a shader recompile, so there is no
+// hitch — and the common "Sun off-frame" orbit view pays almost nothing. Quality
+// is untouched when the rays are actually visible (rays are low-frequency, so the
+// 0.5 half-res + 60 samples reads identically to the old full-spec).
+const GODRAYS_SAMPLES = 60; // postprocessing's own default (was an over-specced 80)
+const GODRAYS_ACTIVE_SCALE = 0.5; // half-res when the Sun is on screen (lib default)
+const GODRAYS_IDLE_SCALE = 0.05; // tiny buffer when the Sun is off-screen (≈free)
+const GODRAYS_NDC_MARGIN = 0.4; // treat "just off-frame" as visible so edge rays show
+
 const CinematicFX = memo(function CinematicFX({
   lightRef,
   sunRef,
@@ -1678,6 +1698,28 @@ const CinematicFX = memo(function CinematicFX({
   const [, ready] = useState(0);
   useEffect(() => ready(1), []);
   const bloomRef = useRef<SelectiveBloomEffect>(null);
+  const camera = useThree((s) => s.camera);
+
+  // GodRays frustum-cull bookkeeping (#110 perf). `godRaysVisible` tracks the last
+  // applied on/off-screen state so we only resize the render target on a TRANSITION
+  // (never per-frame), and `sunNdc` is a reused scratch vector (no per-frame alloc).
+  const godRaysRef = useRef<GodRaysEffect>(null);
+  const godRaysVisible = useRef<boolean | null>(null);
+  const sunNdc = useRef(new THREE.Vector3());
+  useFrame(() => {
+    const fx = godRaysRef.current;
+    const sunMesh = sunRef.current;
+    if (!fx || !sunMesh) return; // not mounted (surface) or Sun not resolved yet
+    sunMesh.getWorldPosition(sunNdc.current).project(camera);
+    const v = sunNdc.current;
+    const onScreen =
+      v.z < 1 &&
+      Math.abs(v.x) <= 1 + GODRAYS_NDC_MARGIN &&
+      Math.abs(v.y) <= 1 + GODRAYS_NDC_MARGIN;
+    if (godRaysVisible.current === onScreen) return; // only act on a transition
+    godRaysVisible.current = onScreen;
+    fx.resolution.scale = onScreen ? GODRAYS_ACTIVE_SCALE : GODRAYS_IDLE_SCALE;
+  });
 
   // Bid-war bloom spike (#107): while multiple rovers contend, pump the bloom
   // intensity above its base in proportion to the strobe, easing back to base as
@@ -1750,9 +1792,11 @@ const CinematicFX = memo(function CinematicFX({
           Moon's depth occludes them for a true volumetric shadow. Static pass. */}
       {!onSurface && sun ? (
         <GodRays
+          ref={godRaysRef}
           sun={sun}
           blendFunction={BlendFunction.SCREEN}
-          samples={80}
+          samples={GODRAYS_SAMPLES}
+          resolutionScale={GODRAYS_ACTIVE_SCALE}
           density={0.5}
           decay={0.93}
           weight={0.3}

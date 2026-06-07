@@ -1198,7 +1198,8 @@
       "evidence": [
         "Implemented on branch wave3/godrays-material-polish: <GodRays> pass after both bloom passes in CinematicFX, fed a shared sunRef surfaced from SkyBodies/SunBody (core disc); orbit-gated, null-safe. Plus a procedural anamorphic streak sprite on the Sun (orbit-gated).",
         "cd web: npm run build TS-clean (vite ok), npm run lint clean, vitest 13 files / 156 tests pass.",
-        "chrome-devtools (VITE_MOCK): default orbit keeps the Wave-4 dark-crescent hero (GodRays correctly dormant, Sun off-frame); orbiting toward the Sun reveals the disc starburst + anamorphic streak + god-ray glow with the Moon limb occluding (.screenshots/r3d-110-godrays-orbit.png). No console errors (the glBlitFramebuffer warning is the pre-existing EffectComposer depth-stencil quirk)."
+        "chrome-devtools (VITE_MOCK): default orbit keeps the Wave-4 dark-crescent hero (GodRays correctly dormant, Sun off-frame); orbiting toward the Sun reveals the disc starburst + anamorphic streak + god-ray glow with the Moon limb occluding (.screenshots/r3d-110-godrays-orbit.png). No console errors (the glBlitFramebuffer warning is the pre-existing EffectComposer depth-stencil quirk).",
+        "Perf pass (GPU-bound regression fix): GodRays is now frustum-culled — a per-frame NDC projection of the Sun toggles the effect resolution.scale between 0.5 (on-screen) and 0.05 (off-screen) on transition only (no shader recompile), so the default off-frame orbit pose pays ~nothing; samples trimmed 80->60 (lib default). Surface unaffected (orbit-only). Verified no console errors + rays preserved when the Sun is in frame (.screenshots/r3d-110-godrays-optimized.png)."
       ],
       "notes": "Wave 3 (cinematic beauty & immersion). AFK. Subjective visual — awaiting operator screenshot sign-off before merge → then flip to passing + close #110. Orbit Sun is decoupled off-frame (Wave 4), so the effect reveals on orbit-toward-sun, not the default pose."
     },

@@ -32,6 +32,24 @@ Research: `docs/02-realistic-3d-world/cinematic-beauty-immersion.md` (Wave 3).
   heavyweight per-frame-raycasting `LensFlare` effect — it occludes correctly behind
   the Moon via depth and adds no per-frame work.
 
+### Performance
+
+GodRays is a multi-pass GPU effect that runs **every frame while mounted** (orbit),
+even when the Sun is off-screen — which is the *default* Wave-4 orbit pose. Two
+best-practice trims, no quality loss:
+
+- **Frustum-cull:** a cheap per-frame NDC projection of the Sun toggles the effect's
+  `resolution.scale` between half-res (0.5, when the Sun is on/near screen) and a tiny
+  buffer (0.05, when it's off-screen) — applied only on the *transition*, so the common
+  "Sun off-frame" orbit view pays ≈nothing. Setting `resolution.scale` resizes the
+  render target **without** a shader recompile, so there's no hitch.
+- **Samples 80 → 60** (postprocessing's own default; god rays are low-frequency, so
+  the result reads identically).
+
+Surface view is unaffected (GodRays is orbit-only). Verified: web build/lint/test
+green, no console errors, cull idles when the Sun leaves frame and restores the rays
+when it returns.
+
 ## Blocked by
 
 - #99 (Post-processing cinematic stack — GodRays sits after bloom in the same composer)
