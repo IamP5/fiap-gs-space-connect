@@ -1172,8 +1172,12 @@ const VIEW_PRESETS: Record<
   }
 > = {
   surface: {
-    minDistance: 10,
-    maxDistance: 40,
+    // FOV widened 42→50 (#101) makes the worksite subtend more of the frame, so
+    // the surface distance band is pulled IN by ~tan(21°)/tan(25°) ≈ 0.82 (10→8,
+    // 40→33) to hold the rehearsed framing — the dome/rovers fill the same screen
+    // area at the wider lens.
+    minDistance: 8,
+    maxDistance: 33,
     minPolarAngle: Math.PI / 6,
     // Allow a flatter, more horizon-facing look (up to ~80° from vertical) so the
     // plain + sky + distant Earth read; still clamped short of dipping under it.
@@ -1185,7 +1189,7 @@ const VIEW_PRESETS: Record<
     // globe's berth, imported from SkyBodies so the two can never drift apart).
     // The worksite is hidden in this mode (it's "on" the Moon), so there is no
     // floating diorama in frame — just the Moon, distant Earth, and stars. The
-    // distance band keeps a radius-90 globe filling a good part of the 42° fov.
+    // distance band keeps a radius-90 globe filling a good part of the 50° fov.
     minDistance: 220,
     maxDistance: 640,
     minPolarAngle: Math.PI / 4,
@@ -1373,6 +1377,16 @@ function PlacementPlane({
   );
 }
 
+// Surface-only horizon fog — SINGLE SOURCE OF TRUTH (#101). Previously the same
+// <fog> was declared twice in two SceneContents return branches (the loading
+// fallback + the main render) and could drift apart; consolidated here so both
+// branches render the identical fog. Tinted a warm deep blue-grey (#0a0f1a)
+// instead of pure black for atmospheric depth — the far regolith plain dissolves
+// into a faint dusk rather than a hard black void, while the worksite (within
+// ~30 units, well inside the 180 near plane) stays unaffected. Surface-only;
+// orbit skips it so the Moon globe stays crisp.
+const SURFACE_FOG_ARGS: [string, number, number] = ["#0a0f1a", 180, 680];
+
 // The actual scene contents (inside <Canvas>). The snapshot → meshes mapping is
 // a single pure pass that re-renders ONLY when a new snapshot arrives. Beats
 // animate via per-mesh useFrame ref-mutation (in Rover3D/TaskBlock), so the
@@ -1465,9 +1479,8 @@ function SceneContents({
     return (
       <>
         <ambientLight intensity={0.4} />
-        {/* Surface-only horizon fog: dissolves the far ground edge into the black
-            sky for a clean horizon. Skipped in orbit (the Moon must stay crisp). */}
-        {onSurface && <fog attach="fog" args={["#000000", 180, 680]} />}
+        {/* Surface-only horizon fog — shared SURFACE_FOG_ARGS (#101, see above). */}
+        {onSurface && <fog attach="fog" args={SURFACE_FOG_ARGS} />}
         {onSurface && <LunarTerrain />}
         <SpaceEnvironment />
         <SkyBodies viewMode={viewMode} onBaseClick={onBaseClick} />
@@ -1507,16 +1520,44 @@ function SceneContents({
           kept at ~1.9 so it stays the bloom driver and the lit limb is bright but
           not blown out. */}
       <directionalLight ref={lightRef} position={SUN_POSITION} color="#ffffff" intensity={1.9} />
-      {/* Earthshine — a cool DESATURATED whisper (pale steel-blue #A8BFDA), from
-          Earth's actual position. NASA earthshine is a faint wash on the night-side
-          terminator, NOT a blue glow — dimmest in orbit (0.16) so the shadow side
-          stays near-black; a bit more on the surface (0.25) for shadow legibility. */}
-      <directionalLight position={EARTH_POSITION} color="#a8bfda" intensity={onSurface ? 0.25 : 0.16} />
+      {/* Earthshine — a cool DESATURATED whisper (pale steel-blue #A8BFDA) emitted
+          FROM Earth's actual position. Now a POINT light with physically-correct
+          inverse-square falloff (decay=2): brightness scales 1/r² with distance to
+          Earth, so the wash is reflected earthlight that genuinely fades with range
+          rather than a flat directional fill. The large base intensities reproduce
+          the prior look at the scene's scale (Earth is ~3000 units away): ≈0.25
+          irradiance at the worksite (surface) / ≈0.16 at the Moon (orbit). NASA
+          earthshine is a faint terminator wash, NOT a blue glow — dimmest in orbit
+          so the shadow side + void stay near-black; a bit more on the surface for
+          shadow legibility. distance={0} = no hard cutoff, falloff is pure 1/r². */}
+      <pointLight
+        position={EARTH_POSITION}
+        color="#a8bfda"
+        decay={2}
+        distance={0}
+        intensity={onSurface ? 2_310_000 : 1_220_000}
+      />
+      {/* SURFACE-ONLY rig (gated onSurface) — separates rover/dome silhouettes from
+          the regolith so they don't read flat against the ground. Skipped in orbit
+          (the Moon must stay a clean, side-lit hero with a near-black void). */}
+      {onSurface && (
+        <>
+          {/* Cool RIM — a dim steel-blue light from BEHIND/opposite the Sun, raking
+              the far edge of silhouettes so they catch a cold backlight against the
+              dark plain (classic three-point separation). Low intensity so it reads
+              as a rim, not a fill. */}
+          <directionalLight position={[-40, 26, -30]} color="#9fb6d8" intensity={0.35} />
+          {/* Warm sun-side FILL — a soft warm bounce on the SAME side as the Sun,
+              lifting the lit faces a touch toward the regolith's warm tan so the
+              sunlit side isn't a flat white clip. Faint — the Sun is still the key. */}
+          <directionalLight position={[36, 22, 28]} color="#ffd9b0" intensity={0.22} />
+        </>
+      )}
 
-      {/* Surface-only horizon fog: dissolves the far ground edge into the black
-          sky for a clean horizon + sense of vastness. The worksite (within ~30
-          units) is unaffected. Skipped in orbit so the Moon stays crisp. */}
-      {onSurface && <fog attach="fog" args={["#000000", 180, 680]} />}
+      {/* Surface-only horizon fog — shared SURFACE_FOG_ARGS (#101, see above): one
+          consolidated definition (was duplicated across two return branches), warm
+          deep blue-grey tint for atmospheric depth. Skipped in orbit. */}
+      {onSurface && <fog attach="fog" args={SURFACE_FOG_ARGS} />}
 
       {/* Static, snapshot-independent backdrop: hand-rolled starfield + self-
           hosted HDR skybox/IBL (issue #50). Shown in BOTH views. Encodes no world
@@ -1786,7 +1827,9 @@ export function Scene3D({
         // far raised to ~8000 (issue #49) so the distant Moon + Earth are in-frustum;
         // near kept at 0.1. Shipping WITHOUT logarithmicDepthBuffer — the low-poly
         // worksite shows no z-fighting at this range.
-        camera={{ position: [0, 11, 30], fov: 42, near: 0.1, far: 8000 }}
+        // fov widened 42→50 (#101) for a more immersive, cinematic field — the
+        // surface distance band (VIEW_PRESETS) is pulled in to hold framing.
+        camera={{ position: [0, 11, 30], fov: 50, near: 0.1, far: 8000 }}
         // While placing, a click on empty space confirms the drop; otherwise it
         // deselects a rover (the existing behaviour).
         onPointerMissed={() => (placing ? onPlaceConfirm?.() : onPick(null))}
