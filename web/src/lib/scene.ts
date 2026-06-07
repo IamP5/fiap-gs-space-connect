@@ -52,11 +52,23 @@ export const SUN_POSITION: [number, number, number] = [2300, 1265, -6490];
 // (off to the camera-left) then reads as a clean day/night terminator. Kept far
 // (|pos| ≈ 6.8k, inside the 8000 far-plane) with sun.y > 0 so it still grazes high.
 // TUNED BY EYE against SVS #14992 — see docs/02-realistic-3d-world/space-view-realism.md.
-// Pushed further BEHIND the Moon (from the orbit camera at MOON+[265,145,-512]):
-// Moon→Sun·Moon→Camera ≈ −0.70 → only ~15% of the near face is sunlit, so the Moon
-// reads as a dramatic dark disc with a thin warm crescent on the lower-left limb
-// (the flare sits just off that limb, ~off-frame), exactly the reference phase.
-export const ORBIT_SUN_POSITION: [number, number, number] = [-4200, -600, -5000];
+// SIDE-LIT (Wave 4.1): the prior value sat almost directly BEHIND the Moon
+// (Moon→Sun·Moon→Camera ≈ −0.75 → ~87% of the near face dark), so the settled orbit
+// view showed a near-black disc that read as "disappearing" against the black void,
+// and the fly-in loomed as a dark sphere before the glare. The reference is actually a
+// near-far-side Moon lit ACROSS its face with the terminator (the dark side) sweeping
+// in from one limb — a clear smooth light→dark transition, NOT a near-total eclipse.
+// Re-aimed so Moon→Sun·Moon→Camera ≈ +0.06 — a near-HALF-lit Moon: the right
+// hemisphere (toward Earth/the sun) is directly sunlit, the LEFT hemisphere falls
+// into shadow, and a dramatic terminator sweeps down the middle. This is the SVS
+// #14992 read: NOT a flat fully-lit globe (which looked plastic) and NOT a near-black
+// disc that vanished into the void (the prior −0.75), but a moody half-Moon whose
+// SHADOW side still reads — its craters picked out by EARTHSHINE (see Scene3D's
+// earthshine point light, lifted for exactly this dark-side detail). The dark side
+// sits on the LEFT (the user's ask). Kept far (|pos| ≈ 7.0k, inside the 8000
+// far-plane) with sun.y > 0 so it grazes from slightly above; the flare lands
+// off-frame to the right, past the bright limb.
+export const ORBIT_SUN_POSITION: [number, number, number] = [806, 795, -6929];
 // Modeled radius — small, so the far Sun (|pos| ≈ 7k, near the 8000 far-plane)
 // reads as a brilliant DISTANT disc (~1.3° across) rather than a near wall of
 // light. Its presence comes from the additive glow + radiating light-rays around
@@ -76,7 +88,15 @@ export const SUN_RADIUS = 80;
 // share Earth's position — the blue fill on the Moon's night side comes FROM the
 // visible Earth, the way reflected earthlight really does.
 export const EARTH_RADIUS = Math.round(MOON_RADIUS * 3.67); // ≈ 330, proportional to the Moon
-export const EARTH_POSITION: [number, number, number] = [-2340, -473, -1882];
+// Pushed FARTHER (|cam→Earth| ≈ 4.7k, up from ~3.0k) so Earth subtends ~4° — a small
+// marble that tucks cleanly into the ~10° gap between the Moon's right limb (the hero
+// fills ~28°) and the frame edge, with margin to spare for the idle camera drift. The
+// prior berth made Earth ~6° across, so its disc both clipped the right edge AND grazed
+// the Moon's limb at drift extremes (the user's framing bug). Re-aimed ~19° right of the
+// Moon and held near the Moon's vertical centre (y kept ≈ −460 so the SURFACE-view Earth,
+// which shares this berth, stays where it was in that sky). Reference: SVS #14992 — Earth
+// a clean day/night marble just off the Moon's sunlit limb.
+export const EARTH_POSITION: [number, number, number] = [-3993, -460, -2427];
 
 export type Bounds = { minX: number; minY: number; maxX: number; maxY: number };
 

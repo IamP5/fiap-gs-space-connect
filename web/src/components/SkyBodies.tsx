@@ -213,7 +213,11 @@ const EARTH_FRAGMENT = /* glsl */ `
     // bands produce at the grazing night limb — cities only read on the face.
     float NdotV = max(dot(N, V), 0.0);
     float limbFade = smoothstep(0.0, 0.32, NdotV);
-    float flicker = 0.9 + 0.1 * sin(uTime * 2.3 + vUv.x * 90.0) * sin(uTime * 1.7 + vUv.y * 70.0);
+    // Low spatial frequency on purpose: Earth is a small distant marble, so the
+    // fine per-texel terms the city flicker used to carry aliased into crawling dark
+    // speckle as the globe turned. A broad, slow shimmer reads as "alive" without the
+    // moire. (Same reasoning for the ocean-glint shimmer below.)
+    float flicker = 0.94 + 0.06 * sin(uTime * 1.6 + vUv.x * 22.0) * sin(uTime * 1.1 + vUv.y * 18.0);
     vec3 city = night * uNightColor * (1.0 - dayF) * flicker * limbFade;
 
     // Soft warm sunset band straddling the terminator (low-sun forward scatter). A
@@ -230,8 +234,8 @@ const EARTH_FRAGMENT = /* glsl */ `
     // low land), Blinn-Phong highlight at the sub-solar point, shimmered over time.
     float ocean = smoothstep(0.015, 0.10, day.b - max(day.r, day.g));
     vec3 H = normalize(L + V);
-    float shimmer = 1.0 + 0.07 * sin(uTime * 3.1 + vUv.x * 160.0)
-                        + 0.07 * sin(uTime * 2.3 + vUv.y * 120.0);
+    float shimmer = 1.0 + 0.04 * sin(uTime * 1.7 + vUv.x * 14.0)
+                        + 0.04 * sin(uTime * 1.3 + vUv.y * 11.0);
     float spec = pow(max(dot(N, H), 0.0), uGlintShininess);
     vec3 glint = uGlintColor * spec * ocean * dayF * uGlintStrength * shimmer;
 
@@ -609,8 +613,13 @@ function EarthBody({ visible, viewMode }: { visible: boolean; viewMode: ViewMode
         uTermColor: { value: new THREE.Color("#edb185") }, // soft warm amber (desaturated)
         uGlintColor: { value: new THREE.Color("#fff4e0").multiplyScalar(1.2) },
         uTime: { value: 0 },
-        uTermWidth: { value: 0.12 }, // soft terminator half-width
-        uGlintShininess: { value: 60.0 }, // tight sub-solar highlight
+        // Wide, soft terminator (Wave 4.1) — Earth's thick atmosphere scatters the
+        // day/night boundary into a gentle gradient, not the crisp Moon edge. The
+        // old 0.12 read as a hard line; the NASA reference shows a broad soft band.
+        uTermWidth: { value: 0.24 }, // soft terminator half-width
+        // Broader sub-solar highlight (60→30): a tight specular speckled at the small
+        // marble size; a softer, wider glint reads cleanly as "sun on the oceans".
+        uGlintShininess: { value: 30.0 },
         uGlintStrength: { value: 0.7 },
         uAmbient: { value: 0.03 },
       },
@@ -892,9 +901,13 @@ function SunBody({ position }: { position: [number, number, number] }) {
       glowTex: makeGlowTexture(),
       raysTex: makeRaysTexture(),
       limbTex: makeLimbTexture(),
-      // Warm #fff0d8 and a cool blue for the offset chromatic glow.
+      // Warm #fff0d8 and a near-neutral cool tint for the offset chromatic glow.
+      // The cool half is kept only FAINTLY blue (Wave 4.1): when the warm core is
+      // occluded behind the Moon's limb in orbit, a saturated blue sprite poked out
+      // and read as a TEAL flare. A desaturated, lower-opacity cool tint keeps the
+      // subtle fringe on the fully-visible surface-view sun without the teal edge.
       warmTex: makeTintGlowTexture(255, 240, 216),
-      coolTex: makeTintGlowTexture(176, 200, 255),
+      coolTex: makeTintGlowTexture(206, 216, 240),
     }),
     [],
   );
@@ -984,7 +997,7 @@ function SunBody({ position }: { position: [number, number, number] }) {
       )}
       {coolTex && (
         <sprite
-          position={[-SUN_RADIUS * 0.35, 0, 0]}
+          position={[-SUN_RADIUS * 0.22, 0, 0]}
           scale={[SUN_RADIUS * 8, SUN_RADIUS * 8, 1]}
           raycast={() => null}
         >
@@ -994,7 +1007,7 @@ function SunBody({ position }: { position: [number, number, number] }) {
             transparent
             depthWrite={false}
             toneMapped={false}
-            opacity={0.45}
+            opacity={0.3}
             fog={false}
           />
         </sprite>

@@ -36,7 +36,7 @@
 //   - No custom physics; only LICENSED art (CC0/CC-BY/NASA-PD), each with a
 //     mandatory primitive fallback.
 
-import { memo, useEffect, useMemo, useRef, useState } from "react";
+import { memo, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
 import { Canvas, useFrame, useThree, type ThreeEvent } from "@react-three/fiber";
 import { ContactShadows, Instance, Instances, Line, OrbitControls } from "@react-three/drei";
 import { SpaceEnvironment, STARFIELD_PARALLAX_NAME } from "./SpaceEnvironment";
@@ -159,11 +159,15 @@ const SHADOW_WORKSITE_HALF = 25;
 // as a dramatic dark crescent (the sun's back-light + a faint earthshine do the
 // rest); the surface keeps full IBL for the metallic rover/glTF reflections. Set
 // imperatively (drei never touches environmentIntensity, so it sticks once set).
-const ORBIT_ENV_INTENSITY = 0.035;
+const ORBIT_ENV_INTENSITY = 0.05;
 
 function EnvironmentGrade({ onSurface }: { onSurface: boolean }) {
   const scene = useThree((s) => s.scene);
-  useEffect(() => {
+  // useLayoutEffect (not useEffect): apply the env grade BEFORE the browser paints
+  // the first frame of the new view, so the Moon never flashes one frame at the
+  // wrong (surface=1.0) IBL intensity as the view flips — that one-frame bright/flat
+  // pop is what read as the Moon's shadow "shifting" right after the orbit transition.
+  useLayoutEffect(() => {
     (scene as unknown as { environmentIntensity: number }).environmentIntensity = onSurface
       ? 1.0
       : ORBIT_ENV_INTENSITY;
@@ -204,7 +208,13 @@ function SpaceLights({
         color="#a8bfda"
         decay={2}
         distance={0}
-        intensity={onSurface ? 2_310_000 : 150_000}
+        // Orbit earthshine LIFTED: in the SVS #14992 reference the Moon's SHADOW side is
+        // not black — its maria/craters are picked out by cool reflected earthlight. This
+        // raking fill from Earth's position reveals that dark-side relief so the near-half-
+        // lit Moon reads as detailed dark rock, never a void. Sized to the (now farther)
+        // Earth berth: decay=2 inverse-square over |Earth→Moon| ≈ 4.5k needs ~1.35M to land
+        // the same illuminance the closer berth got from a smaller number.
+        intensity={onSurface ? 2_310_000 : 1_350_000}
       />
       {onSurface && (
         <>
