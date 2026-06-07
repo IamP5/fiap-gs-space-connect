@@ -1023,7 +1023,7 @@
       "area": "realistic-3d-world",
       "title": "Earth atmosphere Fresnel shader",
       "user_visible_behavior": "Earth shows a physically-shaded atmosphere rim that brightens edge-on and on the sunlit side and fades on the dark limb.",
-      "status": "not_started",
+      "status": "passing",
       "issue": 102,
       "epic": 46,
       "depends_on": [],
@@ -1031,7 +1031,9 @@
         "cd web && npm run build && npm test (TS-clean + vitest)",
         "manual: orbit & surface screenshots; animated slices pause when the tab is hidden"
       ],
-      "evidence": [],
+      "evidence": [
+        "b9935db: replaced flat MeshBasicMaterial Earth rim with a Fresnel × sun-angle atmosphere ShaderMaterial (Rayleigh blue body + warm Mie terminator band, static uniforms, sun dir from SUN_POSITION); lint+build+test green (116 tests), 0 idle fps preserved."
+      ],
       "notes": "Wave 3 (cinematic beauty & immersion). AFK."
     },
     {

@@ -79,6 +79,69 @@ const NEBULA_VEIL = "/assets/textures/nebula_veil_1024.jpg";
 // pull-back. Tuned to the orbit zoom band.
 const MOON_LOD_SWITCH = 420;
 
+// --- Earth atmosphere Fresnel shader (#102) ---------------------------------
+// A physically-motivated atmosphere rim on a BackSide shell (radius ×1.03), the
+// successor to #86's flat MeshBasicMaterial halo. Two effects combine:
+//   • Fresnel — pow(1 - dot(normal, viewDir), p): the halo is thin/bright exactly
+//     at the limb (grazing angle) and fades toward disc-centre, the read of light
+//     scattering through a deep slice of air at the edge.
+//   • Sun-angle — max(0, dot(normal, sunDir)): the rim glows on the SUNLIT side and
+//     dims to nothing on the dark limb, because there is no sunlight to scatter
+//     there. A soft floor keeps a whisper of rim on the night limb (earthshine).
+// The body is tinted with a Rayleigh BLUE (short wavelengths scatter most → the
+// sky's blue), warming to a Mie GOLD band near the terminator (forward-scattered
+// low-sun light → the sunrise/sunset rim). Fully STATIC: every uniform is set once
+// at build time (sun direction in Earth-local space, since the shell is a child of
+// the Earth group), so there is NO per-frame work — 0 idle fps preserved.
+//
+// Structured for reuse: #112 (Living Earth) layers a cloud/animation pass on top,
+// so the uniforms + the fresnel/sun-angle split are kept explicit and named.
+//
+// ADR-0004 fallback: a ShaderMaterial cannot "fail to load" (no external asset);
+// the GLSL is inlined. If shader compilation ever degrades, the additive shell
+// simply contributes nothing — Earth still renders as the lit/unlit marble beneath.
+const ATMOSPHERE_VERTEX = /* glsl */ `
+  varying vec3 vNormal;       // object-space surface normal
+  varying vec3 vViewDir;      // object-space dir from surface point toward the camera
+  void main() {
+    vNormal = normalize(normal);
+    // Camera position in object space (the shell is centered on Earth's origin, so
+    // object space here is Earth-local — the sun-direction uniform is in the same
+    // frame). View direction = from the vertex toward the camera.
+    vec3 camObj = (inverse(modelViewMatrix) * vec4(0.0, 0.0, 0.0, 1.0)).xyz;
+    vViewDir = normalize(camObj - position);
+    gl_Position = projectionMatrix * modelViewMatrix * vec4(position, 1.0);
+  }
+`;
+
+const ATMOSPHERE_FRAGMENT = /* glsl */ `
+  uniform vec3 uSunDir;        // Earth→Sun direction, object-space (set once)
+  uniform vec3 uRayleigh;      // cool blue body tint
+  uniform vec3 uMie;           // warm terminator-band tint
+  uniform float uIntensity;    // overall rim brightness
+  uniform float uPower;        // fresnel falloff exponent
+  uniform float uNightFloor;   // residual rim on the dark limb (earthshine)
+  varying vec3 vNormal;
+  varying vec3 vViewDir;
+  void main() {
+    vec3 N = normalize(vNormal);
+    // Fresnel: bright at the limb (N ⟂ view), fading toward disc-centre.
+    float fresnel = pow(clamp(1.0 - dot(N, normalize(vViewDir)), 0.0, 1.0), uPower);
+    // Sun illumination of THIS rim point: lit limb glows, dark limb dims out.
+    float sun = dot(N, normalize(uSunDir));
+    float lit = max(sun, 0.0);
+    // Keep a whisper of rim on the night limb (earthshine), never fully black.
+    float sunMask = mix(uNightFloor, 1.0, lit);
+    // Warm Mie band straddling the terminator (sun grazing → forward scatter),
+    // blue Rayleigh body elsewhere. The band peaks where the sun is near-horizon
+    // (|sun| small) on the lit side.
+    float mieBand = smoothstep(0.5, 0.0, abs(sun)) * lit;
+    vec3 tint = mix(uRayleigh, uMie, mieBand);
+    float alpha = fresnel * sunMask * uIntensity;
+    gl_FragColor = vec4(tint * alpha, alpha);
+  }
+`;
+
 // --- Earth (both views) -----------------------------------------------------
 // A distant marble hung high in the black sky to give the sense of deep space.
 // SIZED PROPORTIONALLY to the Moon (EARTH_RADIUS = MOON_RADIUS × 3.67, the real
@@ -258,16 +321,39 @@ function EarthBody({ visible }: { visible: boolean }) {
       fog: false,
     });
 
-    // Atmospheric rim — a back-side additive shell (radius ×1.03) that paints a
-    // cool-blue limb glow around the planet's edge. BackSide + AdditiveBlending +
-    // depthWrite:false so it reads as a thin halo of atmosphere, fully static.
+    // Atmospheric rim — a back-side additive shell (radius ×1.03) carrying the
+    // Fresnel × sun-angle atmosphere ShaderMaterial (#102, replacing #86's flat
+    // MeshBasicMaterial). BackSide so we see the FAR wall of the shell as a halo
+    // around the disc; AdditiveBlending + depthWrite:false so it reads as a thin
+    // glow of light, never an opaque shell.
     const rimGeometry = new THREE.SphereGeometry(EARTH_RADIUS * 1.03, 48, 48);
-    const rimMaterial = new THREE.MeshBasicMaterial({
-      color: "#5C8FD6",
+
+    // Earth→Sun direction in Earth-LOCAL space. The shell is a child of the Earth
+    // group (no rotation), so object space == Earth-local: this vector is the same
+    // frame the vertex shader works in. Set ONCE here — the rim never animates, so
+    // the demand loop stays at 0 idle fps.
+    const sunDir = new THREE.Vector3(
+      SUN_POSITION[0] - EARTH_POSITION[0],
+      SUN_POSITION[1] - EARTH_POSITION[1],
+      SUN_POSITION[2] - EARTH_POSITION[2],
+    ).normalize();
+
+    const rimMaterial = new THREE.ShaderMaterial({
+      vertexShader: ATMOSPHERE_VERTEX,
+      fragmentShader: ATMOSPHERE_FRAGMENT,
+      uniforms: {
+        uSunDir: { value: sunDir },
+        // Rayleigh blue body (the sky-blue limb) + a warm Mie gold for the
+        // terminator band (low-sun forward scatter — the sunrise rim).
+        uRayleigh: { value: new THREE.Color("#4a86d6") },
+        uMie: { value: new THREE.Color("#ffd6a0") },
+        uIntensity: { value: 0.9 },
+        uPower: { value: 4.0 }, // pow(1 - dot(N, viewDir), 4) per the spec
+        uNightFloor: { value: 0.08 }, // faint earthshine rim on the dark limb
+      },
       side: THREE.BackSide,
       blending: THREE.AdditiveBlending,
       transparent: true,
-      opacity: 0.35,
       depthWrite: false,
       fog: false,
       toneMapped: false,
