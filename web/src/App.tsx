@@ -324,6 +324,7 @@ export default function App() {
               onPlaceMove={movePlacement}
               onPlaceConfirm={confirmPlacement}
               viewMode={viewMode}
+              onViewModeChange={setViewMode}
             />
           </Suspense>
         ) : (

@@ -168,6 +168,26 @@
   height: 100%;
 }
 
+/* ---- view-transition glare ----
+   A full-stage sunlit flash that masks the orbit⇄surface scene swap at the peak
+   of the descent camera move (Scene3D drives opacity imperatively via rAF). Sits
+   above the canvas (z 0) and below the chrome panels (z 2); never intercepts
+   clicks. opacity:0 at rest, so it's invisible until a transition plays. */
+.view-glare {
+  position: absolute;
+  inset: 0;
+  z-index: 1;
+  pointer-events: none;
+  opacity: 0;
+  background: radial-gradient(
+    circle at 50% 46%,
+    rgba(255, 250, 240, 0.98) 0%,
+    rgba(255, 246, 230, 0.92) 32%,
+    rgba(246, 238, 226, 0.7) 60%,
+    rgba(240, 235, 225, 0.4) 100%
+  );
+}
+
 /* ---- ledger (dark chrome card) ----
    Sits over the canvas on canvas-night-soft with a 1px hairline. Flat: no
    blur, no shadow, minimal radius. */

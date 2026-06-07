@@ -21,6 +21,39 @@ import type { TaskView, Vec2 } from "../types/wire";
 export const GROUND_SPAN = 20;
 export const GROUND_MARGIN = 2.5; // scene units of padding around the worksite
 
+// The Moon globe's berth + radius (orbit-view hero). Lives here, not in the
+// SkyBodies component, so BOTH the renderer (SkyBodies) and the camera framing
+// (Scene3D's orbit preset + descent transition) import one source of truth — the
+// camera and the globe can never drift apart. See SkyBodies.tsx / Scene3D.tsx.
+export const MOON_RADIUS = 90;
+export const MOON_POSITION: [number, number, number] = [0, 60, -520];
+
+// The Sun — the scene's single light emitter. Lives here so BOTH the renderer
+// (SkyBodies' SunBody mesh) and the lighting (Scene3D's directionalLight) share
+// one position: the light literally comes FROM the visible sun. Placed very far
+// (a nod to the real ~1 AU distance — vastly farther than the Moon at z=-520),
+// well inside the 8000 far-plane. It sits in the FORWARD sky (−z, upper-right) so
+// it is actually VISIBLE in the orbit vista; because it is then beyond the Moon,
+// the Moon reads back-lit (a sunlit crescent) — true space lighting — with the
+// dark side filled by EARTHSHINE (see EARTH_POSITION + Scene3D's earthshine
+// light). The sun reads WHITE (sunlight in vacuum has no atmosphere to redden it)
+// — see SunBody's white emissive.
+export const SUN_POSITION: [number, number, number] = [2300, 1265, -6490];
+// Modeled radius — small, so the far Sun (|pos| ≈ 7k, near the 8000 far-plane)
+// reads as a brilliant DISTANT disc (~1.3° across) rather than a near wall of
+// light. Its presence comes from the additive glow + radiating light-rays around
+// it (see SunBody, which scale with this radius), not disc size.
+export const SUN_RADIUS = 80;
+
+// Earth — a distant decorative body, sized PROPORTIONALLY to the Moon (real
+// diameter ratio ≈ 3.67×) and hung up-and-LEFT of the Moon, beyond it, so the
+// orbit vista balances: Sun upper-right, Earth upper-left, Moon the close hero
+// between them. Lives here (not in SkyBodies) so Scene3D's EARTHSHINE light can
+// share Earth's position — the blue fill on the Moon's night side comes FROM the
+// visible Earth, the way reflected earthlight really does.
+export const EARTH_RADIUS = Math.round(MOON_RADIUS * 3.67); // ≈ 330, proportional to the Moon
+export const EARTH_POSITION: [number, number, number] = [-220, 640, -3050];
+
 export type Bounds = { minX: number; minY: number; maxX: number; maxY: number };
 
 // A 3D point on/above the ground plane (y is "up").
