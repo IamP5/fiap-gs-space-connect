@@ -66,16 +66,16 @@ breakdown: see [IMPLEMENTATION-PLAN.md](./IMPLEMENTATION-PLAN.md).
 
 ## Acceptance criteria
 
-- [ ] **P0** Scale unified on the existing single site — no giant astronaut;
+- [x] **P0** Scale unified on the existing single site — no giant astronaut;
       rover/astronaut/habitat/crawler at believable relative sizes; click-to-kill
       and drag-to-place still correct.
-- [ ] **P1** Backend emits `site` on every rover/task; same-site healing; no
+- [x] **P1** Backend emits `site` on every rover/task; same-site healing; no
       cross-site bids; deterministic winner per site; Go tests green.
-- [ ] **P2** Surface view renders the active site only; Lunar Base and Shackleton
+- [x] **P2** Surface view renders the active site only; Lunar Base and Shackleton
       each frame cleanly with distinct lighting/tint; mock carries both sites.
-- [ ] **P3** Orbit view shows two site markers at correct lat/long; clicking one
+- [x] **P3** Orbit view shows two site markers at correct lat/long; clicking one
       descends to that site.
-- [ ] **P4** Surface↔surface toggle plays a smooth ~900 ms glare match-cut and
+- [x] **P4** Surface↔surface toggle plays a smooth ~900 ms glare match-cut and
       **settles cleanly on the destination pose** (tween stops, idle drift resumes —
       no 0fps requirement now that the loop is always-on); Shackleton long-shadow +
       "in construction" polish.

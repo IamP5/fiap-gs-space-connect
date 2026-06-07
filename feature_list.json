@@ -1254,7 +1254,7 @@
       "area": "app-init-refactor",
       "title": "Remove the 2D scene — 3D is the only renderer",
       "user_visible_behavior": "No 3D/2D toggle in the header; the app renders solely through Scene3D.",
-      "status": "not_started",
+      "status": "passing",
       "issue": 128,
       "epic": 127,
       "depends_on": [],
@@ -1262,7 +1262,10 @@
         "cd web && npm run build && npm test (TS-clean + vitest)",
         "grep -rn \"WorldCanvas|hitTest\" web/src is clean"
       ],
-      "evidence": [],
+      "status_was": "not_started",
+      "evidence": [
+        "PR #139 (branch r3d-128) merged into integration branch feat/two-site-and-app-init. WorldCanvas.tsx/hitTest.ts(+test) deleted, Renderer type/state + 3D/2D header toggle + 2D branch removed from App.tsx, .renderer-toggle CSS dropped, ADR-0004/AGENTS note the 2D rehearsed-fallback retired. Verified on integration tip: grep -rn 'WorldCanvas|hitTest' web/src CLEAN; npm run build TS-clean; 178 vitest tests pass."
+      ],
       "notes": "Epic 05 app-init-refactor. AFK. Deletes WorldCanvas/hitTest(+test); keeps choreography. Retires the ADR-0004 2D rehearsed-fallback framing (in-scene primitive fallbacks remain). See docs/05-app-init-refactor."
     },
     {
@@ -1271,7 +1274,7 @@
       "area": "app-init-refactor",
       "title": "Loading screen + preload-everything behind a branded splash",
       "user_visible_behavior": "On boot a branded splash shows a filling progress bar; the scene reveals only once all assets are preloaded (or a safety timeout fires), so nothing pops in — even on descent.",
-      "status": "not_started",
+      "status": "passing",
       "issue": 129,
       "epic": 127,
       "depends_on": [
@@ -1281,7 +1284,10 @@
         "cd web && npm run build && npm test (TS-clean + vitest incl. assets.test.ts)",
         "manual (DevTools throttle): filling bar; Canvas mounts only after preload/timeout; no surface pop-in on descent"
       ],
-      "evidence": [],
+      "status_was": "not_started",
+      "evidence": [
+        "PR #142 (branch r3d-129) merged into feat/two-site-and-app-init. New lib/assets.ts (manifest + preloadAllAssets, settles-not-rejects + ~9s safety timeout), lib/textureCache.ts (URL-keyed shared cache), components/LoadingScreen.tsx (deterministic bar + one-way reveal latch); assets.test.ts added; URL consts exported from rendering modules; raw TextureLoader sites repointed to the cache. Verified: branded splash with filling bar 0->26%, Canvas mounts only after preload; build TS-clean; vitest green."
+      ],
       "notes": "Epic 05. AFK. New lib/assets.ts (manifest + preloadAllAssets, settles-not-rejects), lib/textureCache.ts (URL-keyed), components/LoadingScreen.tsx (deterministic bar + one-way reveal latch + safety timeout). Warms module-level gltfCache/sceneryCache. ADR-0004: reveal must not require errors.length===0."
     },
     {
@@ -1290,7 +1296,7 @@
       "area": "app-init-refactor",
       "title": "Orbit default + immediate idle camera drift",
       "user_visible_behavior": "The app opens in the orbit Moon vista with the idle camera drift already moving on the first revealed frame — no 4 s wait, no auto push-in.",
-      "status": "not_started",
+      "status": "passing",
       "issue": 130,
       "epic": 127,
       "depends_on": [
@@ -1300,7 +1306,10 @@
         "cd web && npm run build && npm test (TS-clean + vitest)",
         "manual: reveal is orbit vista with drift already moving (eases in, no snap); post-interaction the normal 4 s delay still applies"
       ],
-      "evidence": [],
+      "status_was": "not_started",
+      "evidence": [
+        "PR #143 (branch r3d-130) merged into feat/two-site-and-app-init. App.tsx viewMode default flipped surface->orbit; Scene3D CameraFeel mount seeds lastInputRef = performance.now() - IDLE_DELAY_MS so drift eases in from frame one (IDLE_FADE_MS prevents a snap); onStart/onEnd/markInput preserved so the post-interaction 4s delay still applies. Verified on integration tip: reveal is the orbit vista (no 3D/2D toggle) with the camera already drifting; build TS-clean; vitest green."
+      ],
       "notes": "Epic 05. AFK. viewMode default orbit (was surface); CameraFeel mount seeds lastInputRef pre-elapsed (now - IDLE_DELAY_MS). Surface intro fly-in self-disables (early-returns unless surface). Only initial idle behavior changes."
     },
     {
@@ -1309,7 +1318,7 @@
       "area": "app-init-refactor",
       "title": "Base mark on the Moon’s sunlit hemisphere",
       "user_visible_behavior": "In orbit the lunar base marker sits clearly on the sunlit hemisphere and is clickable; clicking it descends to the worksite.",
-      "status": "not_started",
+      "status": "passing",
       "issue": 131,
       "epic": 127,
       "depends_on": [
@@ -1319,8 +1328,115 @@
         "cd web && npm run build && npm test (TS-clean + vitest)",
         "manual: marker on the lit hemisphere (not terminator), clickable, descent crisp with no pop-in"
       ],
-      "evidence": [],
-      "notes": "Epic 05. AFK. Re-seat LunarBaseMarker normal as a normalized blend of ORBIT_SUN_POSITION dir and near-face dir (sun ~perpendicular to camera, so pure sun-normal hits the limb). Keep surface-normal quaternion so the ring lies flat. Blend weight tuned by eye."
+      "status_was": "not_started",
+      "evidence": [
+        "SUPERSEDED by r3d-137 (Epic 04 P3), which replaces the single LunarBaseMarker with two lat/lon SiteMarkers and carries this slice's lit-hemisphere requirement forward (both markers cross-checked against ORBIT_SUN_POSITION so neither sits in shadow). Delivered via PR #145 on feat/two-site-and-app-init. No separate marker change landed for #131."
+      ],
+      "notes": "Epic 05. AFK. SUPERSEDED by r3d-137 — the two-marker superset replaces this single-marker reseat, inheriting the lit-hemisphere lesson. Original plan: re-seat LunarBaseMarker normal as a blend of ORBIT_SUN_POSITION dir and near-face dir."
+    },
+    {
+      "id": "r3d-134",
+      "priority": 64,
+      "area": "two-site-lunar-surface",
+      "title": "Scale unification — fixed real-world scale on the single site",
+      "user_visible_behavior": "Surface objects render at believable relative sizes (no giant astronaut); the launch complex towers over human-scale rovers/astronaut; click-to-kill and drag-to-place stay correct.",
+      "status": "passing",
+      "issue": 134,
+      "epic": 133,
+      "depends_on": [],
+      "verification": [
+        "cd web && npm run build && npm test (TS-clean + vitest)",
+        "manual: believable sizes; rover pick (kill) registers; drag-to-place ghost tracks cursor"
+      ],
+      "evidence": [
+        "PR #141 (branch r3d-134) merged into feat/two-site-and-app-init. scene.ts: SCENE_UNITS_PER_METER=0.12 + REAL_METERS table + SiteFrame/DEFAULT_SITE_FRAME; sceneMap(rovers,tasks) autoscale replaced by fixed siteMap(frame) with at/invert as exact inverses (unit-tested incl. rotation round-trip). Scene3D rover visual size + hit-proxy radius from the fixed scale (proxy covers body, ADR-0004); LaunchScenery fit->realMeters. Verified visually: no giant astronaut; pick + drag-to-place correct."
+      ],
+      "notes": "Epic 04 P0. Frontend-only beachhead, landed in parallel with backend P1 + Epic 05 #128. worksiteUnitsToMeters tuned to 2.5 on screen (plan's start was 1.0). See docs/04-two-site-lunar-surface."
+    },
+    {
+      "id": "r3d-135",
+      "priority": 65,
+      "area": "two-site-lunar-surface",
+      "title": "Backend SiteID — tag every rover/task with its site + same-site auctions",
+      "user_visible_behavior": "Each snapshot rover/task carries a site tag; the demo runs two sites (lunar + shackleton); rovers only bid on their own site's tasks and same-site standby heals a killed task.",
+      "status": "passing",
+      "issue": 135,
+      "epic": 133,
+      "depends_on": [],
+      "verification": [
+        "go build ./... && go test -race ./... (incl. new sites_test.go: same-site heal, no cross-site bids, deterministic winner per site)",
+        "cd web && npm run build (wire.ts mirror compiles)"
+      ],
+      "evidence": [
+        "PR #140 (branch r3d-135) merged into feat/two-site-and-app-init. domain.Task/RoverState.SiteID; wire.go RoverView.Site/TaskView.Site/Announce.SiteID/Telemetry.Site (json omitempty); coordinator state.taskSite + auction gate; demo.DomeScenario builds lunar@(0,0)+shackleton@(400,0) via blueprint.Place, two 6-rover swarms, scripted kill retargeted to lunar/wall-1; wire.ts mirrors site?. Also fixed a baked-spec cache key bug (Place prefixes ids lunar/foundation-1 — replayOps now strips the instance prefix before cache lookup). go build/vet/golangci-lint/test -race all green; archtest holds."
+      ],
+      "notes": "Epic 04 P1. Go beachhead, fully independent — landed in parallel. New JSON fields omitempty for back-compat."
+    },
+    {
+      "id": "r3d-136",
+      "priority": 66,
+      "area": "two-site-lunar-surface",
+      "title": "Two-site surface — render active site + Lunar/Shackleton toggle",
+      "user_visible_behavior": "The surface view renders only the active site; a Lunar Base / Shackleton toggle swaps between them, each with distinct lighting/tint/fog (Shackleton darker with raking pole light); both show live rovers/tasks.",
+      "status": "passing",
+      "issue": 136,
+      "epic": 133,
+      "depends_on": [
+        "r3d-134",
+        "r3d-135",
+        "r3d-128"
+      ],
+      "verification": [
+        "cd web && npm run build && npm test (TS-clean + vitest incl. SITE_FRAMES coverage)",
+        "manual: descend then toggle Lunar<->Shackleton; each frames cleanly; both show live rovers/tasks"
+      ],
+      "evidence": [
+        "PR #144 (branch r3d-136) merged into feat/two-site-and-app-init. App.tsx activeSite state (default lunar) threaded to ControlsPanel+Scene3D, obstacles filtered to active site; scene.ts SiteFrame extended (sunDir/sunIntensity/terrainTint/fog/pieces) + SITE_FRAMES{lunar,shackleton} + LUNAR/SHACKLETON_SET_PIECES (same GLBs, recomposed/retinted, no new GLBs); SceneContents slices snapshot by site (?? lunar back-compat); LunarTerrain terrainTint prop; mocks tag every rover/task + add a Shackleton group; ControlsPanel site toggle + CSS. Verified visually: both sites frame cleanly, Shackleton notably darker; 163 vitest tests pass."
+      ],
+      "notes": "Epic 04 P2. Frontend spine, rebased on the post-#128/#129/#130 App. See docs/04-two-site-lunar-surface."
+    },
+    {
+      "id": "r3d-137",
+      "priority": 67,
+      "area": "two-site-lunar-surface",
+      "title": "Orbit site markers — two lat/lon markers on the lit hemisphere, descend-to-site",
+      "user_visible_behavior": "The orbit vista shows two labeled site markers (Lunar Base cyan, Shackleton amber 'in construction') on the lit near hemisphere; clicking one descends to that site.",
+      "status": "passing",
+      "issue": 137,
+      "epic": 133,
+      "depends_on": [
+        "r3d-136",
+        "r3d-130"
+      ],
+      "verification": [
+        "cd web && npm run build && npm test (TS-clean + vitest incl. latLonToGlobePoint tests)",
+        "manual: two markers visible+lit; lunar-click -> Lunar Base; shackleton-click -> Shackleton"
+      ],
+      "evidence": [
+        "PR #145 (branch r3d-137) merged into feat/two-site-and-app-init. SUPERSEDES #131. scene.ts latLonToGlobePoint/latLonToGlobeNormal (three-free) + tunable MARKER_LON_OFFSET, cross-checked vs ORBIT_SUN_POSITION; SkyBodies single LunarBaseMarker -> generalized SiteMarker + two markers (lunar cyan, Shackleton amber 'in construction'); marker click sets both activeSite + viewMode=surface (onActiveSiteChange threaded App->Scene3D->SkyBodies); 5 new globe-mapping unit tests. Decision (plan Risk #6): Shackleton marker art-directed to a southern lit seat (lat -35) rather than literal -89.9 to stay visible+lit without a globe tilt. Verified visually on integration tip: both labeled markers lit, both descents work; 168 tests pass."
+      ],
+      "notes": "Epic 04 P3. Frontend spine. Supersedes Epic 05 #131 (single-marker reseat). See docs/04-two-site-lunar-surface."
+    },
+    {
+      "id": "r3d-138",
+      "priority": 68,
+      "area": "two-site-lunar-surface",
+      "title": "Surface↔surface transition + Shackleton polish",
+      "user_visible_behavior": "Toggling the surface site plays a ~900 ms glare match-cut (no fly-to-Moon) that settles cleanly on the destination pose and resumes idle drift; Shackleton shows long raking shadow fakes and 'in construction' amber styling.",
+      "status": "passing",
+      "issue": 138,
+      "epic": 133,
+      "depends_on": [
+        "r3d-137"
+      ],
+      "verification": [
+        "cd web && npm run build && npm test (TS-clean + vitest incl. transition.test.ts)",
+        "manual: surface site toggle plays the match-cut and settles on the dest pose (idle drift resumes, no snap); Shackleton long shadows + in-construction styling"
+      ],
+      "evidence": [
+        "PR #146 (branch r3d-138) merged into feat/two-site-and-app-init. Scene3D single transition driver keyed [viewMode, activeSite] (shown + shownSite, no racing effects), three branches: orbit<->surface descent/ascent, surface->surface match-cut (~900ms lateral glare whip, flips site at glare peak t=0.5, settles via lerpPose pitchHold=1), and silent orbit site-sync. LUNAR/SHACKLETON_SURFACE_POSE + poseFor(view,site); CameraFeel input clock suspended during the tween, re-armed at t=1 (no snap/no drift-fight); frameloop stays always. ShackletonShadows = procedural canvas radial-gradient decals (no assets.ts entry, no pop-in) raking opposite the grazing sun. 10 new transition.test.ts tests. Verified visually on integration tip: match-cut measured glare 0->0.88 peak ~487ms->0 ~660ms, settles cleanly; 178 tests pass."
+      ],
+      "notes": "Epic 04 P4. Frontend spine finale — the convergence of Epic 04 + Epic 05. See docs/04-two-site-lunar-surface."
     }
   ]
 }
