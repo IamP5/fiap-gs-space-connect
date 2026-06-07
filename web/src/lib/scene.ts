@@ -46,13 +46,19 @@ export const SUN_POSITION: [number, number, number] = [2300, 1265, -6490];
 export const SUN_RADIUS = 80;
 
 // Earth — a distant decorative body, sized PROPORTIONALLY to the Moon (real
-// diameter ratio ≈ 3.67×) and hung up-and-LEFT of the Moon, beyond it, so the
-// orbit vista balances: Sun upper-right, Earth upper-left, Moon the close hero
-// between them. Lives here (not in SkyBodies) so Scene3D's EARTHSHINE light can
+// diameter ratio ≈ 3.67×) and hung BEYOND the Moon's upper-right limb so the orbit
+// vista matches the NASA reference (SVS #14992): the close grey Moon as the hero,
+// Earth a smaller marble (~1/3 the Moon's apparent diameter) just off its limb,
+// the Milky-Way band diagonal behind both. Positioned so it falls inside the orbit
+// camera frustum (camera ≈ (264,145,-494) looking at the Moon, fov 42, 16:9): at
+// |cam→Earth| ≈ 3015 the 330-radius disc subtends ≈ 12.6° (vs the Moon's ≈ 37.7°),
+// landing ~15° right / ~17° up of the Moon — comfortably in frame. (The prior
+// [-220,640,-3050] sat ~78° off the Moon, fully outside the frustum → Earth was
+// never visible.) Lives here (not in SkyBodies) so Scene3D's EARTHSHINE light can
 // share Earth's position — the blue fill on the Moon's night side comes FROM the
 // visible Earth, the way reflected earthlight really does.
 export const EARTH_RADIUS = Math.round(MOON_RADIUS * 3.67); // ≈ 330, proportional to the Moon
-export const EARTH_POSITION: [number, number, number] = [-220, 640, -3050];
+export const EARTH_POSITION: [number, number, number] = [-2340, -473, -1882];
 
 export type Bounds = { minX: number; minY: number; maxX: number; maxY: number };
 

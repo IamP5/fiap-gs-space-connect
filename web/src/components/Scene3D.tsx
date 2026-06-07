@@ -1215,24 +1215,73 @@ const SURFACE_HIGH_POSE: Pose = {
   position: new THREE.Vector3(0, 120, 80),
   target: new THREE.Vector3(0, 0.6, 0),
 };
-// Orbit: the camera berthed off the Moon globe, framing it as the hero.
+// Orbit: the camera berthed off the Moon globe, framing it as the hero. The
+// offset is set so the camera→Moon line is ~72° OFF the Moon→Sun line (#81): the
+// sun rakes ACROSS the globe (3/4 side-light) instead of from behind it, so the
+// orbit preset frames a visible soft side-lit terminator — the single biggest
+// realism win. |offset| ≈ 280 (pulled in from 418 so the Moon fills the frame as
+// a hero — subtends ~37° vs ~25°), kept on the SAME approach axis so the ~72°
+// terminator is preserved; inside the orbit distance band (220–640) at a ~72°
+// polar angle (inside the preset's [45°, 81.8°] clamps). Target = globe center.
+// Do NOT change SUN_POSITION/MOON_POSITION (lib/scene.ts) — only the pose.
 const ORBIT_POSE: Pose = {
-  position: new THREE.Vector3(MOON_POSITION[0], MOON_POSITION[1] + 80, MOON_POSITION[2] + 410),
+  position: new THREE.Vector3(
+    MOON_POSITION[0] + 264,
+    MOON_POSITION[1] + 85,
+    MOON_POSITION[2] + 26,
+  ),
   target: new THREE.Vector3(...MOON_POSITION),
 };
 // The closest point of the fly-to-Moon beat: the globe looms large just as the
-// glare peaks and the scene swaps. Target stays on the globe center.
+// glare peaks and the scene swaps. Sits on the SAME side-lit approach axis as
+// ORBIT_POSE (|offset| ≈ 175) so the terminator stays visible as we close in.
 const MOON_CLOSE_POSE: Pose = {
-  position: new THREE.Vector3(MOON_POSITION[0], MOON_POSITION[1] + 20, MOON_POSITION[2] + 180),
+  position: new THREE.Vector3(
+    MOON_POSITION[0] + 166,
+    MOON_POSITION[1] + 54,
+    MOON_POSITION[2] + 16,
+  ),
   target: new THREE.Vector3(...MOON_POSITION),
 };
 
 const TRANSITION_MS = 1500;
-// easeInOutCubic — smooth accelerate/decelerate for each half-beat.
-const easeInOut = (x: number) => (x < 0.5 ? 4 * x * x * x : 1 - Math.pow(-2 * x + 2, 3) / 2);
-const lerpPose = (a: Pose, b: Pose, k: number, outPos: THREE.Vector3, outTgt: THREE.Vector3) => {
+
+// ---- descent easing (#84, SVS 4444) ----------------------------------------
+// The descent is choreographed with ASYMMETRIC easing instead of the old
+// symmetric easeInOutCubic: a gentle ease-in departure, a fast featureless
+// middle, and a HARD ease-out into the landing so the arrival settles gently
+// (not a fall). We split that across the two half-beats:
+//   beat 1 (depart → glare peak): easeInQuad  — slow start, accelerating away.
+//   beat 2 (glare peak → arrive): easeOutQuint — fast in, decelerating hard.
+const easeInQuad = (x: number) => x * x;
+const easeOutQuint = (x: number) => 1 - Math.pow(1 - x, 5);
+// Kept as a baseline (smoothstep) for the pitch/arc shaping sub-curves.
+const smooth = (x: number) => x * x * (3 - 2 * x);
+
+// lerpPose positions the camera and its look target between two poses. The look
+// target carries a PITCH RAMP (#84): the camera holds a near-nadir aim for most
+// of the move and pitches up to the oblique destination only in the final ~15%,
+// so the horizon rises into frame at the very end (the "flat map → real place"
+// reveal). `pitchHold` is the fraction [0,1] of this beat spent at the nadir aim
+// before the pitch-up; pass 1 to disable the ramp (plain lerp) for beat 1.
+const lerpPose = (
+  a: Pose,
+  b: Pose,
+  k: number,
+  outPos: THREE.Vector3,
+  outTgt: THREE.Vector3,
+  pitchHold = 1,
+) => {
   outPos.lerpVectors(a.position, b.position, k);
-  outTgt.lerpVectors(a.target, b.target, k);
+  // Target ramp: stay near A's aim until `pitchHold`, then ease up to B's aim
+  // over the remaining tail — the horizon-rise window.
+  const tk =
+    pitchHold >= 1
+      ? k
+      : k <= pitchHold
+        ? 0
+        : smooth((k - pitchHold) / (1 - pitchHold));
+  outTgt.lerpVectors(a.target, b.target, tk);
 };
 
 // GHOST_OK / GHOST_BAD tint the placement preview green when the spot is valid,
@@ -1442,12 +1491,27 @@ function SceneContents({
              black sky from above) standing in for sunlight bouncing off the bright
              lunar surface, plus a tiny ambient floor so nothing is pure black
              (ADR-0004 readability). */}
-      <ambientLight intensity={0.17} />
-      <hemisphereLight args={["#1a1a26", "#8a8276", 0.35]} />
-      <directionalLight ref={lightRef} position={SUN_POSITION} intensity={1.9} />
-      {/* Earthshine — cool, dim, from Earth's actual position. Softens the Moon's
-          night side so the terminator reads as a smooth gradient, not a hard cut. */}
-      <directionalLight position={EARTH_POSITION} color="#7da2ff" intensity={0.7} />
+      {/* Ambient floor — VIEW-CONDITIONAL. In orbit the Moon is airless and has
+          essentially NO fill but faint earthshine, so the void + shadow side must
+          go near-black for crater relief and a dramatic terminator to read (the
+          SVS look) → 0.04. On the surface a touch more (0.12) keeps the worksite's
+          shadow side legible. Cool near-black tint. */}
+      <ambientLight color="#0e1014" intensity={onSurface ? 0.12 : 0.04} />
+      {/* Hemisphere regolith bounce — VIEW-CONDITIONAL for the same reason: a
+          whisper on the surface (0.25, regolith bounce under the worksite), all but
+          OFF in orbit (0.05) so the Moon's shadow side isn't washed flat. */}
+      <hemisphereLight args={["#ffe9cc", "#1a1814", onSurface ? 0.25 : 0.05]} />
+      {/* SUN — the key light, PURE WHITE (#FFFFFF): sunlight in vacuum has no
+          atmosphere to redden it (see lib/scene.ts), so a white key keeps the lit
+          Moon a neutral cool grey (the NASA reference look) instead of warm-tan;
+          kept at ~1.9 so it stays the bloom driver and the lit limb is bright but
+          not blown out. */}
+      <directionalLight ref={lightRef} position={SUN_POSITION} color="#ffffff" intensity={1.9} />
+      {/* Earthshine — a cool DESATURATED whisper (pale steel-blue #A8BFDA), from
+          Earth's actual position. NASA earthshine is a faint wash on the night-side
+          terminator, NOT a blue glow — dimmest in orbit (0.16) so the shadow side
+          stays near-black; a bit more on the surface (0.25) for shadow legibility. */}
+      <directionalLight position={EARTH_POSITION} color="#a8bfda" intensity={onSurface ? 0.25 : 0.16} />
 
       {/* Surface-only horizon fog: dissolves the far ground edge into the black
           sky for a clean horizon + sense of vastness. The worksite (within ~30
@@ -1624,6 +1688,18 @@ export function Scene3D({
     const beat2From = to === "surface" ? SURFACE_HIGH_POSE : MOON_CLOSE_POSE;
     const destPose = poseFor(to);
 
+    // Descent vs. ascent. The pitch ramp (#84) puts the horizon-rise in the FINAL
+    // ~15% of the whole move on a descent (beat 2, t∈[0.85,1] → its last 30%), and
+    // mirrors it on an ascent (the horizon drops in beat 1's last 30%). pitchHold
+    // is the fraction of that beat held at the near-nadir aim before the ramp.
+    const descending = to === "surface";
+    const DESCENT_PITCH_HOLD = 0.7; // ramp the look-up over the beat's final 30%
+    // Lateral arc + roll (#84): a small X drift so foreground/background features
+    // parallax (reads as real 3D, not a straight Z-dive) and a tiny roll, both a
+    // half-sine bump that is ZERO at depart and arrival. ascent mirrors the sign.
+    const ARC_X = descending ? 14 : -14; // scene units of lateral drift at mid-flight
+    const ROLL_MAX = THREE.MathUtils.degToRad(2.2) * (descending ? 1 : -1); // ≤3°, zeroed at arrival
+
     const tmpPos = new THREE.Vector3();
     const tmpTgt = new THREE.Vector3();
     let raf = 0;
@@ -1635,21 +1711,40 @@ export function Scene3D({
     const step = (now: number) => {
       if (!start) start = now;
       const t = Math.min(1, (now - start) / TRANSITION_MS);
-      // Triangle glare: 0 → 1 at the midpoint → 0. Direct DOM write, no re-render.
-      if (glareRef.current) glareRef.current.style.opacity = String(1 - Math.abs(t - 0.5) * 2);
+
+      // Slim glare (#84): a BRIEF off-center sun-bloom that only fully occludes the
+      // scene swap for a few frames, rather than a full triangular wash. A narrow
+      // window around the t=0.5 swap, raised to a power so it spikes to 1 and falls
+      // off fast (off-center bloom shape lives in the .view-glare CSS gradient).
+      const GLARE_HALF = 0.16; // window half-width (~5 frames each side at 60fps over 1.5s)
+      const gx = Math.max(0, 1 - Math.abs(t - 0.5) / GLARE_HALF);
+      if (glareRef.current) glareRef.current.style.opacity = String(Math.pow(gx, 1.6));
 
       if (t < 0.5) {
-        lerpPose(startPose, beat1To, easeInOut(t / 0.5), tmpPos, tmpTgt);
+        // Beat 1 — depart: ease-in (slow start, accelerating away). On ASCENT this
+        // beat owns the pitch change (horizon drops as we lift off).
+        const k = easeInQuad(t / 0.5);
+        lerpPose(startPose, beat1To, k, tmpPos, tmpTgt, descending ? 1 : DESCENT_PITCH_HOLD);
       } else {
         if (!swapped) {
           swapped = true;
           shownRef.current = to;
-          setShown(to); // swap content + sky under the full-glare peak
+          setShown(to); // swap content + sky under the brief full-glare peak
         }
-        lerpPose(beat2From, destPose, easeInOut((t - 0.5) / 0.5), tmpPos, tmpTgt);
+        // Beat 2 — arrive: ease-out (fast in, hard deceleration into the landing).
+        // On DESCENT this beat owns the pitch ramp (horizon rises in its last 30%).
+        const k = easeOutQuint((t - 0.5) / 0.5);
+        lerpPose(beat2From, destPose, k, tmpPos, tmpTgt, descending ? DESCENT_PITCH_HOLD : 1);
       }
+
+      // Lateral arc + roll as a half-sine bump: 0 at the ends, max at mid-flight,
+      // so the camera curves through the move and the roll is fully zeroed by
+      // arrival. The X drift is added AFTER the lerp so it offsets the eased path.
+      const bump = Math.sin(t * Math.PI);
+      tmpPos.x += ARC_X * bump;
       camera.position.copy(tmpPos);
       camera.lookAt(tmpTgt);
+      camera.rotateZ(ROLL_MAX * bump);
       if (controls) controls.target.copy(tmpTgt);
       invalidate();
 
@@ -1657,6 +1752,12 @@ export function Scene3D({
         raf = requestAnimationFrame(step);
       } else {
         if (glareRef.current) glareRef.current.style.opacity = "0";
+        // Settle exactly on the destination pose: bump/roll are 0 at t=1, but snap
+        // the camera/orbit target cleanly so OrbitControls resumes from the canon
+        // pose with no residual roll (controls.update reasserts the up-vector).
+        camera.position.copy(destPose.position);
+        camera.up.set(0, 1, 0);
+        camera.lookAt(destPose.target);
         if (controls) {
           controls.target.copy(destPose.target);
           controls.enabled = true;
@@ -1695,7 +1796,16 @@ export function Scene3D({
         // depth stencil attachments cannot be the same image". Turning it off
         // removes the MSAA backbuffer (and that blit) entirely; the low-poly scene
         // plus soft halo bloom reads fine without canvas-level AA.
-        gl={{ antialias: false, powerPreference: "high-performance" }}
+        // toneMappingExposure ≈ 1.1 (#91): a small lift on the ACESFilmic +
+        // sRGB pipeline (R3F v8 defaults, kept) — gives the sunlit limb / Sun a
+        // touch more presence while ACES still rolls 0 → 0, so the void stays
+        // near-black. Both tone mapping + output color space remain the v8
+        // defaults; only the exposure dial is set explicitly here.
+        gl={{
+          antialias: false,
+          powerPreference: "high-performance",
+          toneMappingExposure: 1.1,
+        }}
       >
         {/* Black background as the GRACEFUL FALLBACK (issue #50): the HDR
             Environment in <SpaceEnvironment> overrides scene.background once it

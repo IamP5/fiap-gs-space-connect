@@ -203,38 +203,43 @@ ambientCG publishes all of its assets under CC0 1.0 (https://ambientcg.com/licen
 ## Sky bodies — Moon & Earth (NASA-PD)
 
 Decorative, snapshot-independent sky bodies rendered by
-`web/src/components/SkyBodies.tsx` (issue #51): the Moon globe in orbit view, the
-"Earthrise" Earth in the black surface sky. These are **Scenery** (ADR-0004
+`web/src/components/SkyBodies.tsx` (issues #51, #82, #86): the Moon globe in orbit
+view, the day/night Earth marble in both views. These are **Scenery** (ADR-0004
 allows snapshot-independent decoration), never snapshot-driven Assets; a
 failed/missing texture falls back to the sphere's flat material color (ADR-0004
 mandatory fallback). All source images are US-government public-domain works from
-NASA's 3D Resources repository (`master` branch). Credited as `NASA` as a
-courtesy; this project is **not** affiliated with or endorsed by NASA, and the
-NASA insignia is **not** used. Each download was verified as a real JPEG
-(`file <path>` reports `JPEG image data`). Downloaded: 2026-06-06.
+NASA. Credited as `NASA` as a courtesy; this project is **not** affiliated with or
+endorsed by NASA, and the NASA insignia is **not** used. Each download was verified
+as a real JPEG (`file <path>` reports `JPEG image data`). Wave-2 realism upgrade
+(space-view-realism.md §1, §2, §5) — downloaded: 2026-06-07.
+
+The Moon now uses the NASA **CGI Moon Kit (SVS 4720)** data — the canonical NASA
+Moon-rendering source: the LROC WAC colour mosaic for albedo (real maria contrast +
+baked-in ray systems), and a normal map baked OFFLINE from the LOLA LDEM elevation
+so crater relief lines up with the albedo (relief is applied as a **normal map,
+never a displacementMap**). The Earth now uses NASA **Blue Marble: Next Generation**
+(day) + **Black Marble** (city-lights, night-side emissive).
 
 | File | Source asset | Author | Source URL | License |
 |------|--------------|--------|-----------|---------|
-| `textures/moon_color_1024.jpg` | NASA 3D Resources → `Images and Textures/Moon/Moon.jpg`, resized to 1024 | NASA | https://github.com/nasa/NASA-3D-Resources/blob/master/Images%20and%20Textures/Moon/Moon.jpg | Public Domain (NASA-PD) |
-| `textures/moon_normal_1024.jpg` | Baked OFFLINE from `Moon.jpg` (grayscale heightfield → Sobel-gradient OpenGL normal map, 1024) | NASA (derived) | https://github.com/nasa/NASA-3D-Resources/blob/master/Images%20and%20Textures/Moon/Moon.jpg | Public Domain (NASA-PD) |
-| `textures/moon_rough_512.jpg` | Baked OFFLINE from `Moon.jpg` (grayscale, clamped to a high-roughness band, 512) | NASA (derived) | https://github.com/nasa/NASA-3D-Resources/blob/master/Images%20and%20Textures/Moon/Moon.jpg | Public Domain (NASA-PD) |
-| `textures/earth_color_512.jpg` | NASA 3D Resources → `Images and Textures/Earth (A)/Earth (A).jpg`, resized to 1024×512 | NASA | https://github.com/nasa/NASA-3D-Resources/blob/master/Images%20and%20Textures/Earth%20(A)/Earth%20(A).jpg | Public Domain (NASA-PD) |
+| `textures/moon_color_4096.jpg` | NASA CGI Moon Kit (SVS 4720) → `lroc_color_poles_8k.tif` (LROC WAC colour mosaic), 8192×4096 → 4096×2048, neutral-graded (desaturate to ~38% so it reads cool grey, not warm-brown) | NASA's Scientific Visualization Studio | https://svs.gsfc.nasa.gov/vis/a000000/a004700/a004720/lroc_color_poles_8k.tif | Public Domain (NASA-PD) |
+| `textures/moon_normal_4096.jpg` | Baked OFFLINE from the CGI Moon Kit LOLA elevation `ldem_16_uint.tif` (16-bit LDEM heightfield, 5760×2880 → 4096×2048 → Sobel-gradient OpenGL normal map) | NASA's Scientific Visualization Studio (derived) | https://svs.gsfc.nasa.gov/vis/a000000/a004700/a004720/ldem_16_uint.tif | Public Domain (NASA-PD) |
+| `textures/earth_day_2048.jpg` | NASA Blue Marble: Next Generation (Dec 2004 topo+bathy), resized 5400×2700 → 2048×1024 | NASA's Goddard Space Flight Center (Blue Marble: Next Generation) | https://eoimages.gsfc.nasa.gov/images/imagerecords/73000/73909/world.topo.bathy.200412.3x5400x2700.jpg | Public Domain (NASA-PD) |
+| `textures/earth_night_2048.jpg` | NASA Black Marble (2016 night lights), resized 13500×6750 → 2048×1024 | NASA's Earth Observatory (Black Marble) | https://assets.science.nasa.gov/content/dam/science/esd/eo/images/imagerecords/144000/144898/BlackMarble_2016_3km.jpg | Public Domain (NASA-PD) |
 
-Original downloads (raw `master`, the `.jpg` not the huge `.tif`):
-
-- `https://raw.githubusercontent.com/nasa/NASA-3D-Resources/master/Images%20and%20Textures/Moon/Moon.jpg`
-- `https://raw.githubusercontent.com/nasa/NASA-3D-Resources/master/Images%20and%20Textures/Earth%20(A)/Earth%20(A).jpg`
-
-The Moon color/Earth color were downscaled (ImageMagick `magick … -resize`) for
-bundle size; otherwise the photometry is unmodified. The Moon normal + roughness
-maps are baked offline from the same Moon photo (a heightfield-derived OpenGL
-normal map for crater relief — relief is applied as a **normal map, never a
-displacementMap**) and so are derivative NASA-PD works. NASA's image and media
-usage guidelines state NASA content is generally not copyrighted and may be used
-for educational/informational purposes; the NASA insignia/logo and flags are
-excluded and are NOT used here. See
-https://www.nasa.gov/nasa-brand-center/images-and-media/ and
-https://github.com/nasa/NASA-3D-Resources.
+The Earth colour maps were downscaled (ImageMagick `magick … -resize`) to 2K for
+bundle size; the Moon colour map is the 8K LROC mosaic downscaled to 4K and
+neutral-graded for a reference-accurate cool grey (desaturate to ~38%). The Moon
+normal map is baked offline from the LOLA LDEM-16 elevation TIFF (a heightfield-derived
+OpenGL normal map for crater relief) and so is a derivative NASA-PD work; the bake
+step is reproducible via ImageMagick (16-bit grey raster extract) + a small node
+Sobel script (see the PR for the recipe). NASA's image
+and media usage guidelines state NASA content is generally not copyrighted and may
+be used for educational/informational purposes; the NASA insignia/logo and flags
+are excluded and are NOT used here. See
+https://www.nasa.gov/nasa-brand-center/images-and-media/, NASA's Scientific
+Visualization Studio (https://svs.gsfc.nasa.gov/4720/), and NASA's Earth
+Observatory.
 
 ## Sun (Solar System Scope — CC-BY 4.0)
 
@@ -260,6 +265,29 @@ Solar System Scope publishes its texture pack under **CC-BY 4.0**
 is recorded here. **Attribution:** Solar System Scope (solarsystemscope.com),
 licensed under CC BY 4.0 (https://creativecommons.org/licenses/by/4.0/).
 
+## Nebula hero — ESA/Hubble Veil Nebula (CC-BY 4.0)
+
+Decorative, snapshot-independent deep-space vista accent rendered by
+`web/src/components/SkyBodies.tsx` (`NebulaHero`, issue #90): a 2–4 layer additive
+sprite stack shown ONLY in the orbit view. It is a **Scenery** element (ADR-0004),
+never a snapshot-driven Asset; a failed/missing image falls back to a procedural
+radial-gradient `CanvasTexture` cloud (ADR-0004 mandatory fallback). The source is
+the ESA/Hubble Veil Nebula "Witch's Broom" (heic0712a). The raw image has a BRIGHT,
+busy background (corner luminance ≈ 116/255), so for additive sprite use it is
+conditioned OFFLINE: black-point crush (`-level 46%,100%`) drops the background to
+true black so additive adds nothing there, and a radial vignette (multiply by a
+sigmoidal radial-gradient) fades the sprite-quad edges to black so the square never
+reads as a hard rectangle. Downloaded: 2026-06-07; resized 1493×751 → 1024-wide.
+
+| File | Source asset | Author | Source URL | License |
+|------|--------------|--------|-----------|---------|
+| `textures/nebula_veil_1024.jpg` | ESA/Hubble Veil Nebula "Witch's Broom" (heic0712a), resized to 1024 wide, black-crushed + radial-vignetted for additive sprite use | ESA/Hubble (see attribution below) | https://cdn.esahubble.org/archives/images/large/heic0712a.jpg | CC-BY 4.0 |
+
+ESA/Hubble publishes its images under **CC-BY 4.0**
+(https://esahubble.org/copyright/) — admissible with attribution, which is recorded
+here verbatim. **Attribution:** NASA, ESA, and the Hubble Heritage
+(STScI/AURA)-ESA/Hubble Collaboration. Acknowledgment: J. Hester (ASU).
+
 ## Rover model (NASA-PD)
 
 Used by `<Rover3D>` (issue #54) as the realistic worker-entity render — every
@@ -282,3 +310,86 @@ nodes. This use does not imply NASA endorsement.
 
 Original download (Draco-compressed source; conditioned, not committed as-is):
 `https://raw.githubusercontent.com/nasa/NASA-3D-Resources/master/3D%20Models/Regolith%20Advanced%20Surface%20Systems%20Operations%20Robot%20%28RASSOR%29/Regolith%20Advanced%20Surface%20Systems%20Operations%20Robot%20%28RASSOR%29.glb`
+
+## Milky-Way star background (Deep Star Maps 2020 — NASA-PD + ESA/Gaia co-credit)
+
+Used by `<SpaceEnvironment>` (issue #83) as the equirectangular Milky-Way
+background assigned to `scene.background` (`EquirectangularReflectionMapping`,
+`SRGBColorSpace`, max anisotropy) — kept SEPARATE from the IBL `environment`. It
+is a **Scenery** element (ADR-0004 allows snapshot-independent decoration), never
+a snapshot-driven Asset; a failed/missing load leaves the Canvas's black
+`<color attach="background">` fallback untouched (ADR-0004 mandatory fallback).
+
+The source is the SVS 4851 **galactic-coordinate** composite (`_gal`: Milky-Way
+band sits as a clean horizontal stripe with the bulge centered) — the
+`starmap_*` file is the *composite* (Milky-Way band **+** discrete stars in one
+file). No constellation/grid overlay is baked in. The source is **EXR-only** at
+usable resolution (the SVS `.jpg` 404s; `_print.jpg` is a 1024×512 thumbnail),
+so the 8k EXR was converted OFFLINE to a **full 8192×4096** sRGB JPG (kept at
+source resolution — 4× the linear detail of the prior 4k — so the stars read as
+crisp pinpoints and the dust band stays smooth). The galactic `_gal` projection
+lays the band horizontally; the renderer rolls/yaws it via `scene.backgroundRotation`
+so the bright galactic-centre dust runs diagonally through the orbit frame.
+Downloaded & converted: 2026-06-07.
+
+| File | Source asset | Author | Source URL | License |
+|------|--------------|--------|-----------|---------|
+| `starmap_2020_8k_gal.jpg` | Deep Star Maps 2020 (SVS 4851) → `starmap_2020_8k_gal.exr`, converted offline to 8192×4096 sRGB JPG (warm-graded) | NASA/Goddard SVS (Gaia DR2: ESA/Gaia/DPAC) | https://svs.gsfc.nasa.gov/4851/ | Public Domain (NASA-PD) + ESA/Gaia co-credit |
+
+Original download (8192×4096 EXR; converted offline, not committed as-is):
+`https://svs.gsfc.nasa.gov/vis/a000000/a004800/a004851/starmap_2020_8k_gal.exr`
+
+Offline conversion (ImageMagick v7; EXR linear HDR → sRGB JPEG, warm grade to
+bring out the brown dust band):
+
+```sh
+magick starmap_2020_8k_gal.exr -set colorspace RGB -colorspace sRGB \
+  -modulate 112,125,100 -depth 8 -quality 82 \
+  web/public/assets/starmap_2020_8k_gal.jpg
+```
+
+NASA's Deep Star Maps are derived from ESA's Gaia DR2 (plus Hipparcos/Tycho)
+catalogs and carry a **mandatory ESA/Gaia co-credit** even though NASA-hosted.
+NASA content is generally not copyrighted (NASA media usage guidelines); the NASA
+insignia/logo is **not** used and no endorsement is implied. See
+https://svs.gsfc.nasa.gov/4851/ and
+https://www.nasa.gov/nasa-brand-center/images-and-media/.
+
+**Required attribution:** NASA/Goddard SVS. Gaia DR2: ESA/Gaia/DPAC
+## Scale props — Base Station + Astronaut (NASA-PD)
+
+Decorative, snapshot-independent **Scenery** scale props rendered by
+`web/src/components/LaunchScenery.tsx` (Issue #89, rescoped) — a small **Base
+Station** filler structure and an EVA **Astronaut** placed at the near edge of
+the worksite complex to give the scene human scale. They are NOT snapshot-driven
+Assets; each carries a mandatory primitive fallback (box / capsule sized to the
+model bbox, ADR-0004) and the loaded tree is raycast-suppressed so it is never
+pickable. Both are US-government public-domain works from NASA's 3D Resources
+repository (`master` branch). Credited as `NASA / <author>` as a courtesy; this
+project is **not** affiliated with or endorsed by NASA, and **no NASA insignia
+or flag is displayed** (see the insignia-strip note below). Each conditioned
+`.glb` is self-hosted in `models/` and verified as real glTF (`head -c 4` prints
+`glTF`). Downloaded: 2026-06-07.
+
+| File | Source asset | Author | Source URL | License | Conditioning |
+|------|--------------|--------|-----------|---------|--------------|
+| `models/base-station.glb` | NASA 3D Resources → `3D Models/Base Station/Base Station.glb` | NASA / Ames | https://github.com/nasa/NASA-3D-Resources/tree/master/3D%20Models/Base%20Station | Public Domain (NASA-PD) | external texture ref (`BASE_UV.JPG`, not distributed in the repo) stripped → material uses its grey baseColorFactor; then `gltf-transform optimize --compress draco` (21.7 KB → 1.8 KB) |
+| `models/astronaut.glb` | NASA 3D Resources → `3D Models/Astronaut/Astronaut.glb` | NASA | https://github.com/nasa/NASA-3D-Resources/tree/master/3D%20Models/Astronaut | Public Domain (NASA-PD) | **insignia/flag decals stripped** (two US flags + the NASA "meatball" painted out of the suit baseColor texture with ImageMagick); re-packed + `gltf-transform optimize --compress draco --texture-compress webp` (763 KB → 59 KB) |
+
+Source repository (the `.glb` files above are fetched verbatim from branch
+`master`, then conditioned offline as noted): `https://github.com/nasa/NASA-3D-Resources`.
+
+Original downloads (raw `master`; conditioned, not committed as-is):
+
+- `https://raw.githubusercontent.com/nasa/NASA-3D-Resources/master/3D%20Models/Base%20Station/Base%20Station.glb`
+- `https://raw.githubusercontent.com/nasa/NASA-3D-Resources/master/3D%20Models/Astronaut/Astronaut.glb`
+
+**Insignia-strip note (required by §7 of the space-view-realism study):** the
+NASA insignia/meatball/worm and the US flag are **not** public domain and must
+not be shipped. The raw Astronaut suit texture carried two US-flag patches and a
+NASA meatball; all three were painted over with the neutral suit colour before
+re-packing, so the shipped `.glb` displays no insignia or flag. The Base Station
+carried no insignia (its only decal was an undistributed external diffuse map,
+which was stripped). The Astronaut's remaining grey patches are mechanical EVA
+suit hardware (chest controls / valves), not insignia. NASA's image and media
+usage guidelines: https://www.nasa.gov/nasa-brand-center/images-and-media/.

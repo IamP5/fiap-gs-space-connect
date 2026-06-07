@@ -179,12 +179,16 @@
   z-index: 1;
   pointer-events: none;
   opacity: 0;
+  /* Off-center sun-bloom (#84): the flash blooms from the upper-right (toward the
+     scene's sun) rather than dead-center, with a tight bright warm core that — at
+     the brief peak opacity the rAF drives — still fully occludes the scene swap,
+     but reads as a directional bloom rather than a flat full-screen wash. */
   background: radial-gradient(
-    circle at 50% 46%,
-    rgba(255, 250, 240, 0.98) 0%,
-    rgba(255, 246, 230, 0.92) 32%,
-    rgba(246, 238, 226, 0.7) 60%,
-    rgba(240, 235, 225, 0.4) 100%
+    circle at 64% 38%,
+    rgba(255, 251, 242, 0.99) 0%,
+    rgba(255, 247, 232, 0.97) 26%,
+    rgba(248, 240, 228, 0.82) 52%,
+    rgba(240, 234, 224, 0.5) 100%
   );
 }
 

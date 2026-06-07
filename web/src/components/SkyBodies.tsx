@@ -52,13 +52,18 @@ import {
   SUN_RADIUS,
 } from "../lib/scene";
 
-// Self-hosted textures (see public/assets/CREDITS.md). Downscaled jpgs. Moon +
-// Earth are NASA-PD; the Sun colour map is Solar System Scope (CC-BY 4.0).
-const MOON_COLOR = "/assets/textures/moon_color_1024.jpg";
-const MOON_NORMAL = "/assets/textures/moon_normal_1024.jpg";
-const MOON_ROUGH = "/assets/textures/moon_rough_512.jpg";
-const EARTH_COLOR = "/assets/textures/earth_color_512.jpg";
+// Self-hosted textures (see public/assets/CREDITS.md). Downscaled jpgs.
+//   • Moon  — NASA CGI Moon Kit (SVS 4720): LROC WAC colour mosaic + a normal map
+//     baked OFFLINE from the LOLA LDEM elevation (NASA-PD).
+//   • Earth — NASA Blue Marble (day) + Black Marble (city lights, night) (NASA-PD).
+//   • Sun   — Solar System Scope colour map (CC-BY 4.0).
+//   • Nebula — ESA/Hubble Veil Nebula "Witch's Broom" (heic0712a) (CC-BY 4.0).
+const MOON_COLOR = "/assets/textures/moon_color_4096.jpg";
+const MOON_NORMAL = "/assets/textures/moon_normal_4096.jpg";
+const EARTH_DAY = "/assets/textures/earth_day_2048.jpg";
+const EARTH_NIGHT = "/assets/textures/earth_night_2048.jpg";
 const SUN_COLOR = "/assets/textures/sun_color_1024.jpg";
+const NEBULA_VEIL = "/assets/textures/nebula_veil_1024.jpg";
 
 // --- Moon globe (orbit view) ------------------------------------------------
 // Placement + size: the orbit preset TARGETS this berth and frames the globe as
@@ -77,9 +82,9 @@ const MOON_LOD_SWITCH = 420;
 // --- Earth (both views) -----------------------------------------------------
 // A distant marble hung high in the black sky to give the sense of deep space.
 // SIZED PROPORTIONALLY to the Moon (EARTH_RADIUS = MOON_RADIUS × 3.67, the real
-// diameter ratio) and hung up-and-LEFT, beyond the Moon, so the orbit vista reads
-// correctly: the Moon is the close hero (~25°) and Earth the bigger-but-farther
-// planet (~12°). Shown in BOTH views. Self-illuminated so it glows on its own
+// diameter ratio) and hung beyond the Moon's upper-right limb so the orbit vista
+// matches the NASA reference: the Moon is the close hero (~38°) and Earth the
+// smaller-but-farther marble (~13°). Shown in BOTH views. Self-illuminated so it glows on its own
 // with no per-frame work. EARTH_RADIUS + EARTH_POSITION live in lib/scene so
 // Scene3D's earthshine light can share Earth's position.
 
@@ -92,6 +97,7 @@ function loadTexture(
   key: "map" | "normalMap" | "roughnessMap" | "emissiveMap",
   colorSpace: THREE.ColorSpace,
   invalidate: () => void,
+  anisotropy = 4,
 ): () => void {
   let disposed = false;
   let texture: THREE.Texture | null = null;
@@ -104,7 +110,7 @@ function loadTexture(
         return;
       }
       t.colorSpace = colorSpace;
-      t.anisotropy = 4;
+      t.anisotropy = anisotropy;
       texture = t;
       material[key] = t;
       material.needsUpdate = true;
@@ -129,6 +135,7 @@ function loadTexture(
 // map (NEVER displacementMap).
 function MoonGlobe({ visible }: { visible: boolean }) {
   const invalidate = useThree((s) => s.invalidate);
+  const gl = useThree((s) => s.gl);
 
   // Geometry + the two materials, built once. Higher segments for the close LOD,
   // fewer for the pulled-back LOD.
@@ -139,39 +146,51 @@ function MoonGlobe({ visible }: { visible: boolean }) {
     // fog:false — celestial bodies sit far beyond the surface horizon fog (and
     // are only shown in orbit, which has no fog anyway), so they must never be
     // tinted toward the fog color.
+    //
+    // Matte regolith (CGI Moon Kit recipe — space-view-realism.md §1): near-
+    // Lambertian airless rock. roughness ~0.97, metalness 0, and envMapIntensity 0
+    // so the IBL never paints a specular sheen on the globe (any sheen kills the
+    // realism). Relief is the LOLA-baked normal map ONLY — never a displacementMap
+    // (silhouette cracks on equirect poles).
     const matNear = new THREE.MeshStandardMaterial({
-      color: "#9a958c",
-      roughness: 1,
+      color: "#c2c2c2",
+      roughness: 0.97,
       metalness: 0,
+      envMapIntensity: 0,
       fog: false,
     });
     const matFar = new THREE.MeshStandardMaterial({
-      color: "#9a958c",
-      roughness: 1,
+      color: "#c2c2c2",
+      roughness: 0.97,
       metalness: 0,
+      envMapIntensity: 0,
       fog: false,
     });
-    // Soften the crater normal map. Under the harsh space back-light + low fill,
-    // a full-strength normal map over-shades every crater rim near the terminator,
-    // making the lit area read as a blotchy/flat patch instead of a smooth sphere.
-    // A gentle scale keeps subtle relief while the globe reads as a clean ball.
-    matNear.normalScale.set(0.35, 0.35);
-    matFar.normalScale.set(0.35, 0.35);
+    // Normal-map strength. With the orbit fill light crushed (Scene3D), crater
+    // relief now has to come from the normal map under the raking sun — so the
+    // near (L0) material is pushed to ~0.9 for strong crater-rim definition at
+    // orbit-close distance; the far (L1) material stays softer (~0.6) so distant
+    // frames don't over-shade near the terminator. (Baked from the LOLA LDEM-16
+    // tier and delivered at 4096×2048 — 4× the prior linear detail.)
+    matNear.normalScale.set(0.9, 0.9);
+    matFar.normalScale.set(0.6, 0.6);
     return { geomNear, geomFar, matNear, matFar };
   }, []);
 
-  // Load the maps imperatively (no Suspense throw). L0 = color+normal+rough,
-  // L1 = color+normal.
+  // Load the maps imperatively (no Suspense throw). L0 = color+normal,
+  // L1 = color+normal. Both maps get max anisotropy (free at idle; sharpens the
+  // limb/terminator). Roughness is the flat matte material value (the CGI Moon Kit
+  // ships no roughness map — airless regolith is uniformly matte).
   useEffect(() => {
+    const aniso = gl.capabilities.getMaxAnisotropy();
     const cleanups = [
-      loadTexture(MOON_COLOR, matNear, "map", THREE.SRGBColorSpace, invalidate),
-      loadTexture(MOON_NORMAL, matNear, "normalMap", THREE.NoColorSpace, invalidate),
-      loadTexture(MOON_ROUGH, matNear, "roughnessMap", THREE.NoColorSpace, invalidate),
-      loadTexture(MOON_COLOR, matFar, "map", THREE.SRGBColorSpace, invalidate),
-      loadTexture(MOON_NORMAL, matFar, "normalMap", THREE.NoColorSpace, invalidate),
+      loadTexture(MOON_COLOR, matNear, "map", THREE.SRGBColorSpace, invalidate, aniso),
+      loadTexture(MOON_NORMAL, matNear, "normalMap", THREE.NoColorSpace, invalidate, aniso),
+      loadTexture(MOON_COLOR, matFar, "map", THREE.SRGBColorSpace, invalidate, aniso),
+      loadTexture(MOON_NORMAL, matFar, "normalMap", THREE.NoColorSpace, invalidate, aniso),
     ];
     return () => cleanups.forEach((c) => c());
-  }, [matNear, matFar, invalidate]);
+  }, [matNear, matFar, invalidate, gl]);
 
   // Dispose geometry + materials on unmount.
   useEffect(
@@ -204,53 +223,80 @@ function MoonGlobe({ visible }: { visible: boolean }) {
   );
 }
 
-// Earth, shown in BOTH views. A low-segment sphere + color map, far away. No LOD,
-// no normal map. (`visible` stays a prop for symmetry with MoonGlobe, but SkyBodies
-// now always mounts it visible.)
+// Earth, shown in BOTH views (space-view-realism.md §2). A two-map day/night
+// marble + a cheap atmospheric rim, far away. No LOD, no normal map.
+//
+// Day/night material: the Blue Marble day colour map lights the sun-facing
+// hemisphere; the Black Marble city-lights map is wired as a WARM-GOLD emissive
+// that only shows on the DARK side. We get the dark-side-only behaviour for free
+// from the lighting: the emissiveMap is added uniformly, but the day map on the
+// LIT side is far brighter than the gold lights, so the city glow only reads where
+// the sun does not — the standard cheap day/night trick (no custom shader, no
+// useFrame). emissiveIntensity is kept low (~0.6) so the lights stay a whisper.
+//
+// The flat `color` deep-ocean-blue is the ADR-0004 fallback if the day map fails —
+// still a visible blue disc. (`visible` stays a prop for symmetry with MoonGlobe,
+// but SkyBodies always mounts Earth visible.)
 function EarthBody({ visible }: { visible: boolean }) {
   const invalidate = useThree((s) => s.invalidate);
+  const gl = useThree((s) => s.gl);
 
-  const { geometry, material } = useMemo(() => {
-    const geometry = new THREE.SphereGeometry(EARTH_RADIUS, 32, 32);
-    // Earth hangs far out in the black surface sky where the worksite key light
-    // never reaches it, so it is SELF-ILLUMINATED rather than lit: the color map
-    // is also wired as the emissiveMap (below) and emissive is white at a strong
-    // intensity, so the textured disc glows on its own (the bright Earthrise
-    // read) without any useFrame. The flat `color`/`emissive` deep-ocean-blue is
-    // the fallback if the texture fails (ADR-0004) — still a visible blue disc.
+  const { geometry, material, rimGeometry, rimMaterial } = useMemo(() => {
+    const geometry = new THREE.SphereGeometry(EARTH_RADIUS, 48, 48);
     const material = new THREE.MeshStandardMaterial({
       color: "#2a4a8c",
-      roughness: 1,
+      roughness: 0.9,
       metalness: 0,
-      emissive: "#3b6fc4",
-      emissiveIntensity: 1,
+      // Warm-gold city lights (#FFC061), kept dim so they read as a whisper on the
+      // night side only. emissive is the tint multiplied onto the night emissiveMap;
+      // with no map it stays effectively off (gold × black ≈ nothing) so a failed
+      // night-map load leaves a clean lit/unlit marble (ADR-0004).
+      emissive: "#FFC061",
+      emissiveIntensity: 0.6,
       // fog:false — Earth is a distant body well beyond the surface horizon fog;
       // without this it would be tinted to black in surface view and vanish.
       fog: false,
     });
-    return { geometry, material };
+
+    // Atmospheric rim — a back-side additive shell (radius ×1.03) that paints a
+    // cool-blue limb glow around the planet's edge. BackSide + AdditiveBlending +
+    // depthWrite:false so it reads as a thin halo of atmosphere, fully static.
+    const rimGeometry = new THREE.SphereGeometry(EARTH_RADIUS * 1.03, 48, 48);
+    const rimMaterial = new THREE.MeshBasicMaterial({
+      color: "#5C8FD6",
+      side: THREE.BackSide,
+      blending: THREE.AdditiveBlending,
+      transparent: true,
+      opacity: 0.35,
+      depthWrite: false,
+      fog: false,
+      toneMapped: false,
+    });
+    return { geometry, material, rimGeometry, rimMaterial };
   }, []);
 
   useEffect(() => {
-    // Load the Earth color into BOTH the diffuse map and the emissive map so the
-    // disc is self-lit (and switch emissive to white so the emissiveMap shows its
-    // true colors). A failed load leaves the flat blue fallback.
+    // Day map → diffuse (SRGB); night city-lights → emissive map (SRGB colour data).
+    // A failed load on either channel leaves the flat fallback for that channel.
+    // Earth now reads at ~1/3 the Moon's apparent size in orbit (it sits just off
+    // the Moon's limb), so its maps get MAX anisotropy too — the day/night
+    // terminator + coastlines stay crisp at the grazing limb angle.
+    const aniso = gl.capabilities.getMaxAnisotropy();
     const cleanups = [
-      loadTexture(EARTH_COLOR, material, "map", THREE.SRGBColorSpace, invalidate),
-      loadTexture(EARTH_COLOR, material, "emissiveMap", THREE.SRGBColorSpace, () => {
-        material.emissive.set("#ffffff");
-        invalidate();
-      }),
+      loadTexture(EARTH_DAY, material, "map", THREE.SRGBColorSpace, invalidate, aniso),
+      loadTexture(EARTH_NIGHT, material, "emissiveMap", THREE.SRGBColorSpace, invalidate, aniso),
     ];
     return () => cleanups.forEach((c) => c());
-  }, [material, invalidate]);
+  }, [material, invalidate, gl]);
 
   useEffect(
     () => () => {
       geometry.dispose();
       material.dispose();
+      rimGeometry.dispose();
+      rimMaterial.dispose();
     },
-    [geometry, material],
+    [geometry, material, rimGeometry, rimMaterial],
   );
 
   useEffect(() => {
@@ -260,12 +306,11 @@ function EarthBody({ visible }: { visible: boolean }) {
   if (!visible) return null;
 
   return (
-    <mesh
-      geometry={geometry}
-      material={material}
-      position={EARTH_POSITION}
-      raycast={() => null}
-    />
+    <group position={EARTH_POSITION} raycast={() => null}>
+      <mesh geometry={geometry} material={material} raycast={() => null} />
+      {/* Atmospheric rim shell (cool-blue limb glow). */}
+      <mesh geometry={rimGeometry} material={rimMaterial} raycast={() => null} />
+    </group>
   );
 }
 
@@ -350,6 +395,54 @@ function makeRaysTexture(): THREE.Texture | null {
   return tex;
 }
 
+// Limb-darkening overlay (#85): a disc that is bright-white at the centre and
+// fades to a warmer, dimmer edge — mimicking the real Sun's photosphere, which is
+// brightest at disc-centre and cooler/dimmer toward the limb. Sized to sit just
+// over the core disc; additive so it only ever brightens, keeping the core white.
+function makeLimbTexture(): THREE.Texture | null {
+  if (typeof document === "undefined") return null;
+  const size = 256;
+  const cv = document.createElement("canvas");
+  cv.width = cv.height = size;
+  const ctx = cv.getContext("2d");
+  if (!ctx) return null;
+  const g = ctx.createRadialGradient(size / 2, size / 2, 0, size / 2, size / 2, size / 2);
+  // Bright white core → warmer, dimmer toward the limb, then a hard cutoff at the
+  // disc edge so the overlay stays inside the body.
+  g.addColorStop(0, "rgba(255,255,255,0.9)");
+  g.addColorStop(0.55, "rgba(255,250,238,0.5)");
+  g.addColorStop(0.82, "rgba(255,232,200,0.22)");
+  g.addColorStop(0.97, "rgba(255,222,186,0.06)");
+  g.addColorStop(1, "rgba(255,222,186,0)");
+  ctx.fillStyle = g;
+  ctx.fillRect(0, 0, size, size);
+  const tex = new THREE.CanvasTexture(cv);
+  tex.colorSpace = THREE.SRGBColorSpace;
+  return tex;
+}
+
+// Faint chromatic-glow halo (#85): a soft round glow in a single tint, used twice
+// (a warm #fff0d8 and a cool blue), each slightly offset, additive. The offset +
+// the two tints give a subtle chromatic fringe around the flare without any
+// per-frame work. Pass the tint; the gradient fades it smoothly to transparent.
+function makeTintGlowTexture(r: number, g: number, b: number): THREE.Texture | null {
+  if (typeof document === "undefined") return null;
+  const size = 256;
+  const cv = document.createElement("canvas");
+  cv.width = cv.height = size;
+  const ctx = cv.getContext("2d");
+  if (!ctx) return null;
+  const grad = ctx.createRadialGradient(size / 2, size / 2, 0, size / 2, size / 2, size / 2);
+  grad.addColorStop(0, `rgba(${r},${g},${b},0.5)`);
+  grad.addColorStop(0.4, `rgba(${r},${g},${b},0.16)`);
+  grad.addColorStop(1, `rgba(${r},${g},${b},0)`);
+  ctx.fillStyle = grad;
+  ctx.fillRect(0, 0, size, size);
+  const tex = new THREE.CanvasTexture(cv);
+  tex.colorSpace = THREE.SRGBColorSpace;
+  return tex;
+}
+
 function SunBody() {
   const invalidate = useThree((s) => s.invalidate);
 
@@ -369,17 +462,29 @@ function SunBody() {
     return { geometry, material };
   }, []);
 
-  // Procedural flare textures (glow + rays), built once and disposed on unmount.
-  const { glowTex, raysTex } = useMemo(
-    () => ({ glowTex: makeGlowTexture(), raysTex: makeRaysTexture() }),
+  // Procedural flare textures (glow + rays + limb darkening + warm/cool chromatic
+  // glows), built once and disposed on unmount. All static CanvasTextures (no
+  // external asset, no useFrame).
+  const { glowTex, raysTex, limbTex, warmTex, coolTex } = useMemo(
+    () => ({
+      glowTex: makeGlowTexture(),
+      raysTex: makeRaysTexture(),
+      limbTex: makeLimbTexture(),
+      // Warm #fff0d8 and a cool blue for the offset chromatic glow.
+      warmTex: makeTintGlowTexture(255, 240, 216),
+      coolTex: makeTintGlowTexture(176, 200, 255),
+    }),
     [],
   );
   useEffect(
     () => () => {
       glowTex?.dispose();
       raysTex?.dispose();
+      limbTex?.dispose();
+      warmTex?.dispose();
+      coolTex?.dispose();
     },
-    [glowTex, raysTex],
+    [glowTex, raysTex, limbTex, warmTex, coolTex],
   );
 
   useEffect(() => {
@@ -418,6 +523,58 @@ function SunBody() {
         <sprite scale={[SUN_RADIUS * 6, SUN_RADIUS * 6, 1]} raycast={() => null}>
           <spriteMaterial
             map={glowTex}
+            blending={THREE.AdditiveBlending}
+            transparent
+            depthWrite={false}
+            toneMapped={false}
+            opacity={0.95}
+            fog={false}
+          />
+        </sprite>
+      )}
+      {/* Faint chromatic glow — a warm and a cool halo, slightly offset, additive,
+          giving a subtle chromatic fringe around the flare (#85). Both faint; the
+          core stays white. */}
+      {warmTex && (
+        <sprite
+          position={[SUN_RADIUS * 0.35, 0, 0]}
+          scale={[SUN_RADIUS * 8, SUN_RADIUS * 8, 1]}
+          raycast={() => null}
+        >
+          <spriteMaterial
+            map={warmTex}
+            blending={THREE.AdditiveBlending}
+            transparent
+            depthWrite={false}
+            toneMapped={false}
+            opacity={0.6}
+            fog={false}
+          />
+        </sprite>
+      )}
+      {coolTex && (
+        <sprite
+          position={[-SUN_RADIUS * 0.35, 0, 0]}
+          scale={[SUN_RADIUS * 8, SUN_RADIUS * 8, 1]}
+          raycast={() => null}
+        >
+          <spriteMaterial
+            map={coolTex}
+            blending={THREE.AdditiveBlending}
+            transparent
+            depthWrite={false}
+            toneMapped={false}
+            opacity={0.45}
+            fog={false}
+          />
+        </sprite>
+      )}
+      {/* Limb-darkening overlay — sits just over the core disc (bright centre →
+          warmer/dimmer edge). Additive so the core stays white (#85). */}
+      {limbTex && (
+        <sprite scale={[SUN_RADIUS * 2.2, SUN_RADIUS * 2.2, 1]} raycast={() => null}>
+          <spriteMaterial
+            map={limbTex}
             blending={THREE.AdditiveBlending}
             transparent
             depthWrite={false}
@@ -479,7 +636,7 @@ function LunarBaseMarker({ onSelect }: { onSelect: () => void }) {
     document.body.style.cursor = "default";
   };
 
-  const intensity = hover ? 3.2 : 2.0;
+  const intensity = hover ? 2.4 : 1.5;
   const scale = hover ? 1.14 : 1;
 
   return (
@@ -527,14 +684,16 @@ function LunarBaseMarker({ onSelect }: { onSelect: () => void }) {
         />
       </mesh>
 
-      {/* Vertical beacon — a tapering glow column rising off the surface, the
-          "you are here / land here" signal. Additive so it reads as light. */}
-      <mesh position={[0, 18, 0]} raycast={() => null}>
-        <cylinderGeometry args={[0.4, 3.2, 36, 16, 1, true]} />
+      {/* Vertical beacon — a short tapering glow column rising off the surface, the
+          "you are here / land here" signal. Additive so it reads as light. Kept
+          SHORT (was 36u, which foreshortened into a streak across the disc at the
+          orbit angle) and dim so it reads as a beacon dot, not a line. */}
+      <mesh position={[0, 8, 0]} raycast={() => null}>
+        <cylinderGeometry args={[0.4, 2.6, 16, 16, 1, true]} />
         <meshBasicMaterial
           color={MARKER_COLOR}
           transparent
-          opacity={hover ? 0.5 : 0.32}
+          opacity={hover ? 0.32 : 0.18}
           side={THREE.DoubleSide}
           depthWrite={false}
           blending={THREE.AdditiveBlending}
@@ -545,9 +704,137 @@ function LunarBaseMarker({ onSelect }: { onSelect: () => void }) {
   );
 }
 
+// --- Nebula hero (orbit view only) — a deep-space vista accent ---------------
+// A 3-layer ADDITIVE sprite stack using the ESA/Hubble Veil Nebula ("Witch's
+// Broom", heic0712a — CC-BY 4.0). The raw image has a BRIGHT, busy background, so
+// it is conditioned OFFLINE for additive use: the dark background is crushed to
+// true black (so additive adds nothing there) and a radial vignette fades the
+// edges to black (so the square sprite quad never reads as a hard rectangle). With
+// that, additive over the sky shows only the bright filaments as faint nebulosity
+// hanging in deep space (space-view-realism.md §4), against the Milky-Way band.
+//
+// Orbit-view-only — gated exactly like MoonGlobe (the worksite is ON the Moon, so
+// a deep-space accent only belongs in the orbit vista). Demand-loop safe: the
+// image loads imperatively (no Suspense throw), invalidate()s once on load and
+// once on every visibility toggle; NO useFrame (three.Sprite billboards on the GPU
+// with no per-frame work). All layers toneMapped:false, depthWrite:false,
+// fog:false, raycast={()=>null}; NOT on the bloom layer.
+//
+// ADR-0004 fallback: if the Veil image fails to load, a procedural radial-gradient
+// CanvasTexture stands in so the accent never blanks.
+
+// Berthed off in the deep-space vista — beyond Earth, low and to the right, so it
+// fills a corner of the orbit frame without crowding the Moon hero or Earth.
+const NEBULA_POSITION: [number, number, number] = [1700, -650, -3200];
+const NEBULA_SIZE = 1700; // base sprite scale (world units across)
+
+// Procedural radial-gradient nebula fallback (ADR-0004): a soft cool-violet cloud,
+// so the accent is never blank if the Veil image fails to load.
+function makeNebulaFallbackTexture(): THREE.Texture | null {
+  if (typeof document === "undefined") return null;
+  const size = 256;
+  const cv = document.createElement("canvas");
+  cv.width = cv.height = size;
+  const ctx = cv.getContext("2d");
+  if (!ctx) return null;
+  const g = ctx.createRadialGradient(size / 2, size / 2, 0, size / 2, size / 2, size / 2);
+  g.addColorStop(0, "rgba(150,130,200,0.5)");
+  g.addColorStop(0.4, "rgba(110,120,190,0.2)");
+  g.addColorStop(1, "rgba(90,110,180,0)");
+  ctx.fillStyle = g;
+  ctx.fillRect(0, 0, size, size);
+  const tex = new THREE.CanvasTexture(cv);
+  tex.colorSpace = THREE.SRGBColorSpace;
+  return tex;
+}
+
+function NebulaHero({ visible }: { visible: boolean }) {
+  const invalidate = useThree((s) => s.invalidate);
+
+  // The displayed texture: starts as the procedural fallback, swapped to the Veil
+  // image once it loads (ADR-0004). Held in state so the swap re-renders.
+  const fallbackTex = useMemo(() => makeNebulaFallbackTexture(), []);
+  const [tex, setTex] = useState<THREE.Texture | null>(fallbackTex);
+
+  // Load the Veil image imperatively (no Suspense throw). On success, swap in the
+  // image and invalidate once; on failure keep the fallback.
+  useEffect(() => {
+    let disposed = false;
+    let loaded: THREE.Texture | null = null;
+    new THREE.TextureLoader().load(
+      NEBULA_VEIL,
+      (t) => {
+        if (disposed) {
+          t.dispose();
+          return;
+        }
+        t.colorSpace = THREE.SRGBColorSpace;
+        loaded = t;
+        setTex(t);
+        invalidate();
+      },
+      undefined,
+      () => {
+        // Load failed → keep the procedural fallback (ADR-0004).
+      },
+    );
+    return () => {
+      disposed = true;
+      loaded?.dispose();
+    };
+  }, [invalidate]);
+
+  // Dispose the procedural fallback on unmount (the loaded image is disposed by the
+  // loader effect's cleanup above).
+  useEffect(() => () => fallbackTex?.dispose(), [fallbackTex]);
+
+  // Toggling visibility under the demand loop must wake one frame so the change is
+  // painted; otherwise the accent sticks.
+  useEffect(() => {
+    invalidate();
+  }, [visible, invalidate]);
+
+  if (!visible || !tex) return null;
+
+  // Three CONCENTRIC additive layers at decreasing size/opacity → a layered, soft
+  // cloud with a brighter core. The layers are concentric (NOT offset): the texture
+  // is now vignetted to fade to black at its edges, so offsetting would re-expose
+  // the (faded) quad edges as faint rectangles. Concentric + edge-vignetted reads
+  // as one soft cloud. Opacities kept low so it's a subtle deep-space accent, not a
+  // dominating panel that fights the Moon/Earth/Milky-Way composition.
+  const layers: { scale: number; opacity: number }[] = [
+    { scale: 1.0, opacity: 0.3 },
+    { scale: 0.66, opacity: 0.26 },
+    { scale: 0.4, opacity: 0.22 },
+  ];
+
+  return (
+    <group position={NEBULA_POSITION} raycast={() => null}>
+      {layers.map((l, i) => (
+        <sprite
+          key={i}
+          scale={[NEBULA_SIZE * l.scale, NEBULA_SIZE * l.scale, 1]}
+          raycast={() => null}
+        >
+          <spriteMaterial
+            map={tex}
+            blending={THREE.AdditiveBlending}
+            transparent
+            depthWrite={false}
+            toneMapped={false}
+            opacity={l.opacity}
+            fog={false}
+          />
+        </sprite>
+      ))}
+    </group>
+  );
+}
+
 // SkyBodies — the Sun (light emitter, both views) + the Moon globe (orbit-only,
 // the space-vista hero) + Earth (a distant marble, both views) + the clickable
-// lunar-base marker (orbit-only). The starfield (SpaceEnvironment) shows in both.
+// lunar-base marker (orbit-only) + the nebula hero accent (orbit-only). The
+// starfield (SpaceEnvironment) shows in both.
 // `onBaseClick`, when provided, flips the app to surface view (the descent) when
 // the marker is clicked.
 export function SkyBodies({
@@ -562,6 +849,7 @@ export function SkyBodies({
     <>
       <SunBody />
       <MoonGlobe visible={inOrbit} />
+      <NebulaHero visible={inOrbit} />
       <EarthBody visible />
       {inOrbit && onBaseClick ? <LunarBaseMarker onSelect={onBaseClick} /> : null}
     </>
