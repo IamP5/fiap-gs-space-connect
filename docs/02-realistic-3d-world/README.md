@@ -17,6 +17,11 @@ the three invariants that make the renderer trustworthy.
   lighting re-grade, earthshine, Moon/Earth material, orbit→surface descent
   choreography, Milky-Way background + nebula hero, and a tiered implementation
   plan. Follow-on focused on the **space/orbit view** look-and-feel.
+- [`cinematic-beauty-immersion.md`](./cinematic-beauty-immersion.md) — Wave 3
+  technical-art-direction audit: post-FX stack, shadows, Earth/Moon shaders,
+  material polish, and the living-sky / cinematic-moment ideas. Backs the Wave 3
+  slices (#99–#112) and records the idle-fps invariant relaxation (opt-in motion,
+  pause-when-hidden).
 - [`issues/`](./issues/) — the implementation plan as one markdown file per issue
   (epic [#46](./issues/46-epic-realistic-lunar-3d-world.md) + child slices
   [#47](./issues/47-amend-adr-0004-scope-guard.md)–[#61](./issues/61-live-mode-asset-placement.md)),
@@ -83,3 +88,37 @@ validates catalog membership before the World Model fold (see
 (Architect extension) is a **separate epic** downstream of this milestone — it composes Blueprints
 from a stated goal using the Asset catalog. It has its own folder:
 [`docs/03-nl-blueprint-authoring/`](../03-nl-blueprint-authoring/README.md). Not part of the realism slices.
+
+## Wave 3 — Cinematic beauty & immersion polish
+
+A pure look-and-feel wave: make the scene **prettier and more immersive** without
+new gameplay. Research in
+[`cinematic-beauty-immersion.md`](./cinematic-beauty-immersion.md). All slices are
+AFK; blockers noted.
+
+> **Invariant note:** Wave 3 relaxes the 0-idle-fps invariant for **opt-in
+> motion** (twinkle, drift, rotating clouds, idle camera sway). The backend/robot
+> data path is unaffected — snapshots reach the scene over the WebSocket → React
+> state → repaint regardless of frameloop mode — so the only cost is GPU/battery
+> while idle. Animated slices **pause when the tab is hidden**; snapshot-driven
+> effects stay fully demand-safe. Static slices (post-FX, shaders, shadows,
+> materials) preserve 0 idle fps as before.
+
+| Issue | Slice | Phase | Blocked by |
+|-------|-------|-------|------------|
+| [#99](https://github.com/IamP5/fiap-gs-space-connect/issues/99) | Post-processing cinematic stack (bloom Sun+Earth, Vignette, SMAA, CA, grain, surface DoF) | static | — |
+| [#100](https://github.com/IamP5/fiap-gs-space-connect/issues/100) | Texture fidelity pass (anisotropy, glTF colorspace, data-map filtering, Moon normalScale) | static | — |
+| [#101](https://github.com/IamP5/fiap-gs-space-connect/issues/101) | Lighting & framing grade (FOV 50, rim/fill lights, earthshine falloff, fog dedupe+tint) | static | — |
+| [#102](https://github.com/IamP5/fiap-gs-space-connect/issues/102) | Earth atmosphere Fresnel shader (sun-angle Rayleigh/Mie rim) | static shader | — |
+| [#103](https://github.com/IamP5/fiap-gs-space-connect/issues/103) | Moon shader polish (terminator rim-glow + limb darkening) | static shader | — |
+| [#104](https://github.com/IamP5/fiap-gs-space-connect/issues/104) | Soft shadows + contact shadows | static | — |
+| [#105](https://github.com/IamP5/fiap-gs-space-connect/issues/105) | Terrain microrelief noise | static | — |
+| [#106](https://github.com/IamP5/fiap-gs-space-connect/issues/106) | Twinkling stars + meteor streaks | animated | — |
+| [#107](https://github.com/IamP5/fiap-gs-space-connect/issues/107) | Snapshot-driven FX (rover dust, bid-war strobe, resurrection shockwave) | demand-safe | — |
+| [#108](https://github.com/IamP5/fiap-gs-space-connect/issues/108) | Cinematic beats (intro fly-in, Earthrise hero, launch + shake) | animated | — |
+| [#109](https://github.com/IamP5/fiap-gs-space-connect/issues/109) | Camera feel (idle drift, inertial damping, zoom exposure, parallax) | animated | — |
+| [#110](https://github.com/IamP5/fiap-gs-space-connect/issues/110) | Sun GodRays + lens flare (orbit-gated) | static | #99 |
+| [#111](https://github.com/IamP5/fiap-gs-space-connect/issues/111) | Material tier polish (dome roughness, clearcoat metal, rock PBR, solar glint, emissive windows) | static | #99 |
+| [#112](https://github.com/IamP5/fiap-gs-space-connect/issues/112) | Living Earth (cloud shell + city-light flicker) | animated | #102 |
+
+**Ready to start now (no blockers):** #99, #100, #101, #102, #103, #104, #105, #106, #107, #108, #109.
