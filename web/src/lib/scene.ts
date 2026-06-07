@@ -120,15 +120,6 @@ export const LUNAR_SET_PIECES: SetPiece[] = [
     realMeters: REAL_METERS.baseStation,
     fallbackColor: "#8c8c84",
   },
-  {
-    key: "astronaut",
-    modelRef: "/assets/models/astronaut.glb",
-    position: [2.6, 0, -4.5],
-    rotation: [0, -Math.PI / 3, 0],
-    realMeters: REAL_METERS.astronaut,
-    fallbackColor: "#d9d9d9",
-    fallbackShape: "capsule",
-  },
 ];
 
 // The SHACKLETON (lunar south pole) complex. REUSES the SAME GLBs as lunar (NO new
@@ -161,15 +152,6 @@ export const SHACKLETON_SET_PIECES: SetPiece[] = [
     rotation: [0, Math.PI / 3, 0],
     realMeters: REAL_METERS.crawler,
     fallbackColor: "#43464d",
-  },
-  {
-    key: "shk-astronaut",
-    modelRef: "/assets/models/astronaut.glb",
-    position: [3.2, 0, -5],
-    rotation: [0, -Math.PI / 2.4, 0],
-    realMeters: REAL_METERS.astronaut,
-    fallbackColor: "#b9bcc4",
-    fallbackShape: "capsule",
   },
 ];
 

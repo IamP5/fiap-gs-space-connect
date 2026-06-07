@@ -1665,7 +1665,6 @@ const SHACKLETON_SHADOW_ANCHORS: { at: [number, number]; len: number }[] = [
   { at: [-10, -16], len: 1.25 }, // shk-base-station
   { at: [14, -18], len: 1.15 }, // shk-lander
   { at: [-26, -30], len: 1.4 }, // shk-crawler
-  { at: [3.2, -5], len: 0.8 }, // shk-astronaut
   { at: [0, 0], len: 1.0 }, // dome cluster centre
 ];
 
@@ -2015,19 +2014,17 @@ const VIEW_PRESETS: Record<
   }
 > = {
   surface: {
-    // Pulled IN for the LITERAL real-meters scale (Epic 04 P0): the worksite now
-    // renders at its true ~5-unit footprint (was an autoscaled ~20-unit slab), so
-    // the orbit distance band drops (8→5, 33→24) and the target sits on the small
-    // worksite cluster (centred near the mock dome) rather than a point 4 units up
-    // in the air — otherwise CameraFeel/OrbitControls clamp the camera far away
-    // from the now-small worksite and it never frames. Tune on screen.
-    minDistance: 3,
-    maxDistance: 22,
-    minPolarAngle: Math.PI / 6,
-    // Allow a flatter, more horizon-facing look (up to ~80° from vertical) so the
-    // plain + sky + distant Earth read; still clamped short of dipping under it.
+    // A 3D-game / RTS-style camera looking DOWN on the worksite so the regolith
+    // terrain reads as a surveyable plain (not a horizon strip). The band is wide
+    // enough to pull back and take in the whole site; the polar clamps favour an
+    // elevated 3/4 look — near top-down at the tight end (~18° off vertical), with
+    // room to tip toward the horizon (~80°) if the player wants the standing-on-
+    // the-Moon read. Target sits on the worksite cluster centre. Tune on screen.
+    minDistance: 6,
+    maxDistance: 34,
+    minPolarAngle: Math.PI / 10,
     maxPolarAngle: Math.PI / 2.25,
-    target: [2.5, 0.5, -2],
+    target: [2.5, 0, -3],
   },
   orbit: {
     // The space vista: the camera ORBITS THE MOON GLOBE itself (target = the
@@ -2050,25 +2047,23 @@ const VIEW_PRESETS: Record<
 // the destination pose. Tuned by eye; see CameraTransition.
 type Pose = { position: THREE.Vector3; target: THREE.Vector3 };
 
-// Surface: the rehearsed worksite framing (matches the Canvas `camera` default).
-// A lower pitch that looks OUT toward the horizon so the regolith plain recedes
-// into the fog and the sky (with a distant Earth) reads above it — "standing on
-// the Moon," not staring straight down at a platform. Pulled in (Epic 04 P0): the
-// worksite now renders at its LITERAL real size (a ~2–3 unit dome cluster, not
-// the old autoscaled ~20-unit slab), so the camera berths close to read the
-// rovers + rising dome, with the literally-sized launch complex towering behind.
+// Surface: an elevated 3D-game / RTS camera looking DOWN on the worksite (matches
+// the Canvas `camera` default). High vantage at a ~43° pitch off vertical so the
+// regolith terrain spreads out below as a surveyable plain — the rovers + rising
+// dome read from above, with the literally-sized launch complex laid out behind.
 const SURFACE_POSE: Pose = {
-  position: new THREE.Vector3(2.5, 5, 6),
-  target: new THREE.Vector3(2.5, 0.5, -2),
+  position: new THREE.Vector3(2.5, 15, 11),
+  target: new THREE.Vector3(2.5, 0, -3),
 };
-// Per-site surface poses (Epic 04 P4). Lunar reuses the rehearsed worksite framing
-// above. Shackleton sits LOWER + a touch further BACK so the low grazing pole sun
-// (SITE_FRAMES.shackleton.sunDir) rakes its long shadow fakes TOWARD the camera —
-// the shadows lead the eye INTO the frame (the pole-outpost read), not away from it.
+// Per-site surface poses (Epic 04 P4). Lunar reuses the elevated worksite framing
+// above. Shackleton sits a touch LOWER + further BACK (a ~51° pitch) so the low
+// grazing pole sun (SITE_FRAMES.shackleton.sunDir) still rakes its long shadow
+// fakes across the terrain TOWARD the camera — the shadows lead the eye INTO the
+// frame (the pole-outpost read) even from the higher game-camera vantage.
 const LUNAR_SURFACE_POSE: Pose = SURFACE_POSE;
 const SHACKLETON_SURFACE_POSE: Pose = {
-  position: new THREE.Vector3(2.5, 3.4, 8.5),
-  target: new THREE.Vector3(2.5, 0.4, -3),
+  position: new THREE.Vector3(2.5, 13, 13),
+  target: new THREE.Vector3(2.5, 0, -4),
 };
 // A high vantage straight over the worksite — the start/end of the descent half,
 // so the surface "drops in" from above rather than cutting in flat.
