@@ -642,19 +642,21 @@ function EarthBody({ visible, viewMode }: { visible: boolean; viewMode: ViewMode
         // day/night boundary into a gentle gradient, not the crisp Moon edge. The
         // old 0.12 read as a hard line; widened again 0.24→0.45 so the day/night
         // hand-off is a broad, smooth dusk band like the NASA reference.
-        uTermWidth: { value: 0.45 }, // soft terminator half-width
+        uTermWidth: { value: 0.15 }, // soft terminator half-width
         // Broader sub-solar highlight (60→30): a tight specular speckled at the small
         // marble size; a softer, wider glint reads cleanly as "sun on the oceans".
         uGlintShininess: { value: 30.0 },
         uGlintStrength: { value: 0.7 },
         uAmbient: { value: 0.03 },
-        // Day-side exposure (Wave 4.1): pull the sunlit hemisphere down to ~0.6 so the
-        // bright Blue Marble + bloom no longer blows out the day side.
-        uDayExposure: { value: 0.6 },
+        // Day-side exposure (Wave 4.1): pull the sunlit hemisphere down so the bright
+        // Blue Marble + bloom no longer blows out. Dropped 0.6→0.44 (operator: day
+        // side darker) for a moodier, deeper-space read.
+        uDayExposure: { value: 0.44 },
         // Earthshine night fill (Wave 4.1): a faint cool wash of the day geography on
         // the dark side so the terminator is a smooth grey→grey gradient (like the
-        // Moon), not a hard lit→black edge.
-        uNightFill: { value: 0.08 },
+        // Moon), not a hard lit→black edge. 0.08→0.055 (operator: dark side a little
+        // darker) — still filled enough to keep the terminator soft, just dimmer.
+        uNightFill: { value: 0.055 },
       },
       fog: false,
     });
