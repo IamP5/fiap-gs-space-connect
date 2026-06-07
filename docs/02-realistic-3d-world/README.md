@@ -112,7 +112,7 @@ AFK; blockers noted.
 | [#102](https://github.com/IamP5/fiap-gs-space-connect/issues/102) | Earth atmosphere Fresnel shader (sun-angle Rayleigh/Mie rim) | static shader | — |
 | [#103](https://github.com/IamP5/fiap-gs-space-connect/issues/103) | Moon shader polish (terminator rim-glow + limb darkening) | static shader | — |
 | [#104](https://github.com/IamP5/fiap-gs-space-connect/issues/104) | Soft shadows + contact shadows | static | — |
-| [#105](https://github.com/IamP5/fiap-gs-space-connect/issues/105) | Terrain microrelief noise | static | — |
+| [#105](https://github.com/IamP5/fiap-gs-space-connect/issues/105) | Terrain microrelief noise | static | ✅ 7caf185 |
 | [#106](https://github.com/IamP5/fiap-gs-space-connect/issues/106) | Twinkling stars + meteor streaks | animated | — |
 | [#107](https://github.com/IamP5/fiap-gs-space-connect/issues/107) | Snapshot-driven FX (rover dust, bid-war strobe, resurrection shockwave) | demand-safe | — |
 | [#108](https://github.com/IamP5/fiap-gs-space-connect/issues/108) | Cinematic beats (intro fly-in, Earthrise hero, launch + shake) | animated | — |

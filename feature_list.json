@@ -1078,7 +1078,7 @@
       "area": "realistic-3d-world",
       "title": "Terrain microrelief noise",
       "user_visible_behavior": "The regolith ground reads as fine chaotic surface rather than smooth dunes.",
-      "status": "not_started",
+      "status": "passing",
       "issue": 105,
       "epic": 46,
       "depends_on": [],
@@ -1086,7 +1086,9 @@
         "cd web && npm run build && npm test (TS-clean + vitest)",
         "manual: orbit & surface screenshots; animated slices pause when the tab is hidden"
       ],
-      "evidence": [],
+      "evidence": [
+        "7caf185 — high-freq value-noise octave added to terrain vertex displacement (static, built-once in useMemo, computeVertexNormals picks up relief); lint + build (tsc-clean) + 116 vitest tests green; 0 idle fps preserved"
+      ],
       "notes": "Wave 3 (cinematic beauty & immersion). AFK."
     },
     {
