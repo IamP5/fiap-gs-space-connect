@@ -83,6 +83,12 @@ import {
   interpretBuildSpec,
 } from "../lib/buildspec";
 import { type Ghost, footprintOf } from "../lib/placement";
+import {
+  IDLE_DELAY_MS,
+  idleSwayOffset,
+  parallaxOffset,
+  zoomExposure,
+} from "../lib/cameraFeel";
 import { LaunchScenery } from "./LaunchScenery";
 import { DecorRocks } from "./DecorRocks";
 
@@ -2138,6 +2144,190 @@ function RigBridge({
   return null;
 }
 
+// CameraFeel — slice #109. Decorative camera polish that NEVER touches the
+// snapshot (ADR-0004 purity intact): a gentle idle azimuth sway after ~4s of no
+// input, a zoom-coupled tone-mapping-exposure lift, and a subtle starfield
+// parallax as the orbit azimuth moves. The actual numbers are pure helpers in
+// lib/cameraFeel.ts; this component only wires them to the live camera/scene.
+//
+// Demand-loop discipline (Wave-3 relaxation): the idle sway is the only piece
+// that needs an ongoing loop, so it self-sustains by calling invalidate() each
+// frame WHILE drifting and STOPS (returns to 0 idle fps) the moment the user
+// interacts OR the tab is hidden. Exposure + parallax are cheap reads applied on
+// frames the loop is already painting (interaction, drift, snapshots), so they
+// add no idle cost of their own. A timer wakes the loop once at the 4s mark so
+// the drift can begin from a fully-settled, otherwise-idle scene.
+//
+// `active` is false while placing or during the descent transition — those own
+// the camera — so the feel layer stays out of their way.
+// The OrbitControls surface CameraFeel reads/subscribes to. Kept as a hand-rolled
+// interface (rather than OrbitLike, whose EventDispatcher event-map types the
+// listener param as `never`) with a loose, string-keyed add/removeEventListener.
+type FeelControls = {
+  target: THREE.Vector3;
+  enabled: boolean;
+  minDistance: number;
+  maxDistance: number;
+  getDistance: () => number;
+  getAzimuthalAngle: () => number;
+  addEventListener: (type: string, listener: () => void) => void;
+  removeEventListener: (type: string, listener: () => void) => void;
+};
+
+function CameraFeel({ active }: { active: boolean }) {
+  const controls = useThree((s) => s.controls) as FeelControls | null;
+  const camera = useThree((s) => s.camera);
+  const scene = useThree((s) => s.scene);
+  const gl = useThree((s) => s.gl);
+  const invalidate = useThree((s) => s.invalidate);
+  const domElement = gl.domElement;
+
+  // Mutable feel state, kept in refs so it never triggers a React re-render.
+  // Timestamp of the last user input; the idle clock counts up from here.
+  const lastInputRef = useRef<number>(performance.now());
+  // The azimuth captured the first idle frame; the sway oscillates AROUND it and
+  // it's cleared on every interaction so the next idle re-captures from wherever
+  // the user left the camera. null = not currently drifting.
+  const restAzimuthRef = useRef<number | null>(null);
+  // The settled camera offset (position − target) at rest; the idle sway rotates
+  // a CLONE of this around the target's up-axis so amplitude can't accumulate.
+  const restOffsetRef = useRef(new THREE.Vector3());
+  // Parallax anchor: the orbit azimuth at the most recent input-start. The sky
+  // lags as the live azimuth moves away from it, so a drag visibly parallaxes
+  // the starfield; clamped in parallaxOffset() so a long drag can't wind it off.
+  const anchorAzimuthRef = useRef<number | null>(null);
+  // The parallax yaw offset CURRENTLY applied to scene.backgroundRotation. We
+  // apply parallax as a relative delta (apply new − undo old) so SpaceEnvironment
+  // owns the base orientation — even if its texture loads after we start — and we
+  // only ever ride a small offset on top of it.
+  const appliedParallaxRef = useRef(0);
+  // True between OrbitControls 'start' and 'end' (a drag/zoom in progress). The
+  // idle sway is suppressed while dragging so a long (>4s) continuous drag can't
+  // start drifting under the user's own gesture.
+  const draggingRef = useRef(false);
+
+  useEffect(() => {
+    if (!controls || !active) return;
+
+    const markInput = () => {
+      lastInputRef.current = performance.now();
+      // Cancel any in-progress sway instantly; the next idle frame re-captures.
+      restAzimuthRef.current = null;
+      // Anchor parallax at the current azimuth so the sky lags the coming drag.
+      anchorAzimuthRef.current = controls.getAzimuthalAngle();
+      // Schedule a single wake at the idle threshold so the drift can start even
+      // when nothing else is invalidating (a fully-settled scene).
+      if (idleTimer) clearTimeout(idleTimer);
+      idleTimer = window.setTimeout(() => invalidate(), IDLE_DELAY_MS + 16);
+    };
+    // A gesture begins: mark input and flag the drag so drift stays suppressed
+    // for its whole duration (however long the user holds it).
+    const onStart = () => {
+      draggingRef.current = true;
+      markInput();
+    };
+    // A gesture ends (release / wheel settle): clear the flag and RESTART the
+    // idle clock from the release moment, so the ~4s countdown is measured from
+    // when the user actually stopped — not from when the gesture began.
+    const onEnd = () => {
+      draggingRef.current = false;
+      markInput();
+    };
+
+    // User-input signals only (NOT OrbitControls' 'change', which our own idle
+    // update() would re-fire and pin the loop awake forever). 'start'/'end' frame
+    // each gesture; the raw DOM events cover the very first touch and wheel.
+    let idleTimer = 0;
+    controls.addEventListener("start", onStart);
+    controls.addEventListener("end", onEnd);
+    domElement.addEventListener("pointerdown", markInput);
+    domElement.addEventListener("wheel", markInput, { passive: true });
+    domElement.addEventListener("touchstart", markInput, { passive: true });
+
+    // Tab visibility: while hidden the useFrame is parked (no invalidate), so the
+    // drift pauses and idle fps drops to 0. On RETURN, treat it like fresh input
+    // so the idle clock restarts from now (no phase jump) and the wake is re-armed.
+    const onVisibility = () => {
+      if (!document.hidden) markInput();
+    };
+    document.addEventListener("visibilitychange", onVisibility);
+
+    // Arm the first idle wake from mount.
+    markInput();
+
+    return () => {
+      controls.removeEventListener("start", onStart);
+      controls.removeEventListener("end", onEnd);
+      domElement.removeEventListener("pointerdown", markInput);
+      domElement.removeEventListener("wheel", markInput);
+      domElement.removeEventListener("touchstart", markInput);
+      document.removeEventListener("visibilitychange", onVisibility);
+      if (idleTimer) clearTimeout(idleTimer);
+      // Undo any parallax we rode on top of SpaceEnvironment's base yaw so the
+      // sky returns to its framed orientation when the feel layer deactivates.
+      const bg = (scene as THREE.Scene).backgroundRotation;
+      if (bg) bg.y -= appliedParallaxRef.current;
+      appliedParallaxRef.current = 0;
+    };
+  }, [controls, domElement, invalidate, active, scene]);
+
+  // Reusable scratch so the per-frame path allocates nothing.
+  const qRef = useRef(new THREE.Quaternion());
+  const offRef = useRef(new THREE.Vector3());
+
+  useFrame(() => {
+    if (!controls || !active) return;
+    // Pause ALL idle motion while the tab is hidden — never wake the loop when
+    // nothing is visible (the Wave-3 visibility guard).
+    if (typeof document !== "undefined" && document.hidden) return;
+
+    // --- zoom-coupled exposure (cheap read; applied every painted frame) ------
+    gl.toneMappingExposure = zoomExposure(
+      controls.getDistance(),
+      controls.minDistance,
+      controls.maxDistance,
+    );
+
+    const azimuth = controls.getAzimuthalAngle();
+
+    // --- idle sway ------------------------------------------------------------
+    // Suppressed while a gesture is in progress (draggingRef) so the user's own
+    // drag is never fought; only kicks in once they've settled for ~4s.
+    const idleElapsed = performance.now() - lastInputRef.current - IDLE_DELAY_MS;
+    if (idleElapsed > 0 && !draggingRef.current) {
+      // Capture the rest pose on the first idle frame so the sway oscillates
+      // around where the user left the camera.
+      if (restAzimuthRef.current === null) {
+        restAzimuthRef.current = azimuth;
+        restOffsetRef.current.copy(camera.position).sub(controls.target);
+      }
+      const sway = idleSwayOffset(idleElapsed);
+      // Rotate the rest offset around the target's up-axis by the sway angle and
+      // reposition the camera; drei's OrbitControls.update() (same frame) reads
+      // this as the new baseline, so it sticks with no damping fight.
+      const off = offRef.current.copy(restOffsetRef.current);
+      off.applyQuaternion(qRef.current.setFromAxisAngle(camera.up, sway));
+      camera.position.copy(controls.target).add(off);
+      // Keep the demand loop alive for the next sway frame.
+      invalidate();
+    }
+
+    // --- starfield parallax ---------------------------------------------------
+    // The sky lags the camera azimuth, measured from the input-start anchor (so a
+    // drag parallaxes; the idle sway gently counter-sways it too). Applied as a
+    // RELATIVE delta so SpaceEnvironment keeps ownership of the base orientation.
+    const bg = (scene as THREE.Scene).backgroundRotation;
+    if (bg) {
+      const anchor = anchorAzimuthRef.current ?? azimuth;
+      const want = parallaxOffset(azimuth - anchor);
+      bg.y += want - appliedParallaxRef.current;
+      appliedParallaxRef.current = want;
+    }
+  });
+
+  return null;
+}
+
 // The canonical settled pose for a mode (start/end of the descent transition).
 const poseFor = (m: ViewMode): Pose => (m === "orbit" ? ORBIT_POSE : SURFACE_POSE);
 
@@ -2410,9 +2600,16 @@ export function Scene3D({
           minPolarAngle={preset.minPolarAngle}
           maxPolarAngle={preset.maxPolarAngle}
           target={preset.target}
+          // Inertial damping (#109): the controls glide to a stop instead of
+          // snapping, so orbiting/zooming feels weighty. drei runs update() each
+          // awake frame, so this also smooths the idle sway hand-off.
           enableDamping
           dampingFactor={0.08}
         />
+        {/* Camera feel (#109): idle drift, zoom-coupled exposure, parallax. OFF
+            while placing or transitioning — those own the camera. Decorative;
+            never reads the snapshot. */}
+        <CameraFeel active={!placing && !transitioning} />
       </Canvas>
       {/* Glare overlay for the descent transition. A child of .stage (position:
           relative), so it fills the stage; pointer-events:none keeps clicks going
