@@ -62,8 +62,8 @@ export const ControlsPanel = memo(function ControlsPanel({
       <div className="controls-eyebrow">Stress controls</div>
 
       {/* Camera view-mode toggle (issue #49): surface = rehearsed worksite
-          framing (default, ADR-0004); orbit = pulled-back vantage that takes in
-          the distant parked Moon. Both framings stay clamped. */}
+          framing (default, ADR-0004); orbit = the Moon space-vista (worksite
+          hidden). Toggling plays a glare-masked descent between them. Clamped. */}
       <div className="control">
         <div className="control-head">
           <span className="control-label">View</span>
@@ -87,7 +87,7 @@ export const ControlsPanel = memo(function ControlsPanel({
           </button>
         </div>
         <p className="control-caption">
-          surface worksite framing · orbit pulls back to the Moon
+          surface worksite · orbit flies up to the Moon vista
         </p>
       </div>
 
