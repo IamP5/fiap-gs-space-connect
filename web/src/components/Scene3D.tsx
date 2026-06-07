@@ -41,8 +41,16 @@ import { Canvas, useFrame, useThree, type ThreeEvent } from "@react-three/fiber"
 import { Line, OrbitControls } from "@react-three/drei";
 import { SpaceEnvironment } from "./SpaceEnvironment";
 import { SkyBodies } from "./SkyBodies";
-import { EffectComposer, SelectiveBloom } from "@react-three/postprocessing";
-import { KernelSize } from "postprocessing";
+import {
+  ChromaticAberration,
+  DepthOfField,
+  EffectComposer,
+  Noise,
+  SelectiveBloom,
+  SMAA,
+  Vignette,
+} from "@react-three/postprocessing";
+import { BlendFunction, KernelSize } from "postprocessing";
 import * as THREE from "three";
 import type { RoverView, Snapshot, TaskView, Vec2 } from "../types/wire";
 import { batteryPercent } from "../lib/format";
@@ -89,6 +97,19 @@ const SIGNAL_REVIVE = "#38e1ff"; // recovered — the in-place comeback pulse
 // ONLY objects on this layer, so the glow is confined to status halos and never
 // leaks onto the terrain, rovers, or dome (ADR-0004's "bloom only on halos").
 const HALO_BLOOM_LAYER = 11;
+
+// A SECOND selective-bloom layer for the brightest CELESTIAL bodies — the Sun
+// core and Earth's limb (SkyBodies). The halo bloom (above) is tuned tight for
+// the small status halos; the celestial pass is a separate SelectiveBloom with a
+// lower luminance threshold and a wider kernel so the genuinely bright bodies
+// glow softly, without leaking that glow onto the terrain/rovers (still layer-
+// gated, never full-scene — ADR-0004). Exported so SkyBodies can enable it on the
+// Sun core mesh and Earth rim shell.
+export const CELESTIAL_BLOOM_LAYER = 12;
+
+// Subtle orbit-only chromatic-aberration offset. A module-level constant (stable
+// reference) so it never re-triggers the memoized effect across renders.
+const CHROMATIC_OFFSET = new THREE.Vector2(0.001, 0.002);
 
 // ---- shared geometry buffers ------------------------------------------------
 
@@ -1079,25 +1100,46 @@ function LunarTerrain() {
   );
 }
 
-// ---- bloom (selective, halos only) -----------------------------------------
+// ---- cinematic post-processing stack (issue #99) ---------------------------
 
-// SelectiveBloom blooms ONLY meshes on HALO_BLOOM_LAYER (the status/winner
-// halos), never the full scene — ADR-0004's hard guard. Kept cheap: a small
-// blur kernel and no composer MSAA, so it adds minimal GPU cost and plays nicely
-// with frameloop="demand" (it renders only on invalidated frames).
+// A single static EffectComposer carrying the full cinematic stack. It replaces
+// the old halo-only SelectiveBloom pipeline. Every pass is STATIC — none runs a
+// useFrame and none invalidates — so the composer renders ONLY on invalidated
+// frames and 0 idle fps is preserved (frameloop="demand"). All bloom is still
+// layer-gated (HALO + CELESTIAL), never full-scene — ADR-0004's hard guard.
 //
-// MEMOIZED on its single (stable) lightRef prop. Without this, the parent
-// SceneContents re-renders on every snapshot (~12 Hz), which re-renders
-// <SelectiveBloom>, whose internal effect-useMemo depends on a fresh `...props`
-// object each render — so a brand-new SelectiveBloomEffect (and its Selection)
-// was being constructed ~12×/sec. Each Selection pulls from postprocessing's
-// MODULE-GLOBAL layer-id counter; once it climbed past 31 the lib spammed
-// "Layer out of range, resetting to 2" forever. memo() keeps the whole
-// postprocessing subtree stable across snapshots, so the effect is built once.
-const HaloBloom = memo(function HaloBloom({
+// Pass order (composer applies them in declaration order):
+//   1. SMAA          — antialiasing FIRST, since the canvas runs antialias:false
+//                      (the composer owns the framebuffers, so MSAA on the canvas
+//                      backbuffer would be wasted and trips the ANGLE/macOS
+//                      glBlitFramebuffer depth/stencil error).
+//   2. SelectiveBloom (halos)     — tight, small kernel, just the status halos.
+//   3. SelectiveBloom (celestial) — Sun core + Earth limb, lower threshold,
+//                      wider kernel, SCREEN blend + smoothed luminance.
+//   4. DepthOfField  — surface-only (mounted only on the surface): the distant
+//                      Earth/horizon fall soft while the worksite stays sharp. In
+//                      orbit it is OFF so the Moon hero stays deep-focus/crisp.
+//   5. ChromaticAberration — orbit-only (mounted only in orbit): a subtle lens
+//                      fringe on the deep-space vista; off on the surface so the
+//                      worksite UI/telemetry stays clean.
+//   6. Vignette      — gentle corner darkening, both views.
+//   7. Noise         — faint film grain, SCREEN blend, very low opacity.
+//
+// MEMOIZED on its (stable) props. Without this, the parent SceneContents
+// re-renders on every snapshot (~12 Hz), which re-renders the effects, whose
+// internal effect-useMemos depend on a fresh `...props` object each render — so
+// brand-new effects (and Selections) were being constructed ~12×/sec. Each
+// Selection pulls from postprocessing's MODULE-GLOBAL layer-id counter; once it
+// climbed past 31 the lib spammed "Layer out of range, resetting to 2" forever.
+// memo() keeps the whole postprocessing subtree stable across snapshots, so the
+// effects are built once. onSurface DOES change (a real remount on view flip),
+// which is the only time the stack legitimately rebuilds.
+const CinematicFX = memo(function CinematicFX({
   lightRef,
+  onSurface,
 }: {
   lightRef: React.RefObject<THREE.DirectionalLight>;
+  onSurface: boolean;
 }) {
   // The directional light mounts in the same pass as this component, so its ref
   // is null on first render. Force exactly one re-render after mount so the ref
@@ -1108,16 +1150,17 @@ const HaloBloom = memo(function HaloBloom({
   const light = lightRef.current;
   if (!light) return null;
   return (
-    // multisampling={0}: SelectiveBloom does its own threshold/blur, so composer
-    // MSAA buys nothing here. A SMALL kernel keeps the blur passes (and their
-    // render targets) light — the halos are tiny, so a wide kernel would be
-    // wasted GPU memory. (The depth/stencil glBlitFramebuffer error ANGLE/macOS
-    // drivers throw comes from the CANVAS's antialias:true backbuffer, not this
-    // composer — see the Canvas gl props below, where antialias is off.)
+    // multisampling={0}: SMAA does the antialiasing inside the composer, so
+    // composer MSAA buys nothing and would only cost a multisampled target.
     <EffectComposer multisampling={0}>
+      {/* SMAA first — the canvas runs antialias:false (composer owns framebuffers). */}
+      <SMAA />
+      {/* Halo bloom — status/winner halos only. Tight: small kernel, high-ish
+          threshold so only the bright halo cores glow. SCREEN blend, smoothed. */}
       <SelectiveBloom
         lights={[light]}
         selectionLayer={HALO_BLOOM_LAYER}
+        blendFunction={BlendFunction.SCREEN}
         intensity={2.2}
         luminanceThreshold={0.1}
         luminanceSmoothing={0.2}
@@ -1125,6 +1168,48 @@ const HaloBloom = memo(function HaloBloom({
         kernelSize={KernelSize.SMALL}
         radius={0.6}
       />
+      {/* Celestial bloom — the genuinely bright bodies (Sun core, Earth limb) on
+          CELESTIAL_BLOOM_LAYER. Lower threshold + wider kernel so they glow softly;
+          SCREEN blend with smoothed luminance for a clean, additive halo. */}
+      <SelectiveBloom
+        lights={[light]}
+        selectionLayer={CELESTIAL_BLOOM_LAYER}
+        blendFunction={BlendFunction.SCREEN}
+        intensity={1.1}
+        luminanceThreshold={0.08}
+        luminanceSmoothing={0.35}
+        mipmapBlur
+        kernelSize={KernelSize.LARGE}
+        radius={0.85}
+      />
+      {/* Surface-gated DoF — distant Earth/horizon soften while the worksite stays
+          sharp. Mounted ONLY on the surface; in orbit the Moon hero stays crisp. */}
+      {onSurface ? (
+        <DepthOfField
+          focusDistance={0.0}
+          focalLength={0.02}
+          bokehScale={2.2}
+          height={480}
+        />
+      ) : (
+        <></>
+      )}
+      {/* Orbit-only chromatic aberration — a subtle lens fringe on the deep-space
+          vista. Off on the surface so worksite telemetry stays crisp. */}
+      {onSurface ? (
+        <></>
+      ) : (
+        <ChromaticAberration
+          blendFunction={BlendFunction.NORMAL}
+          offset={CHROMATIC_OFFSET}
+          radialModulation={false}
+          modulationOffset={0}
+        />
+      )}
+      {/* Gentle corner vignette — both views. */}
+      <Vignette offset={0.3} darkness={0.4} blendFunction={BlendFunction.NORMAL} />
+      {/* Faint film grain — SCREEN blend, very low opacity, both views. */}
+      <Noise blendFunction={BlendFunction.SCREEN} opacity={0.03} />
     </EffectComposer>
   );
 });
@@ -1580,8 +1665,11 @@ function SceneContents({
         <PlacementPlane map={map} onMove={onPlaceMove} onConfirm={onPlaceConfirm} />
       ) : null}
 
-      {/* Selective bloom — halos ONLY (ADR-0004). Rendered last; reads lightRef. */}
-      <HaloBloom lightRef={lightRef} />
+      {/* Cinematic post-processing stack (#99) — layer-gated bloom (halos +
+          celestial Sun/Earth), SMAA, surface-gated DoF, orbit-only chromatic
+          aberration, vignette, film grain. Rendered last; reads lightRef. All
+          passes static (demand-loop safe). */}
+      <CinematicFX lightRef={lightRef} onSurface={onSurface} />
     </group>
   );
 }
