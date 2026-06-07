@@ -1247,6 +1247,80 @@
         "chrome-devtools MCP: orbit + surface screenshots verified; merged to main 2026-06-07 via PR #124 -> wave3/integration -> main (PR #125)"
       ],
       "notes": "Wave 4 'living orbit'. Generalised #112: frameloop='always' (ADR-0004 demand-loop budget dropped — see AGENTS.md/ADR-0004 amendment); custom Earth day/night+ocean-glint ShaderMaterial; drifting NASA-PD cloud shell; decoupled ORBIT_SUN_POSITION for the dark-side Moon (surface keeps SUN_POSITION); orbit IBL dimmed (EnvironmentGrade) so the Moon's far side reads dark. Session 008 polish: slow spin, earthshine night-fill for a Moon-smooth terminator, dimmer moody exposure, warm divider band removed, and logarithmicDepthBuffer to kill the concentric-shell (surface/cloud/rim) depth-fight flicker at the far orbit distance (custom shaders opt in via logdepthbuf_* chunks). Benign ANGLE/macOS glBlitFramebuffer warning is pre-existing."
+    },
+    {
+      "id": "r3d-128",
+      "priority": 60,
+      "area": "app-init-refactor",
+      "title": "Remove the 2D scene — 3D is the only renderer",
+      "user_visible_behavior": "No 3D/2D toggle in the header; the app renders solely through Scene3D.",
+      "status": "not_started",
+      "issue": 128,
+      "epic": 127,
+      "depends_on": [],
+      "verification": [
+        "cd web && npm run build && npm test (TS-clean + vitest)",
+        "grep -rn \"WorldCanvas|hitTest\" web/src is clean"
+      ],
+      "evidence": [],
+      "notes": "Epic 05 app-init-refactor. AFK. Deletes WorldCanvas/hitTest(+test); keeps choreography. Retires the ADR-0004 2D rehearsed-fallback framing (in-scene primitive fallbacks remain). See docs/05-app-init-refactor."
+    },
+    {
+      "id": "r3d-129",
+      "priority": 61,
+      "area": "app-init-refactor",
+      "title": "Loading screen + preload-everything behind a branded splash",
+      "user_visible_behavior": "On boot a branded splash shows a filling progress bar; the scene reveals only once all assets are preloaded (or a safety timeout fires), so nothing pops in — even on descent.",
+      "status": "not_started",
+      "issue": 129,
+      "epic": 127,
+      "depends_on": [
+        "r3d-128"
+      ],
+      "verification": [
+        "cd web && npm run build && npm test (TS-clean + vitest incl. assets.test.ts)",
+        "manual (DevTools throttle): filling bar; Canvas mounts only after preload/timeout; no surface pop-in on descent"
+      ],
+      "evidence": [],
+      "notes": "Epic 05. AFK. New lib/assets.ts (manifest + preloadAllAssets, settles-not-rejects), lib/textureCache.ts (URL-keyed), components/LoadingScreen.tsx (deterministic bar + one-way reveal latch + safety timeout). Warms module-level gltfCache/sceneryCache. ADR-0004: reveal must not require errors.length===0."
+    },
+    {
+      "id": "r3d-130",
+      "priority": 62,
+      "area": "app-init-refactor",
+      "title": "Orbit default + immediate idle camera drift",
+      "user_visible_behavior": "The app opens in the orbit Moon vista with the idle camera drift already moving on the first revealed frame — no 4 s wait, no auto push-in.",
+      "status": "not_started",
+      "issue": 130,
+      "epic": 127,
+      "depends_on": [
+        "r3d-129"
+      ],
+      "verification": [
+        "cd web && npm run build && npm test (TS-clean + vitest)",
+        "manual: reveal is orbit vista with drift already moving (eases in, no snap); post-interaction the normal 4 s delay still applies"
+      ],
+      "evidence": [],
+      "notes": "Epic 05. AFK. viewMode default orbit (was surface); CameraFeel mount seeds lastInputRef pre-elapsed (now - IDLE_DELAY_MS). Surface intro fly-in self-disables (early-returns unless surface). Only initial idle behavior changes."
+    },
+    {
+      "id": "r3d-131",
+      "priority": 63,
+      "area": "app-init-refactor",
+      "title": "Base mark on the Moon’s sunlit hemisphere",
+      "user_visible_behavior": "In orbit the lunar base marker sits clearly on the sunlit hemisphere and is clickable; clicking it descends to the worksite.",
+      "status": "not_started",
+      "issue": 131,
+      "epic": 127,
+      "depends_on": [
+        "r3d-130"
+      ],
+      "verification": [
+        "cd web && npm run build && npm test (TS-clean + vitest)",
+        "manual: marker on the lit hemisphere (not terminator), clickable, descent crisp with no pop-in"
+      ],
+      "evidence": [],
+      "notes": "Epic 05. AFK. Re-seat LunarBaseMarker normal as a normalized blend of ORBIT_SUN_POSITION dir and near-face dir (sun ~perpendicular to camera, so pure sun-normal hits the limb). Keep surface-normal quaternion so the ring lies flat. Blend weight tuned by eye."
     }
   ]
 }
