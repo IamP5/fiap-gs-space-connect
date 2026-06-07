@@ -27,6 +27,7 @@ import { MeshoptDecoder } from "three/examples/jsm/libs/meshopt_decoder.module.j
 import { mergeGeometries } from "three/examples/jsm/utils/BufferGeometryUtils.js";
 import { suppressRaycast } from "../lib/suppressRaycast";
 import { applyGltfTextureFidelity, polishGltfMaterials } from "../lib/textureFidelity";
+import { REAL_METERS, SCENE_UNITS_PER_METER } from "../lib/scene";
 import { CELESTIAL_BLOOM_LAYER } from "./Scene3D";
 
 // Self-contained loader + cache (mirrors Scene3D's loadGLTF): N references to the
@@ -77,12 +78,13 @@ type SetPiece = {
   modelRef: string;
   position: Vec3;
   rotation?: Vec3;
-  // Target for the model's LARGEST bounding-box dimension, in world units. The
-  // NASA glTFs have arbitrary native units + off-origin pivots, so a fixed scale
-  // scalar is meaningless (one model fills the sky, another is a speck). We fit
-  // each model to this size at load (see fitAndSeat) so presence is predictable
-  // regardless of the source units. The fallback box uses the same number.
-  fit: number;
+  // Real-world size (meters) of the model's LARGEST dimension. The NASA glTFs have
+  // arbitrary native units + off-origin pivots, so a fixed scale scalar is
+  // meaningless (one model fills the sky, another is a speck). We fit each model
+  // to realMeters · SCENE_UNITS_PER_METER scene units at load (see fitAndSeat), so
+  // presence is predictable AND its size is literal/believable next to the rovers
+  // and astronaut (Epic 04 P0). The fallback box uses the same computed size.
+  realMeters: number;
   // Tint for the primitive fallback shown until/if the glTF loads.
   fallbackColor: string;
   // Primitive used for the ADR-0004 fallback, both sized to the model's `fit`
@@ -91,65 +93,68 @@ type SetPiece = {
   fallbackShape?: "box" | "capsule";
 };
 
-// Set-pieces parked along the FAR edge of the ~20-unit worksite (GROUND_SPAN=20,
-// terrain reaches ±16), spread on x so they read as a launch complex on the
-// horizon without crowding the active worksite. `fit` keeps the towers tall but
-// no longer dominating: an ~8-unit launcher/gantry reads as a backdrop next to
-// the ~2-unit dome, the crawler sits low and wide, the lander is smallest.
+// Set-pieces of the launch complex. Sizes are now LITERAL real-world meters
+// (Epic 04 P0): the mobile launcher (120 m → 14.4 u) + gantry (90 m → 10.8 u)
+// tower over the ~2.5 m rovers and ~2 m astronaut, the crawler (40 m → 4.8 u)
+// sits low and wide, the lander (7 m) is smallest — true NASA proportions.
+// POSITIONS are RE-COMPOSED for the literal scale (literal sizes, staged layout —
+// what every NASA press render does): the worksite now renders at its real
+// ~2-unit footprint near the origin, so the big towers are pushed BACK + OUT
+// to read as a complex on the HORIZON behind it, while the human-scale base
+// station + astronaut sit just behind the worksite as the scale reference.
 const SET_PIECES: SetPiece[] = [
   {
     key: "crawler",
     modelRef: "/assets/models/nasa_crawler.glb",
-    position: [-13, 0, -13],
+    position: [-22, 0, -26],
     rotation: [0, Math.PI / 5, 0],
-    fit: 4.5,
+    realMeters: REAL_METERS.crawler,
     fallbackColor: "#5a5a4e",
   },
   {
     key: "mobile-launcher",
     modelRef: "/assets/models/nasa_mobile_launcher.glb",
-    position: [-5, 0, -15],
+    position: [-9, 0, -34],
     rotation: [0, 0, 0],
-    fit: 8,
+    realMeters: REAL_METERS.mobileLauncher,
     fallbackColor: "#6b6b72",
   },
   {
     key: "gantry",
     modelRef: "/assets/models/nasa_gantry.glb",
-    position: [6, 0, -14],
+    position: [12, 0, -32],
     rotation: [0, -Math.PI / 8, 0],
-    fit: 7,
+    realMeters: REAL_METERS.gantry,
     fallbackColor: "#7a4a3a",
   },
   {
     key: "lander",
     modelRef: "/assets/models/nasa_lunar_module.glb",
-    position: [13, 0, -12],
+    position: [22, 0, -22],
     rotation: [0, -Math.PI / 4, 0],
-    fit: 3,
+    realMeters: REAL_METERS.lander,
     fallbackColor: "#b8a070",
   },
   // Scale props (#89, rescoped). NASA-PD filler that gives the worksite human
-  // scale: a small Base Station (NASA/Ames) tucked just inside the far complex
-  // and an EVA Astronaut (NASA) standing beside it. The astronaut's `fit`
-  // (~0.9 world units tall) is the human-scale anchor against the ~8-unit
-  // towers. Both are draco-compressed (load via the vendored /draco/ decoder)
-  // and insignia-stripped — the US flags + NASA meatball were painted out of
-  // the suit texture (see CREDITS.md).
+  // scale: a small Base Station (NASA/Ames) tucked just behind the worksite and
+  // an EVA Astronaut (NASA) standing beside it — the human-scale anchor against
+  // the towering launcher/gantry on the horizon. Both are draco-compressed (load
+  // via the vendored /draco/ decoder) and insignia-stripped — the US flags + NASA
+  // meatball were painted out of the suit texture (see CREDITS.md).
   {
     key: "base-station",
     modelRef: "/assets/models/base-station.glb",
-    position: [9, 0, -9],
+    position: [4, 0, -6],
     rotation: [0, Math.PI / 6, 0],
-    fit: 1.8,
+    realMeters: REAL_METERS.baseStation,
     fallbackColor: "#8c8c84",
   },
   {
     key: "astronaut",
     modelRef: "/assets/models/astronaut.glb",
-    position: [7.4, 0, -8],
+    position: [2.6, 0, -4.5],
     rotation: [0, -Math.PI / 3, 0],
-    fit: 0.9,
+    realMeters: REAL_METERS.astronaut,
     fallbackColor: "#d9d9d9",
     fallbackShape: "capsule",
   },
@@ -360,26 +365,33 @@ function SceneryPiece({ piece }: { piece: SetPiece }) {
     };
   }, [merged]);
 
+  // The literal scene size (Epic 04 P0): real meters → scene units via the one
+  // fixed scale. Drives BOTH the fitAndSeat target for the loaded glTF and the
+  // primitive fallback below, so the fallback occupies the exact footprint the
+  // real model will (ADR-0004 fallback must read at the same scale).
+  const sceneSize = piece.realMeters * SCENE_UNITS_PER_METER;
+
   // Primitive fallback (ADR-0004) approximating the normalized model: a slim
-  // upright volume whose height is `fit` (towers read tall, the crawler low-ish),
-  // seated on the ground. `fallbackShape` picks the silhouette: a box for
-  // structures, a capsule for the astronaut. Both are sized to the model's `fit`
-  // bbox so the proxy occupies the same footprint until/if the glTF loads.
+  // upright volume whose height is `sceneSize` (towers read tall, the crawler
+  // low-ish), seated on the ground. `fallbackShape` picks the silhouette: a box
+  // for structures, a capsule for the astronaut. Both are sized to the model's
+  // computed scene size so the proxy occupies the same footprint until/if the
+  // glTF loads.
   const fallbackSize = useMemo<Vec3>(
-    () => [piece.fit * 0.6, piece.fit, piece.fit * 0.6],
-    [piece.fit],
+    () => [sceneSize * 0.6, sceneSize, sceneSize * 0.6],
+    [sceneSize],
   );
   const fallbackGeo = useMemo(() => {
     if (piece.fallbackShape === "capsule") {
       // CapsuleGeometry(radius, length, …): total height = length + 2·radius, so
-      // length = fit − 2·radius keeps the overall height at `fit`. A slim radius
-      // reads as a standing figure.
-      const radius = piece.fit * 0.2;
-      const length = Math.max(piece.fit - 2 * radius, 0.001);
+      // length = sceneSize − 2·radius keeps the overall height at sceneSize. A
+      // slim radius reads as a standing figure.
+      const radius = sceneSize * 0.2;
+      const length = Math.max(sceneSize - 2 * radius, 0.001);
       return new THREE.CapsuleGeometry(radius, length, 4, 8);
     }
     return new THREE.BoxGeometry(...fallbackSize);
-  }, [piece.fallbackShape, piece.fit, fallbackSize]);
+  }, [piece.fallbackShape, sceneSize, fallbackSize]);
   useEffect(() => () => fallbackGeo.dispose(), [fallbackGeo]);
 
   useEffect(() => {
@@ -394,8 +406,9 @@ function SceneryPiece({ piece }: { piece: SetPiece }) {
         const obj = suppressRaycast(g.clone(true));
         // Normalize the raw NASA model (arbitrary units / off-origin pivot) to a
         // predictable size, centered on x/z and seated on y=0, so the wrapping
-        // group's position drops it onto the ground at a sensible scale.
-        fitAndSeat(obj, piece.fit);
+        // group's position drops it onto the ground at its LITERAL real-world
+        // scale (Epic 04 P0).
+        fitAndSeat(obj, sceneSize);
         // Texture fidelity sweep (#100): max anisotropy + per-channel colourSpace
         // + crisp data-map mip filtering. Runs BEFORE mergeSetPiece, which buckets
         // by material identity and reuses these same (now-corrected) materials.
@@ -415,7 +428,7 @@ function SceneryPiece({ piece }: { piece: SetPiece }) {
     return () => {
       disposed = true;
     };
-  }, [piece.modelRef, piece.fit, invalidate, gl]);
+  }, [piece.modelRef, sceneSize, invalidate, gl]);
 
   if (!scene) {
     // Box fallback: parked at the set-piece position, raised by half its height

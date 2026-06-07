@@ -5,13 +5,15 @@
 
 import { describe, expect, it } from "vitest";
 import {
-  GROUND_MARGIN,
-  GROUND_SPAN,
+  DEFAULT_SITE_FRAME,
+  REAL_METERS,
+  SCENE_UNITS_PER_METER,
   computeBounds,
   isBuilt,
-  sceneMap,
+  siteMap,
   tierHeight,
   tierOf,
+  type SiteFrame,
 } from "./scene";
 import type { Vec2 } from "../types/wire";
 
@@ -37,34 +39,51 @@ describe("computeBounds", () => {
   });
 });
 
-describe("sceneMap", () => {
-  it("centers the worksite on the origin", () => {
-    const rovers = [v(0, 0), v(10, 10)];
-    const m = sceneMap(rovers, []);
-    // The midpoint (5,5) must map to the scene origin on the ground plane.
+describe("siteMap", () => {
+  it("recenters the site origin (cx,cy) onto the scene origin", () => {
+    const site: SiteFrame = { cx: 5, cy: 5, rot: 0, worksiteUnitsToMeters: 1 };
+    const m = siteMap(site);
     const mid = m.at(v(5, 5));
-    expect(mid.x).toBeCloseTo(0, 6);
-    expect(mid.z).toBeCloseTo(0, 6);
+    expect(mid.x).toBeCloseTo(0, 9);
+    expect(mid.z).toBeCloseTo(0, 9);
     expect(mid.y).toBe(0);
   });
 
   it("maps world +Y to scene -z (away from a +z camera)", () => {
-    const m = sceneMap([v(0, 0), v(0, 10)], []);
+    const m = siteMap(DEFAULT_SITE_FRAME);
     const near = m.at(v(0, 0));
     const far = m.at(v(0, 10));
     expect(far.z).toBeLessThan(near.z);
   });
 
-  it("fits the worksite inside the ground span with margin", () => {
-    const m = sceneMap([v(0, 0), v(100, 0)], []);
+  it("uses the FIXED real-meters scale, NOT a fit-to-bbox autoscale", () => {
+    // worksiteUnitsToMeters=1 ⇒ scale is exactly SCENE_UNITS_PER_METER, the same
+    // regardless of how spread out the worksite is (no autoscale).
+    const m = siteMap({ cx: 0, cy: 0, rot: 0, worksiteUnitsToMeters: 1 });
+    expect(m.scale).toBeCloseTo(SCENE_UNITS_PER_METER, 9);
+    // A 100-unit world span projects to 100·scale scene units (fixed), not capped.
     const a = m.at(v(0, 0));
     const b = m.at(v(100, 0));
-    const widthUsed = Math.abs(b.x - a.x);
-    expect(widthUsed).toBeLessThanOrEqual(GROUND_SPAN - GROUND_MARGIN * 2 + 1e-6);
+    expect(Math.abs(b.x - a.x)).toBeCloseTo(100 * SCENE_UNITS_PER_METER, 6);
+  });
+
+  it("DEFAULT_SITE_FRAME scale is SCENE_UNITS_PER_METER · worksiteUnitsToMeters", () => {
+    const m = siteMap(DEFAULT_SITE_FRAME);
+    expect(m.scale).toBeCloseTo(
+      SCENE_UNITS_PER_METER * DEFAULT_SITE_FRAME.worksiteUnitsToMeters,
+      9,
+    );
+  });
+
+  it("worksiteUnitsToMeters scales the whole site uniformly", () => {
+    const half = siteMap({ ...DEFAULT_SITE_FRAME, worksiteUnitsToMeters: 0.5 });
+    expect(half.scale).toBeCloseTo(SCENE_UNITS_PER_METER * 0.5, 9);
+    const p = half.at(v(10, 0));
+    expect(p.x).toBeCloseTo(10 * SCENE_UNITS_PER_METER * 0.5, 6);
   });
 
   it("uses one uniform scale shared by render and hit-proxy", () => {
-    const m = sceneMap([v(0, 0), v(10, 20)], []);
+    const m = siteMap(DEFAULT_SITE_FRAME);
     // A point and the same point at a height differ ONLY in y — same x/z, proving
     // the rendered mesh and an elevated hit-proxy stay vertically aligned.
     const ground = m.at(v(7, 3), 0);
@@ -76,7 +95,9 @@ describe("sceneMap", () => {
   });
 
   it("invert is the exact inverse of at on the ground plane (round-trip)", () => {
-    const m = sceneMap([v(0, 0), v(10, 20)], [v(-5, 8)]);
+    // Round-trips even with a non-trivial frame (offset center + rotation), which
+    // is exactly what drag-to-place + the raycast hit-proxy depend on.
+    const m = siteMap({ cx: 3, cy: -4, rot: 0.3, worksiteUnitsToMeters: 0.8 });
     for (const p of [v(3, 7), v(-4, 12), v(0, 0), v(10, 20)]) {
       const s = m.at(p);
       const back = m.invert(s.x, s.z);
@@ -85,14 +106,11 @@ describe("sceneMap", () => {
     }
   });
 
-  it("includes both rovers and tasks in the framing", () => {
-    // A task far out widens the box, so a rover at the old edge is no longer at
-    // the scene edge — proving tasks participate in the shared framing.
-    const roversOnly = sceneMap([v(0, 0), v(10, 0)], []);
-    const withTask = sceneMap([v(0, 0), v(10, 0)], [v(50, 0)]);
-    const edgeOnly = roversOnly.at(v(10, 0)).x;
-    const edgeWith = withTask.at(v(10, 0)).x;
-    expect(Math.abs(edgeWith)).toBeLessThan(Math.abs(edgeOnly));
+  it("believable relative sizes — launcher towers ~60:1 over an astronaut", () => {
+    const launcher = REAL_METERS.mobileLauncher * SCENE_UNITS_PER_METER;
+    const astronaut = REAL_METERS.astronaut * SCENE_UNITS_PER_METER;
+    expect(launcher / astronaut).toBeCloseTo(60, 6);
+    expect(astronaut).toBeLessThan(launcher); // no giant astronaut
   });
 });
 
