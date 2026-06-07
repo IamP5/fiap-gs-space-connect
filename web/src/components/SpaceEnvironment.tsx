@@ -65,9 +65,10 @@ const STAR_BG_FILE = "/assets/starmap_2020_8k_gal.jpg";
 // the bright central dust/bulge into the frame.
 const STAR_BG_YAW_DEG = 180; // swing galactic centre into the orbit view
 const STAR_BG_ROLL_DEG = 28; // diagonal tilt of the band
-// scene.backgroundIntensity (three r0.169): lifts the dust band above the void so
-// it reads without re-baking the JPG (raw Gaia map is fairly dim).
-const STAR_BG_INTENSITY = 1.35;
+// scene.backgroundIntensity (three r0.169): scales the band/star map brightness.
+// Kept below 1 so the galaxy reads as a faint deep-space backdrop, not a bright
+// wash — the Moon/Earth stay the focus.
+const STAR_BG_INTENSITY = 0.8;
 
 // The Milky-Way band carries most of the sky detail, so the hand-rolled points
 // shell is a sparse near-field of foreground stars layered ON TOP of the band
@@ -209,8 +210,8 @@ function Starfield() {
       // Power-law magnitude: t∈[0,1] skewed toward 0 (faint) via ^3. A handful
       // land near 1 → the bright/large stars. Map to pixel size and brightness.
       const t = Math.pow(Math.random(), 3);
-      sizes[i] = STAR_BASE_SIZE * (0.5 + t * 2.0); // ~0.7px faint … ~3.5px bright (crisp)
-      const brightness = 0.55 + t * 0.45; // faint stars are dimmer
+      sizes[i] = STAR_BASE_SIZE * (0.45 + t * 1.3); // ~0.6px faint … ~2.4px bright (small/crisp)
+      const brightness = 0.4 + t * 0.4; // faint stars are dimmer; lower overall
 
       // Color variance: ~90% white, ~6% warm, ~4% cool — mostly neutral pinpoints
       // (the NASA reference is a predominantly white field, not a colourful one).
@@ -237,7 +238,7 @@ function Starfield() {
       vertexColors: true,
       sizeAttenuation: false,
       transparent: true,
-      opacity: 0.95,
+      opacity: 0.8,
       depthWrite: false,
     });
     m.onBeforeCompile = (shader) => {
