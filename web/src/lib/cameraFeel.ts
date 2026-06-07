@@ -2,7 +2,7 @@
 //
 // All the numeric feel of the camera lives here so it's unit-testable in
 // vitest's node env (no canvas, no rAF, no three): the idle-drift sway angle,
-// the zoom→exposure lift, and the drag→starfield parallax offset. The actual
+// the zoom→exposure lift, and the trailing starfield parallax. The actual
 // mutation of camera/material/scene happens in the <CameraFeel> component in
 // Scene3D; this module is just the numbers.
 //
@@ -59,6 +59,13 @@ export function isDrifting(idleElapsed: number): boolean {
 export const EXPOSURE_NEAR = 1.28; // pushed all the way in
 export const EXPOSURE_FAR = 1.04; // pulled all the way out
 
+// Orbit darkens the zoom-coupled exposure: in deep space the only key light is
+// the raw sun, so the sunlit Moon limb + celestial bloom (Sun/Earth) otherwise
+// read too hot against the near-black void. Scaling orbit exposure down keeps the
+// vista cinematic and lets the void roll fully to black. Surface keeps full
+// exposure (1.0) so the worksite stays legible under its fill/rim rig.
+export const ORBIT_EXPOSURE_SCALE = 0.8;
+
 // Map a raw distance + the active clamp band to an exposure value. Distances
 // outside the band are clamped, so the exposure never runs away past the dolly
 // limits. A degenerate band (max<=min) returns the far value.
@@ -76,26 +83,54 @@ export function zoomExposure(
   return EXPOSURE_NEAR + (EXPOSURE_FAR - EXPOSURE_NEAR) * norm;
 }
 
-// ---- drag parallax --------------------------------------------------------
+// ---- starfield parallax ---------------------------------------------------
+//
+// A two-plane depth cue: the bright Milky-Way equirect band (scene.background)
+// stays LOCKED, and only the dim points starfield shell is given a tiny trailing
+// yaw as the camera azimuth turns. The near layer lags the band → parallax,
+// without the bright band visibly sliding (the artifact that made #109's original
+// background-rotation parallax read as a glitch).
+//
+// This is a VELOCITY/trailing model, not an anchor-delta one. Each frame the
+// offset is nudged opposite the azimuth change and relaxed back toward neutral;
+// there is no anchor to re-capture on gesture start, so the one-frame "snap" that
+// plagued the original (re-anchor while a stale offset was still applied) cannot
+// recur by construction. When motion stops, the offset eases to 0 and the stars
+// settle back into register with the band.
 
-// Parallax gain: how much of the camera's azimuth travel the distant sky lags
-// behind by. A subtle counter-rotation of the background as the camera azimuth
-// moves under a drag, so the near foreground reads as moving against a more
-// distant sky (a depth cue). Kept tiny — the sky must stay a backdrop, never
-// visibly spin.
-export const PARALLAX_GAIN = 0.06;
+// Fraction of each frame's azimuth turn the star layer lags by. Small — the
+// parallax should be felt more than seen.
+export const PARALLAX_GAIN = 0.08;
 
-// Maximum parallax offset (radians), so a long continuous drag can't wind the
-// sky off its framed orientation. The offset is clamped to ±this.
-export const PARALLAX_MAX_RAD = (4 * Math.PI) / 180;
+// Exponential relax rate (per second) pulling the offset back to neutral. ~2/s
+// ⇒ a ~0.5s time constant, so the layer settles in roughly a second after you
+// stop turning. Also what bounds the steady-state lag during a sustained drag
+// (steady offset ≈ -GAIN · azimuthVelocity / RELAX).
+export const PARALLAX_RELAX_PER_S = 2.0;
 
-// The parallax yaw offset (radians) to apply to the background rotation given
-// how far (radians) the camera azimuth has moved from its rest azimuth. Scaled
-// by PARALLAX_GAIN and clamped to ±PARALLAX_MAX_RAD. A small negative sign makes
-// the sky drift OPPOSITE the camera (true parallax: the far layer lags).
-export function parallaxOffset(azimuthDelta: number): number {
-  const raw = -PARALLAX_GAIN * azimuthDelta;
-  if (raw > PARALLAX_MAX_RAD) return PARALLAX_MAX_RAD;
-  if (raw < -PARALLAX_MAX_RAD) return -PARALLAX_MAX_RAD;
-  return raw;
+// Hard clamp (radians, ~5°) so a fast continuous spin can't wind the star layer
+// far off its framed orientation.
+export const PARALLAX_MAX_RAD = (5 * Math.PI) / 180;
+
+// Advance the trailing parallax offset by one frame.
+//   prev         — last frame's offset (radians)
+//   azimuthDelta — signed azimuth change since last frame (radians)
+//   dt           — frame duration (seconds); makes the relax frame-rate independent
+// Returns the new offset, clamped to ±PARALLAX_MAX_RAD. With azimuthDelta 0 it
+// decays geometrically toward 0; a non-finite dt is treated as 0 (no relax).
+export function advanceParallax(
+  prev: number,
+  azimuthDelta: number,
+  dt: number,
+): number {
+  const safeDt = dt > 0 ? dt : 0;
+  const relax = Math.exp(-PARALLAX_RELAX_PER_S * safeDt);
+  let next = prev * relax - PARALLAX_GAIN * azimuthDelta;
+  if (next > PARALLAX_MAX_RAD) next = PARALLAX_MAX_RAD;
+  if (next < -PARALLAX_MAX_RAD) next = -PARALLAX_MAX_RAD;
+  return next;
 }
+
+// Below this absolute offset (radians) the parallax is treated as settled, so the
+// demand loop can stop invalidating instead of chasing an ever-smaller decay.
+export const PARALLAX_SETTLE_EPS = 1e-4;

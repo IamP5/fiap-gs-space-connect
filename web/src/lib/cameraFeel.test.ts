@@ -5,10 +5,12 @@ import {
   IDLE_FADE_MS,
   IDLE_PERIOD_MS,
   IDLE_SWAY_RAD,
+  PARALLAX_GAIN,
   PARALLAX_MAX_RAD,
+  PARALLAX_SETTLE_EPS,
+  advanceParallax,
   idleSwayOffset,
   isDrifting,
-  parallaxOffset,
   zoomExposure,
 } from "./cameraFeel";
 
@@ -85,18 +87,42 @@ describe("zoomExposure", () => {
   });
 });
 
-describe("parallaxOffset", () => {
-  it("is zero at rest", () => {
-    expect(parallaxOffset(0)).toBeCloseTo(0, 10);
+describe("advanceParallax", () => {
+  it("trails opposite the camera azimuth (sign flips)", () => {
+    // Turning the camera one way nudges the star layer the other way.
+    expect(advanceParallax(0, 0.1, 1 / 60)).toBeLessThan(0);
+    expect(advanceParallax(0, -0.1, 1 / 60)).toBeGreaterThan(0);
   });
 
-  it("moves the sky opposite the camera azimuth (negative sign)", () => {
-    expect(parallaxOffset(0.1)).toBeLessThan(0);
-    expect(parallaxOffset(-0.1)).toBeGreaterThan(0);
+  it("decays toward neutral when the camera is still", () => {
+    // With no azimuth change each frame relaxes the offset toward 0.
+    let off = 0.05;
+    for (let i = 0; i < 5; i++) {
+      const next = advanceParallax(off, 0, 1 / 60);
+      expect(Math.abs(next)).toBeLessThan(Math.abs(off));
+      off = next;
+    }
   });
 
-  it("clamps to ±PARALLAX_MAX_RAD for large drags", () => {
-    expect(parallaxOffset(100)).toBe(-PARALLAX_MAX_RAD);
-    expect(parallaxOffset(-100)).toBe(PARALLAX_MAX_RAD);
+  it("settles below the epsilon after the camera stops", () => {
+    // Within a couple of seconds of stillness the offset is effectively zero.
+    let off = PARALLAX_MAX_RAD;
+    for (let i = 0; i < 240; i++) off = advanceParallax(off, 0, 1 / 60);
+    expect(Math.abs(off)).toBeLessThan(PARALLAX_SETTLE_EPS);
+  });
+
+  it("clamps to ±PARALLAX_MAX_RAD under a fast continuous spin", () => {
+    let off = 0;
+    for (let i = 0; i < 200; i++) off = advanceParallax(off, 0.2, 1 / 60);
+    expect(off).toBeGreaterThanOrEqual(-PARALLAX_MAX_RAD);
+    expect(off).toBeLessThanOrEqual(PARALLAX_MAX_RAD);
+    // A sustained one-way spin pins it to the negative clamp.
+    expect(off).toBeCloseTo(-PARALLAX_MAX_RAD, 6);
+  });
+
+  it("treats a non-positive dt as no relax (pure nudge)", () => {
+    // dt<=0 ⇒ relax factor 1, so the offset only changes by the gain term.
+    expect(advanceParallax(0.01, 0.1, 0)).toBeCloseTo(0.01 - PARALLAX_GAIN * 0.1, 10);
+    expect(advanceParallax(0.01, 0.1, -5)).toBeCloseTo(0.01 - PARALLAX_GAIN * 0.1, 10);
   });
 });

@@ -221,6 +221,12 @@ const WARM_STAR = new THREE.Color("#ffd8b0");
 const COOL_STAR = new THREE.Color("#cfe0ff");
 const WHITE_STAR = new THREE.Color("#ffffff");
 
+// scene-graph name for the dim points shell, so the decorative <CameraFeel> layer
+// (Scene3D, #109) can find it via scene.getObjectByName and apply a tiny trailing
+// parallax yaw to THIS layer only — the bright equirect band stays locked. Nothing
+// else sets this object's rotation, so CameraFeel owns its rotation.y outright.
+export const STARFIELD_PARALLAX_NAME = "starfield-parallax";
+
 function Starfield({ uTime }: { uTime: { value: number } }) {
   const geometry = useMemo(() => {
     const positions = new Float32Array(STAR_COUNT * 3);
@@ -311,7 +317,7 @@ function Starfield({ uTime }: { uTime: { value: number } }) {
   }, [geometry, material]);
 
   return (
-    <points raycast={() => null}>
+    <points name={STARFIELD_PARALLAX_NAME} raycast={() => null}>
       <primitive object={geometry} attach="geometry" />
       <primitive object={material} attach="material" />
     </points>

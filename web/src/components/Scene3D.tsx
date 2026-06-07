@@ -39,7 +39,7 @@
 import { memo, useEffect, useMemo, useRef, useState } from "react";
 import { Canvas, useFrame, useThree, type ThreeEvent } from "@react-three/fiber";
 import { ContactShadows, Instance, Instances, Line, OrbitControls } from "@react-three/drei";
-import { SpaceEnvironment } from "./SpaceEnvironment";
+import { SpaceEnvironment, STARFIELD_PARALLAX_NAME } from "./SpaceEnvironment";
 import { SkyBodies } from "./SkyBodies";
 import {
   ChromaticAberration,
@@ -87,8 +87,10 @@ import {
 import { type Ghost, footprintOf } from "../lib/placement";
 import {
   IDLE_DELAY_MS,
+  ORBIT_EXPOSURE_SCALE,
+  PARALLAX_SETTLE_EPS,
+  advanceParallax,
   idleSwayOffset,
-  parallaxOffset,
   zoomExposure,
 } from "../lib/cameraFeel";
 import { LaunchScenery } from "./LaunchScenery";
@@ -2502,7 +2504,7 @@ type FeelControls = {
   removeEventListener: (type: string, listener: () => void) => void;
 };
 
-function CameraFeel({ active }: { active: boolean }) {
+function CameraFeel({ active, onSurface }: { active: boolean; onSurface: boolean }) {
   const controls = useThree((s) => s.controls) as FeelControls | null;
   const camera = useThree((s) => s.camera);
   const scene = useThree((s) => s.scene);
@@ -2520,19 +2522,22 @@ function CameraFeel({ active }: { active: boolean }) {
   // The settled camera offset (position − target) at rest; the idle sway rotates
   // a CLONE of this around the target's up-axis so amplitude can't accumulate.
   const restOffsetRef = useRef(new THREE.Vector3());
-  // Parallax anchor: the orbit azimuth at the most recent input-start. The sky
-  // lags as the live azimuth moves away from it, so a drag visibly parallaxes
-  // the starfield; clamped in parallaxOffset() so a long drag can't wind it off.
-  const anchorAzimuthRef = useRef<number | null>(null);
-  // The parallax yaw offset CURRENTLY applied to scene.backgroundRotation. We
-  // apply parallax as a relative delta (apply new − undo old) so SpaceEnvironment
-  // owns the base orientation — even if its texture loads after we start — and we
-  // only ever ride a small offset on top of it.
-  const appliedParallaxRef = useRef(0);
   // True between OrbitControls 'start' and 'end' (a drag/zoom in progress). The
   // idle sway is suppressed while dragging so a long (>4s) continuous drag can't
   // start drifting under the user's own gesture.
   const draggingRef = useRef(false);
+  // --- starfield parallax state (trailing model; see cameraFeel.advanceParallax) ---
+  // The yaw offset (radians) currently applied to the dim points starfield. It
+  // trails the camera azimuth and relaxes back to 0 — there is no anchor to reset,
+  // so it can't snap. We OWN this object's rotation.y outright (nothing else sets
+  // it), so we write it absolutely rather than as a relative delta.
+  const parallaxRef = useRef(0);
+  // Last frame's azimuth, to derive the per-frame delta. null until the first
+  // frame captures it (so the first delta is 0, never a spurious jump).
+  const lastAzimuthRef = useRef<number | null>(null);
+  // Cached lookup of the points layer (mounts via SpaceEnvironment, possibly after
+  // this component). Re-resolved each frame until found, then reused.
+  const starsRef = useRef<THREE.Object3D | null>(null);
 
   useEffect(() => {
     if (!controls || !active) return;
@@ -2541,8 +2546,6 @@ function CameraFeel({ active }: { active: boolean }) {
       lastInputRef.current = performance.now();
       // Cancel any in-progress sway instantly; the next idle frame re-captures.
       restAzimuthRef.current = null;
-      // Anchor parallax at the current azimuth so the sky lags the coming drag.
-      anchorAzimuthRef.current = controls.getAzimuthalAngle();
       // Schedule a single wake at the idle threshold so the drift can start even
       // when nothing else is invalidating (a fully-settled scene).
       if (idleTimer) clearTimeout(idleTimer);
@@ -2591,11 +2594,13 @@ function CameraFeel({ active }: { active: boolean }) {
       domElement.removeEventListener("touchstart", markInput);
       document.removeEventListener("visibilitychange", onVisibility);
       if (idleTimer) clearTimeout(idleTimer);
-      // Undo any parallax we rode on top of SpaceEnvironment's base yaw so the
-      // sky returns to its framed orientation when the feel layer deactivates.
-      const bg = (scene as THREE.Scene).backgroundRotation;
-      if (bg) bg.y -= appliedParallaxRef.current;
-      appliedParallaxRef.current = 0;
+      // Return the star layer to its framed orientation when the feel layer
+      // deactivates (placing / transitioning own the camera), and reset the
+      // trailing state so it re-arms cleanly on the next activation.
+      const stars = starsRef.current ?? scene.getObjectByName(STARFIELD_PARALLAX_NAME);
+      if (stars) stars.rotation.y = 0;
+      parallaxRef.current = 0;
+      lastAzimuthRef.current = null;
     };
   }, [controls, domElement, invalidate, active, scene]);
 
@@ -2603,18 +2608,22 @@ function CameraFeel({ active }: { active: boolean }) {
   const qRef = useRef(new THREE.Quaternion());
   const offRef = useRef(new THREE.Vector3());
 
-  useFrame(() => {
+  useFrame((_, dt) => {
     if (!controls || !active) return;
     // Pause ALL idle motion while the tab is hidden — never wake the loop when
     // nothing is visible (the Wave-3 visibility guard).
     if (typeof document !== "undefined" && document.hidden) return;
 
     // --- zoom-coupled exposure (cheap read; applied every painted frame) ------
-    gl.toneMappingExposure = zoomExposure(
-      controls.getDistance(),
-      controls.minDistance,
-      controls.maxDistance,
-    );
+    // Orbit is scaled down (ORBIT_EXPOSURE_SCALE) so the deep-space vista reads
+    // darker — the sunlit limb + celestial bloom stop blowing out and the void
+    // rolls to black. Surface stays at full exposure for worksite legibility.
+    gl.toneMappingExposure =
+      zoomExposure(
+        controls.getDistance(),
+        controls.minDistance,
+        controls.maxDistance,
+      ) * (onSurface ? 1 : ORBIT_EXPOSURE_SCALE);
 
     const azimuth = controls.getAzimuthalAngle();
 
@@ -2641,15 +2650,22 @@ function CameraFeel({ active }: { active: boolean }) {
     }
 
     // --- starfield parallax ---------------------------------------------------
-    // The sky lags the camera azimuth, measured from the input-start anchor (so a
-    // drag parallaxes; the idle sway gently counter-sways it too). Applied as a
-    // RELATIVE delta so SpaceEnvironment keeps ownership of the base orientation.
-    const bg = (scene as THREE.Scene).backgroundRotation;
-    if (bg) {
-      const anchor = anchorAzimuthRef.current ?? azimuth;
-      const want = parallaxOffset(azimuth - anchor);
-      bg.y += want - appliedParallaxRef.current;
-      appliedParallaxRef.current = want;
+    // Trail the dim points layer behind the camera azimuth (the bright equirect
+    // band stays locked). A velocity model: nudge opposite this frame's azimuth
+    // turn, relax back to neutral. No anchor → no snap. We keep invalidating while
+    // the offset is still easing back so it settles even after OrbitControls and
+    // the idle sway have both gone quiet.
+    const stars =
+      starsRef.current ??
+      (starsRef.current = scene.getObjectByName(STARFIELD_PARALLAX_NAME) ?? null);
+    if (stars) {
+      const last = lastAzimuthRef.current;
+      const azimuthDelta = last === null ? 0 : azimuth - last;
+      lastAzimuthRef.current = azimuth;
+      const next = advanceParallax(parallaxRef.current, azimuthDelta, dt);
+      parallaxRef.current = next;
+      stars.rotation.y = next;
+      if (Math.abs(next) > PARALLAX_SETTLE_EPS) invalidate();
     }
   });
 
@@ -2936,8 +2952,9 @@ export function Scene3D({
         />
         {/* Camera feel (#109): idle drift, zoom-coupled exposure, parallax. OFF
             while placing or transitioning — those own the camera. Decorative;
-            never reads the snapshot. */}
-        <CameraFeel active={!placing && !transitioning} />
+            never reads the snapshot. Orbit exposure is scaled down so deep space
+            reads darker (the sunlit limb + celestial bloom stop blowing out). */}
+        <CameraFeel active={!placing && !transitioning} onSurface={shown === "surface"} />
       </Canvas>
       {/* Glare overlay for the descent transition. A child of .stage (position:
           relative), so it fills the stage; pointer-events:none keeps clicks going
