@@ -20,6 +20,11 @@ import * as THREE from "three";
 import { GLTFLoader } from "three/examples/jsm/loaders/GLTFLoader.js";
 import { DRACOLoader } from "three/examples/jsm/loaders/DRACOLoader.js";
 import { MeshoptDecoder } from "three/examples/jsm/libs/meshopt_decoder.module.js";
+// three 0.169 renamed the old mergeBufferGeometries → mergeGeometries; it merges
+// a list of BufferGeometries that share an IDENTICAL attribute signature (same
+// attribute names, same indexed-ness) into one buffer, returning null + an error
+// if they don't. We pre-bucket by that signature so it never fails (see below).
+import { mergeGeometries } from "three/examples/jsm/utils/BufferGeometryUtils.js";
 import { suppressRaycast } from "../lib/suppressRaycast";
 
 // Self-contained loader + cache (mirrors Scene3D's loadGLTF): N references to the
@@ -134,9 +139,191 @@ function fitAndSeat(obj: THREE.Object3D, fit: number) {
   obj.position.set(-center.x * s, -box.min.y * s, -center.z * s);
 }
 
+// mergeSetPiece — the draw-call diet (#58b). A loaded NASA glTF scene is a TREE
+// of child meshes, and each child mesh is its own draw call. This collapses that
+// tree into ONE merged mesh PER DISTINCT MATERIAL, so a four-set-piece complex
+// that was dozens of draw calls becomes a handful — a pure perf refactor that
+// must render IDENTICALLY (same silhouette, placement, materials).
+//
+// The model arrives already fitAndSeat-normalized, i.e. its own transform (scale
+// + x/z recenter + base-at-y=0 lift) lives on the ROOT. We bake every child's
+// world transform into a cloned geometry but FIRST strip the root's own matrix
+// out of it — the merged mesh is parented under the SAME wrapping
+// <group position rotation>, which already expects the normalized (root-local)
+// frame. So each child geometry is baked by `rootInverse * child.matrixWorld`,
+// putting it exactly where the cloned tree sat under that group.
+//
+// Geometries are bucketed by (material identity, attribute signature). Material
+// identity keeps materials pixel-identical (one output mesh per material).
+// Attribute signature (sorted attribute names + indexed flag) guarantees every
+// list handed to mergeGeometries is internally compatible, so it never returns
+// null and never logs the "attributes differ" warning — meshes that share a
+// material but differ in attributes (e.g. some have uv, some don't) simply land
+// in separate buckets and emit separate merged meshes.
+//
+// Returns a fresh Group of merged meshes plus the list of NEW geometries it
+// created, so the caller can dispose those owned buffers on unmount.
+function mergeSetPiece(root: THREE.Object3D): {
+  group: THREE.Group;
+  geometries: THREE.BufferGeometry[];
+} {
+  // Freeze the normalized transforms into world matrices, then peel the root's
+  // own matrix back off each child so the bake lands in root-local space.
+  root.updateMatrixWorld(true);
+  const rootInverse = new THREE.Matrix4().copy(root.matrixWorld).invert();
+  const local = new THREE.Matrix4();
+
+  // Bucket key → { material, geometries[] }. Insertion order is preserved so the
+  // output mesh order is stable across loads (handy for diffing draw order).
+  const buckets = new Map<
+    string,
+    { material: THREE.Material; geometries: THREE.BufferGeometry[] }
+  >();
+
+  root.traverse((o) => {
+    if (!(o as THREE.Mesh).isMesh) return;
+    const mesh = o as THREE.Mesh;
+    // A child could carry a material ARRAY (multi-material mesh w/ geometry
+    // groups). Split it into per-group geometries so each piece pairs with its
+    // single material and merges cleanly; a single material is the common case.
+    const materials = Array.isArray(mesh.material)
+      ? mesh.material
+      : [mesh.material];
+
+    // Bake child → root-local: rootInverse * childWorld.
+    local.copy(mesh.matrixWorld).premultiply(rootInverse);
+
+    for (let g = 0; g < materials.length; g++) {
+      const material = materials[g];
+      if (!material) continue;
+      // Clone so we never mutate the shared cached source geometry, then bake the
+      // transform into the clone's positions/normals/tangents.
+      let geom: THREE.BufferGeometry;
+      if (Array.isArray(mesh.material)) {
+        // Multi-material mesh: carve out just this group's index range so the
+        // slice pairs with materials[g] alone, then merge per slice. sliceGroup
+        // clones internally, so we don't clone again here.
+        const sliced = sliceGroup(mesh.geometry, g);
+        if (!sliced) continue;
+        geom = sliced;
+      } else {
+        geom = mesh.geometry.clone();
+      }
+      geom.applyMatrix4(local);
+
+      // Identify by material reference (pixel-identical) + attribute signature.
+      const matKey = registerMaterial(material);
+      const sigKey = attributeSignature(geom);
+      const key = `${matKey}|${sigKey}`;
+      let bucket = buckets.get(key);
+      if (!bucket) {
+        bucket = { material, geometries: [] };
+        buckets.set(key, bucket);
+      }
+      bucket.geometries.push(geom);
+    }
+  });
+
+  const group = new THREE.Group();
+  const owned: THREE.BufferGeometry[] = [];
+  for (const { material, geometries } of buckets.values()) {
+    // One geometry merges to itself (no copy needed); >1 collapses to one buffer.
+    const merged =
+      geometries.length === 1
+        ? geometries[0]
+        : mergeGeometries(geometries);
+    if (!merged) {
+      // Defensive: should be impossible given the signature bucketing, but if a
+      // merge ever fails, keep the per-child clones rather than dropping geometry
+      // (the scene must never silently lose a set-piece).
+      for (const g of geometries) {
+        const m = new THREE.Mesh(g, material);
+        group.add(m);
+        owned.push(g);
+      }
+      continue;
+    }
+    // Drop the per-child clones once merged into a new buffer (avoid leaking the
+    // intermediates); the single-geometry case reuses its clone as the output.
+    if (merged !== geometries[0]) {
+      for (const g of geometries) g.dispose();
+    }
+    const mesh = new THREE.Mesh(merged, material);
+    group.add(mesh);
+    owned.push(merged);
+  }
+
+  // Re-suppress raycast on the freshly built meshes so the merged scenery stays
+  // non-pickable (same invariant the cloned tree carried — see suppressRaycast).
+  suppressRaycast(group);
+  return { group, geometries: owned };
+}
+
+// registerMaterial — stable per-material key by object identity. Materials are
+// shared across the cached source, so a WeakMap of material → id gives identical
+// materials the same bucket without depending on uuid string formatting.
+const materialIds = new WeakMap<THREE.Material, number>();
+let nextMaterialId = 0;
+function registerMaterial(m: THREE.Material): number {
+  let id = materialIds.get(m);
+  if (id === undefined) {
+    id = nextMaterialId++;
+    materialIds.set(m, id);
+  }
+  return id;
+}
+
+// attributeSignature — the compatibility key mergeGeometries demands: sorted
+// attribute names plus whether the geometry is indexed. Geometries with the same
+// signature are guaranteed mergeable; differing signatures go to separate meshes.
+function attributeSignature(geom: THREE.BufferGeometry): string {
+  const names = Object.keys(geom.attributes).sort();
+  return `${geom.index ? "i" : "n"}:${names.join(",")}`;
+}
+
+// sliceGroup — extract a single geometry group (index range) from a multi-
+// material geometry as its own standalone BufferGeometry, so it can pair with
+// exactly one material before merging. Returns null if the group is empty.
+function sliceGroup(
+  geom: THREE.BufferGeometry,
+  groupIndex: number,
+): THREE.BufferGeometry | null {
+  const grp = geom.groups[groupIndex];
+  if (!grp || grp.count === 0) return null;
+  // toNonIndexed flattens to per-vertex attributes; then take the group's slice.
+  const flat = geom.index ? geom.toNonIndexed() : geom;
+  const out = new THREE.BufferGeometry();
+  for (const name in flat.attributes) {
+    const attr = flat.attributes[name] as THREE.BufferAttribute;
+    const itemSize = attr.itemSize;
+    const start = grp.start * itemSize;
+    const end = (grp.start + grp.count) * itemSize;
+    // slice() copies the group's range into a standalone TypedArray (every
+    // TypedArray implements slice) so the new geometry owns its own buffer.
+    const src = attr.array as THREE.TypedArray;
+    const sliced = src.slice(start, end);
+    out.setAttribute(
+      name,
+      new THREE.BufferAttribute(sliced, itemSize, attr.normalized),
+    );
+  }
+  if (geom.index) flat.dispose();
+  return out;
+}
+
 function SceneryPiece({ piece }: { piece: SetPiece }) {
   const [scene, setScene] = useState<THREE.Group | null>(null);
   const invalidate = useThree((s) => s.invalidate);
+
+  // The merged geometries we BUILD are new owned GPU buffers (unlike the shared
+  // cached source geometry), so we must dispose them on unmount to avoid a leak.
+  // Stash them per-load and dispose in the load effect's cleanup.
+  const [merged, setMerged] = useState<THREE.BufferGeometry[]>([]);
+  useEffect(() => {
+    return () => {
+      for (const g of merged) g.dispose();
+    };
+  }, [merged]);
 
   // Fallback box approximates the normalized model: a slim upright volume whose
   // height is `fit` (towers read tall, the crawler low-ish), seated on the ground.
@@ -164,7 +351,13 @@ function SceneryPiece({ piece }: { piece: SetPiece }) {
         // predictable size, centered on x/z and seated on y=0, so the wrapping
         // group's position drops it onto the ground at a sensible scale.
         fitAndSeat(obj, piece.fit);
-        setScene(obj);
+        // Collapse the normalized child-mesh tree into one merged mesh per
+        // material (#58b): same silhouette/placement/materials, far fewer draw
+        // calls. The merged group expects the SAME wrapping group below, since
+        // mergeSetPiece bakes child transforms into root-LOCAL space.
+        const { group, geometries } = mergeSetPiece(obj);
+        setScene(group);
+        setMerged(geometries); // own these buffers; dispose on unmount/reload
         invalidate(); // wake the demand loop so the scenery shows once loaded
       })
       .catch(() => {
