@@ -6,9 +6,12 @@
 import { describe, expect, it } from "vitest";
 import {
   type ActiveBeat,
+  BID_WAR_SATURATION,
   activeBeats,
+  activeBidders,
   beatLifetimeMs,
   beatProgress,
+  bidWarStrobe,
   ringColor,
   ringFraction,
 } from "./choreography";
@@ -121,5 +124,62 @@ describe("beatProgress", () => {
     expect(beatProgress(b, 400)).toBeCloseTo(0.5);
     expect(beatProgress(b, 800)).toBe(1);
     expect(beatProgress(b, 5000)).toBe(1);
+  });
+});
+
+describe("activeBidders", () => {
+  const bid = (robot_id: string | undefined, spawn: number): ActiveBeat => ({
+    kind: "bid",
+    robot_id,
+    spawn,
+    at: 0,
+  });
+
+  it("counts DISTINCT rovers with a live bid beat", () => {
+    const beats = [bid("r1", 0), bid("r2", 0), bid("r1", 0)];
+    expect(activeBidders(beats, 100)).toBe(2); // r1, r2 — r1 counted once
+  });
+
+  it("ignores non-bid beats", () => {
+    const beats: ActiveBeat[] = [
+      bid("r1", 0),
+      { kind: "won", robot_id: "r2", spawn: 0, at: 0 },
+      { kind: "revived", robot_id: "r3", spawn: 0, at: 0 },
+    ];
+    expect(activeBidders(beats, 100)).toBe(1);
+  });
+
+  it("drops expired bids (past the 800ms bid lifetime)", () => {
+    const beats = [bid("r1", 0), bid("r2", 0)];
+    expect(activeBidders(beats, 700)).toBe(2); // both live
+    expect(activeBidders(beats, 800)).toBe(0); // both expired
+  });
+
+  it("counts an anonymous (no robot_id) bid as its own bidder", () => {
+    const beats = [bid(undefined, 0), bid(undefined, 10)];
+    expect(activeBidders(beats, 100)).toBe(2);
+  });
+});
+
+describe("bidWarStrobe", () => {
+  it("is 0 with no contention (0 or 1 bidder)", () => {
+    expect(bidWarStrobe(0)).toBe(0);
+    expect(bidWarStrobe(1)).toBe(0);
+  });
+
+  it("ramps in from 2 bidders and saturates at the cap", () => {
+    expect(bidWarStrobe(2)).toBeGreaterThan(0);
+    expect(bidWarStrobe(2)).toBeLessThan(1);
+    expect(bidWarStrobe(BID_WAR_SATURATION)).toBe(1);
+  });
+
+  it("clamps a pile-on beyond the cap to 1", () => {
+    expect(bidWarStrobe(BID_WAR_SATURATION + 10)).toBe(1);
+  });
+
+  it("increases monotonically with bidders", () => {
+    const a = bidWarStrobe(2);
+    const b = bidWarStrobe(3);
+    expect(b).toBeGreaterThanOrEqual(a);
   });
 });
