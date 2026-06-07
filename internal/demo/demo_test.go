@@ -179,14 +179,50 @@ func TestExternal_YieldsNoRoversAndNoScriptedKills(t *testing.T) {
 		t.Fatal("External scenario builds a different blueprint than the rehearsal; only rover hosting and kills should change")
 	}
 
-	// Backward-compatibility cross-check: the inproc default still carries the
-	// six-rover swarm and exactly one scripted kill.
+	// Cross-check: the inproc default carries BOTH site swarms (6 lunar + 6
+	// shackleton = 12, epic 04) and exactly one scripted kill (on the lunar site).
 	inproc := DomeScenario("nats://x", Rehearsal())
-	if len(inproc.Rovers) != 6 {
-		t.Fatalf("inproc scenario has %d rovers, want 6 (the docker-compose demo swarm)", len(inproc.Rovers))
+	if len(inproc.Rovers) != 12 {
+		t.Fatalf("inproc scenario has %d rovers, want 12 (two six-rover swarms, one per site)", len(inproc.Rovers))
 	}
 	if len(inproc.ScriptedKills) != 1 {
 		t.Fatalf("inproc scenario has %d scripted kills, want 1 (the rehearsal kill)", len(inproc.ScriptedKills))
+	}
+}
+
+// TestDomeScenario_IsTwoSite asserts the live demo board carries BOTH worksites
+// (epic 04): every task and every rover is tagged with one of the two site ids,
+// both sites build a full dome (13 tasks each, site-prefixed ids), and each site
+// has its own six-rover swarm. The site tag is what gates the auction, so a
+// mistagged board would let a rover bid across the map.
+func TestDomeScenario_IsTwoSite(t *testing.T) {
+	cfg := DomeScenario("nats://x", Rehearsal())
+
+	tasksPerSite := map[string]int{}
+	for _, bt := range cfg.Blueprint {
+		if bt.SiteID != SiteLunar && bt.SiteID != SiteShackleton {
+			t.Fatalf("task %s has site %q, want one of %q/%q", bt.Task.ID, bt.SiteID, SiteLunar, SiteShackleton)
+		}
+		tasksPerSite[bt.SiteID]++
+	}
+	if tasksPerSite[SiteLunar] != 13 || tasksPerSite[SiteShackleton] != 13 {
+		t.Fatalf("tasks per site = %v, want 13 each (4 foundations + 8 walls + dome-cap)", tasksPerSite)
+	}
+
+	roversPerSite := map[string]int{}
+	for _, r := range cfg.Rovers {
+		if r.SiteID != SiteLunar && r.SiteID != SiteShackleton {
+			t.Fatalf("rover %s has site %q, want one of %q/%q", r.ID, r.SiteID, SiteLunar, SiteShackleton)
+		}
+		roversPerSite[r.SiteID]++
+	}
+	if roversPerSite[SiteLunar] != 6 || roversPerSite[SiteShackleton] != 6 {
+		t.Fatalf("rovers per site = %v, want 6 each", roversPerSite)
+	}
+
+	// The kill target is a LUNAR wall (site-prefixed), present in the board.
+	if cfg.ScriptedKills[0].WhenTaskLeased != SiteLunar+"/wall-1" {
+		t.Fatalf("scripted kill targets %q, want %q (a lunar wall)", cfg.ScriptedKills[0].WhenTaskLeased, SiteLunar+"/wall-1")
 	}
 }
 
@@ -199,8 +235,9 @@ func TestExternal_YieldsNoRoversAndNoScriptedKills(t *testing.T) {
 func TestRehearsal_KillTargetIsAHealableWall(t *testing.T) {
 	cfg := Rehearsal()
 
-	// The target must be a wall present in the blueprint.
-	bp := DomeBlueprint()
+	// The target must be a wall present in the live two-site board (the prefixed id,
+	// epic 04), so check the scenario's blueprint rather than the single-site one.
+	bp := DomeScenario("nats://x", cfg).Blueprint
 	var targetType domain.TaskType
 	found := false
 	for _, bt := range bp {

@@ -121,6 +121,14 @@ type Task struct {
 	// Task, and the winning Rover honours it at award time. Empty ⇒ replay, so
 	// every existing Task (and the whole startup board) is unchanged.
 	Mode string
+
+	// SiteID tags the worksite this Task belongs to (two-site lunar surface,
+	// epic 04): a rover only bids on Tasks whose SiteID matches its own, so the
+	// two sites' auctions stay disjoint and a rover never drives across the map.
+	// It is a PLAIN STRING TAG (like Mode), so this core record stays free of any
+	// site concept beyond the label. Empty ⇒ the single default site, so every
+	// existing Task (and the whole single-site board) is byte-for-byte unchanged.
+	SiteID string
 }
 
 // RoverState is the snapshot of a rover the Allocation Engine scores a bid
@@ -132,6 +140,13 @@ type RoverState struct {
 	Battery      float64 // (0,1]; higher is more charge
 	Capabilities []Capability
 	CurrentLoad  int // number of tasks the rover already holds
+
+	// SiteID tags the worksite this rover is stationed at (two-site lunar
+	// surface, epic 04). It mirrors Task.SiteID so a rover only ever scores/wins
+	// Tasks at its own site; the auction gate itself lives on the bus
+	// (wire.Announce.SiteID vs the agent's Config.SiteID), so this field is plain
+	// descriptive data here. Empty ⇒ the single default site (back-compat).
+	SiteID string
 }
 
 // CanPerform reports whether the rover has the capability required by a task of

@@ -14,6 +14,7 @@ import (
 	"context"
 	"log/slog"
 	"math/rand/v2"
+	"strings"
 	"swarmbuild/internal/bus"
 	"swarmbuild/internal/core/allocation"
 	"swarmbuild/internal/core/domain"
@@ -126,6 +127,14 @@ type Config struct {
 	Battery        float64
 	Capabilities   []domain.Capability
 	HeartbeatEvery time.Duration // e.g. 500ms
+
+	// SiteID is the worksite this rover is stationed at (two-site lunar surface,
+	// epic 04). The rover stamps it onto every Telemetry (so the coordinator can
+	// tag the rover's RoverView.Site) and uses it to GATE bidding: it ignores any
+	// wire.Announce carrying a different non-empty SiteID, so the two sites' swarms
+	// never bid across the map. Empty ⇒ the single default site: the rover bids on
+	// every announce (incl. untagged ones), byte-for-byte the pre-epic-04 behaviour.
+	SiteID string
 
 	// Mode selects how the work phase sources its Build-op stream (bh-08). Empty or
 	// ModeReplay ⇒ the deterministic cache/primitive stream with ZERO model calls
@@ -245,6 +254,12 @@ func (c Config) opsFor(task domain.TaskID, t domain.TaskType) []wire.BuildOp {
 // resolver (or the committed embedded cache by default). It returns ok=false —
 // the primitive fallback — when there is no blueprint, no resolver/cache, or no
 // baked entry for the task. It NEVER reaches the Model seam: replay is pure data.
+//
+// The cache is keyed by the LOCAL task id ("foundation-1"), but a two-site (or
+// drag-placed) board prefixes ids with an instance/site ("lunar/foundation-1",
+// blueprint.Place — epic 04). So the lookup uses the local id (the segment after
+// the last "/"), which keeps the baked-replay headline working on the two-site
+// demo board while staying byte-for-byte identical for an unprefixed single-site id.
 func (c Config) replayOps(task domain.TaskID) ([]wire.BuildOp, bool) {
 	if c.BlueprintID == "" {
 		return nil, false // not configured for cache replay: always primitive
@@ -256,7 +271,19 @@ func (c Config) replayOps(task domain.TaskID) ([]wire.BuildOp, bool) {
 	if err != nil || ec == nil {
 		return nil, false // a bad/empty embedded cache degrades to primitive, never panics
 	}
-	return ec.Lookup(c.BlueprintID, string(task))
+	return ec.Lookup(c.BlueprintID, localTaskID(task))
+}
+
+// localTaskID strips a leading instance/site prefix from a placed/two-site task id
+// ("lunar/foundation-1" → "foundation-1"), returning the bare local id the baked
+// cache is keyed by (blueprint.Place prefixes ids with "instance/<localid>"). An
+// unprefixed id (the single-site board) is returned unchanged.
+func localTaskID(task domain.TaskID) string {
+	s := string(task)
+	if i := strings.LastIndexByte(s, '/'); i >= 0 {
+		return s[i+1:]
+	}
+	return s
 }
 
 // Movement and work tuning. Movement is visual interpolation only — the rover
@@ -688,6 +715,14 @@ func subscribeAnnounce(conn *bus.Conn, cfg Config, st *rover) (func(), error) {
 		if st.isRecovering() {
 			return // post-revival settle: back in place but holding station, not bidding yet
 		}
+		// Site gate (two-site lunar surface, epic 04): a rover only bids on its OWN
+		// site's announces. A non-empty Announce.SiteID that differs from this rover's
+		// SiteID is another site's auction — ignore it so the two swarms never bid
+		// across the map. An untagged announce (empty SiteID), or a rover with no
+		// SiteID, falls through and bids exactly as before (single-site back-compat).
+		if a.SiteID != "" && a.SiteID != cfg.SiteID {
+			return
+		}
 		if st.refuses(a.TaskID) {
 			return // cooperatively failed this task: never bid on it again
 		}
@@ -697,6 +732,7 @@ func subscribeAnnounce(conn *bus.Conn, cfg Config, st *rover) (func(), error) {
 			Battery:      battery,
 			Capabilities: cfg.Capabilities,
 			CurrentLoad:  load,
+			SiteID:       cfg.SiteID,
 		}
 		cost, bids := allocation.Cost(weights, rs, a.Type, a.Pos)
 		if !bids {
@@ -1298,6 +1334,7 @@ func publishTelemetry(conn *bus.Conn, cfg Config, st *rover) {
 		Alive:   alive,
 		Load:    load,
 		At:      nowTick(),
+		Site:    cfg.SiteID, // tag the rover's site so publishSnapshot sets RoverView.Site (epic 04)
 	})
 }
 
