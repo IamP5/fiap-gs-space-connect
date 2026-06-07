@@ -308,3 +308,47 @@ nodes. This use does not imply NASA endorsement.
 
 Original download (Draco-compressed source; conditioned, not committed as-is):
 `https://raw.githubusercontent.com/nasa/NASA-3D-Resources/master/3D%20Models/Regolith%20Advanced%20Surface%20Systems%20Operations%20Robot%20%28RASSOR%29/Regolith%20Advanced%20Surface%20Systems%20Operations%20Robot%20%28RASSOR%29.glb`
+
+## Milky-Way star background (Deep Star Maps 2020 — NASA-PD + ESA/Gaia co-credit)
+
+Used by `<SpaceEnvironment>` (issue #83) as the equirectangular Milky-Way
+background assigned to `scene.background` (`EquirectangularReflectionMapping`,
+`SRGBColorSpace`, max anisotropy) — kept SEPARATE from the IBL `environment`. It
+is a **Scenery** element (ADR-0004 allows snapshot-independent decoration), never
+a snapshot-driven Asset; a failed/missing load leaves the Canvas's black
+`<color attach="background">` fallback untouched (ADR-0004 mandatory fallback).
+
+The source is the SVS 4851 **galactic-coordinate** composite (`_gal`: Milky-Way
+band sits as a clean horizontal stripe with the bulge centered) — the
+`starmap_*` file is the *composite* (Milky-Way band **+** discrete stars in one
+file). No constellation/grid overlay is baked in. The source is **EXR-only** at
+usable resolution (the SVS `.jpg` 404s; `_print.jpg` is a 1024×512 thumbnail),
+so the 8k EXR was converted OFFLINE to a 4096×2048 sRGB JPG (exposure-lifted so
+the faint band reads as soft grey-brown, not crushed to black). Downloaded &
+converted: 2026-06-07; verified as a real JPEG (`file` reports `JPEG image
+data, … 4096x2048`).
+
+| File | Source asset | Author | Source URL | License |
+|------|--------------|--------|-----------|---------|
+| `starmap_2020_4k_gal.jpg` | Deep Star Maps 2020 (SVS 4851) → `starmap_2020_8k_gal.exr`, converted offline to 4096×2048 sRGB JPG | NASA/Goddard SVS (Gaia DR2: ESA/Gaia/DPAC) | https://svs.gsfc.nasa.gov/4851/ | Public Domain (NASA-PD) + ESA/Gaia co-credit |
+
+Original download (8192×4096 EXR; converted offline, not committed as-is):
+`https://svs.gsfc.nasa.gov/vis/a000000/a004800/a004851/starmap_2020_8k_gal.exr`
+
+Offline conversion (ImageMagick v7; `oiiotool` not available — exposure-lift then
+encode sRGB):
+
+```sh
+magick starmap_2020_8k_gal.exr -resize 4096x2048 \
+  -evaluate multiply 6.0 -colorspace sRGB -quality 90 \
+  web/public/assets/starmap_2020_4k_gal.jpg
+```
+
+NASA's Deep Star Maps are derived from ESA's Gaia DR2 (plus Hipparcos/Tycho)
+catalogs and carry a **mandatory ESA/Gaia co-credit** even though NASA-hosted.
+NASA content is generally not copyrighted (NASA media usage guidelines); the NASA
+insignia/logo is **not** used and no endorsement is implied. See
+https://svs.gsfc.nasa.gov/4851/ and
+https://www.nasa.gov/nasa-brand-center/images-and-media/.
+
+**Required attribution:** NASA/Goddard SVS. Gaia DR2: ESA/Gaia/DPAC
