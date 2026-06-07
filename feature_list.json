@@ -1015,7 +1015,7 @@
         "manual: orbit & surface screenshots; animated slices pause when the tab is hidden"
       ],
       "evidence": [
-        "Implemented @ f498b69: FOV 42->50 + surface distance band pulled in (10->8, 40->33) to hold framing; surface-only cool steel-blue rim + warm sun-side fill (gated onSurface); earthshine now a pointLight at EARTH_POSITION with decay=2 (physically-correct 1/r^2 falloff, pale steel-blue retained, void near-black in orbit, Sun hard white); duplicate surface <fog> consolidated into one shared SURFACE_FOG_ARGS warmed to #0a0f1a. Static — 0 idle fps preserved.",
+        "Implemented on branch worktree-agent-a474031a30da74922 (head dbcb39d): FOV 42->50 + surface distance band pulled in (10->8, 40->33) to hold framing; surface-only cool steel-blue rim + warm sun-side fill (gated onSurface); earthshine now a pointLight at EARTH_POSITION with decay=2 (physically-correct 1/r^2 falloff, pale steel-blue retained, void near-black in orbit, Sun hard white); duplicate surface <fog> consolidated into one shared SURFACE_FOG_ARGS warmed to #0a0f1a. Static — 0 idle fps preserved.",
         "web baseline green: npm run lint clean + npm run build TS-clean + vitest 11 files / 116 tests pass. Coordinator runs the consolidated visual (orbit & surface) review."
       ],
       "notes": "Wave 3 (cinematic beauty & immersion). AFK. PR open; flips to passing on merge (issue-sync)."
