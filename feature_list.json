@@ -1009,7 +1009,7 @@
       "area": "realistic-3d-world",
       "title": "Lighting & framing grade (FOV 50, rim/fill lights, earthshine falloff, fog dedupe)",
       "user_visible_behavior": "A wider 50-degree FOV with surface rim/fill lights, distance-scaled earthshine, and warm atmospheric fog.",
-      "status": "in_progress",
+      "status": "passing",
       "issue": 101,
       "epic": 46,
       "depends_on": [],
@@ -1021,7 +1021,7 @@
         "Implemented on branch worktree-agent-a474031a30da74922 (head dbcb39d): FOV 42->50 + surface distance band pulled in (10->8, 40->33) to hold framing; surface-only cool steel-blue rim + warm sun-side fill (gated onSurface); earthshine now a pointLight at EARTH_POSITION with decay=2 (physically-correct 1/r^2 falloff, pale steel-blue retained, void near-black in orbit, Sun hard white); duplicate surface <fog> consolidated into one shared SURFACE_FOG_ARGS warmed to #0a0f1a. Static — 0 idle fps preserved.",
         "web baseline green: npm run lint clean + npm run build TS-clean + vitest 11 files / 116 tests pass. Coordinator runs the consolidated visual (orbit & surface) review."
       ],
-      "notes": "Wave 3 (cinematic beauty & immersion). AFK. PR open; flips to passing on merge (issue-sync)."
+      "notes": "Wave 3 (cinematic beauty & immersion). Merged to main 2026-06-07 via PR #116 -> wave3/integration -> main (PR #125)."
     },
     {
       "id": "r3d-102",
@@ -1232,9 +1232,9 @@
       ],
       "evidence": [
         "cd web && npm run build (tsc -b clean) && npx vitest run (150 passed)",
-        "chrome-devtools MCP: orbit + surface screenshots verified on wave4/living-orbit"
+        "chrome-devtools MCP: orbit + surface screenshots verified; merged to main 2026-06-07 via PR #124 -> wave3/integration -> main (PR #125)"
       ],
-      "notes": "Wave 4 'living orbit'. Generalised #112: frameloop='always' (ADR-0004 demand-loop budget dropped — see AGENTS.md/ADR-0004 amendment); custom Earth day/night+ocean-glint ShaderMaterial; drifting NASA-PD cloud shell; decoupled ORBIT_SUN_POSITION for the dark-side Moon (surface keeps SUN_POSITION); orbit IBL dimmed (EnvironmentGrade) so the Moon's far side reads dark."
+      "notes": "Wave 4 'living orbit'. Generalised #112: frameloop='always' (ADR-0004 demand-loop budget dropped — see AGENTS.md/ADR-0004 amendment); custom Earth day/night+ocean-glint ShaderMaterial; drifting NASA-PD cloud shell; decoupled ORBIT_SUN_POSITION for the dark-side Moon (surface keeps SUN_POSITION); orbit IBL dimmed (EnvironmentGrade) so the Moon's far side reads dark. Session 008 polish: slow spin, earthshine night-fill for a Moon-smooth terminator, dimmer moody exposure, warm divider band removed, and logarithmicDepthBuffer to kill the concentric-shell (surface/cloud/rim) depth-fight flicker at the far orbit distance (custom shaders opt in via logdepthbuf_* chunks). Benign ANGLE/macOS glBlitFramebuffer warning is pre-existing."
     }
   ]
 }
