@@ -1,7 +1,7 @@
 // choreography.test.ts — pure logic for slice 06's TTL ring + transient beats.
 //
 // No DOM/canvas/rAF here: ringFraction/ringColor/activeBeats/beatLifetimeMs are
-// pure math, so they run in vitest's node env exactly like hitTest.test.ts.
+// pure math, so they run in vitest's node env with no test renderer.
 
 import { describe, expect, it } from "vitest";
 import {

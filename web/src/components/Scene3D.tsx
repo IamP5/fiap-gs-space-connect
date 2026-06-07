@@ -4,11 +4,11 @@
 // status halos (idle/bidding/working/dead), lease beams from each rover to the
 // task it holds, and the habitat dome rising block-by-block as tasks complete.
 // There is NO client-side simulation — every mesh position is derived from the
-// authoritative snapshot via lib/scene.ts, so neither renderer can lie about
+// authoritative snapshot via lib/scene.ts, so the scene can never lie about
 // World Model state. Choreography beats (lib/choreography.ts) only DECORATE.
 //
-// Drop-in swap for WorldCanvas: same `{ snapshot, selected, onPick }` contract,
-// so App can toggle between the 3D scene and the 2D fallback.
+// The sole renderer of the worksite, on the `{ snapshot, selected, onPick }`
+// contract App threads in.
 //
 // PERFORMANCE MODEL (the dashboard must run light on a projector laptop):
 //   - frameloop="demand": the render loop is IDLE unless something changed. We
@@ -2378,9 +2378,9 @@ function SceneContents({
   const geo = useMemo(makeSceneGeo, []);
   useEffect(() => () => disposeSceneGeo(geo), [geo]);
 
-  // Beat bookkeeping — DECORATION ONLY, derived from the server's own events
-  // (mirrors WorldCanvas). Stamped with performance.now() so animation progress
-  // is independent of snapshot cadence. Held in a ref and read by each mesh's
+  // Beat bookkeeping — DECORATION ONLY, derived from the server's own events.
+  // Stamped with performance.now() so animation progress is independent of
+  // snapshot cadence. Held in a ref and read by each mesh's
   // useFrame; mutating it never triggers a React re-render.
   const beats = useRef<ActiveBeat[]>([]);
   const lastAt = useRef<number>(Number.NEGATIVE_INFINITY);
@@ -2568,8 +2568,8 @@ function SceneContents({
   );
 }
 
-// The exported renderer. Mirrors WorldCanvas's contract exactly so App can swap
-// them. A FIXED default orbit-camera angle frames the worksite; OrbitControls is
+// The exported renderer (sole worksite renderer, ADR-0004). A FIXED default
+// orbit-camera angle frames the worksite; OrbitControls is
 // allowed but clamped (no roll past the horizon, bounded zoom) so it can't be
 // knocked into a useless pose on a projector. A click on empty space (the
 // ground / background) deselects via onPointerMissed.

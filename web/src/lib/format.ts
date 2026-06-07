@@ -1,7 +1,7 @@
 // format — tiny pure presentation helpers shared by the React chrome (App) and
-// the canvas renderer (WorldCanvas), so battery is clamped and shown the same
-// way in both. Kept DOM-free and pure so they're unit-testable in vitest's node
-// env, matching the hitTest/choreography helpers' ethos.
+// the 3D renderer (Scene3D), so battery is clamped and shown the same way in
+// both. Kept DOM-free and pure so they're unit-testable in vitest's node env,
+// matching the choreography helpers' ethos.
 
 // Clamp a 0..1 value into range. A rover's battery is nominally 0..1 but a
 // malformed frame must never produce an out-of-range arc or percentage.

@@ -3,7 +3,7 @@
 // The SAME projection drives both the 3D render AND the click raycast hit-proxy,
 // so a click can never drift off the rover the user sees (ADR-0004's hardened
 // click-to-kill). Kept DOM-free / three-free so it is unit-testable in vitest's
-// node env, mirroring hitTest.ts's "no missed clicks" ethos for the 2D canvas.
+// node env, with a "no missed clicks" ethos.
 //
 // The server's world coordinates are domain.Vec2 with capital X/Y (no JSON tags;
 // see types/wire.ts). We map that 2D worksite onto the ground plane of a 3D
@@ -163,7 +163,7 @@ export type ScenePoint = { x: number; y: number; z: number };
 
 // Bounding box over all worksite points. A zero-size span (single point /
 // colinear worksite) is nudged out by 1 world unit so a consumer never divides by
-// zero — identical guard to hitTest.computeBounds, kept local to avoid coupling.
+// zero — a guard kept local to avoid coupling.
 // NB (Epic 04 P0): this NO LONGER drives the scene scale (the scale is now fixed);
 // it is retained, exported, for tests and any bbox consumer.
 export function computeBounds(points: Vec2[]): Bounds {

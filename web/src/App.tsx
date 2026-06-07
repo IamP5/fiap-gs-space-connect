@@ -1,6 +1,6 @@
 // App — the SwarmBuild dashboard shell. Pure re-render of the latest snapshot:
 // a connection indicator (header), the task ledger (top-left), the kill panel
-// (top-right, when a rover is selected), and the 2D world canvas. No state
+// (top-right, when a rover is selected), and the 3D worksite scene. No state
 // libraries, no router — React + a canvas is enough. App owns only selection
 // state; everything else is derived from the snapshot and pushed into small
 // memoized presentational components (StatusIndicator, TaskLedger, KillPanel).
@@ -22,7 +22,6 @@ import { KillPanel } from "./components/KillPanel";
 import { ControlsPanel } from "./components/ControlsPanel";
 import { EarthPanel } from "./components/EarthPanel";
 import { BlueprintPalette } from "./components/BlueprintPalette";
-import { WorldCanvas } from "./components/WorldCanvas";
 // Type-only — erased at build time, so referencing the camera view-mode type
 // here does NOT pull the lazy three.js Scene3D chunk into the eager shell bundle.
 import type { ViewMode } from "./components/Scene3D";
@@ -38,17 +37,12 @@ import type { BuildMode, Vec2 } from "./types/wire";
 import "./styles/dashboard.css";
 
 // The 3D scene drags in three.js + drei + postprocessing (~300 kB gzipped), so
-// it is code-split into its own chunk and loaded on demand. The lightweight 2D
-// WorldCanvas (the rehearsed fallback, ADR-0004) stays eager, so the shell and
-// the fallback path never pay to parse three.js up front.
+// it is code-split into its own chunk and loaded on demand. The shell stays
+// lightweight so it never pays to parse three.js up front; in-scene primitive
+// fallbacks (ADR-0004) cover any per-asset failure once the scene mounts.
 const Scene3D = lazy(() =>
   import("./components/Scene3D").then((m) => ({ default: m.Scene3D })),
 );
-
-// Which renderer draws the worksite. Both are PURE functions of the same
-// snapshot (ADR-0004), so toggling between them can never change World Model
-// state — the 3D scene is the headline; the 2D canvas is the rehearsed fallback.
-type Renderer = "3d" | "2d";
 
 export default function App() {
   const { snapshot, earth, wsOpen, url, send } = useSnapshot();
@@ -57,10 +51,6 @@ export default function App() {
   // re-render of the snapshot otherwise (ADR-0004). Two-step kill: click a
   // rover to select, then click KILL, so a stray click never kills.
   const [selected, setSelected] = useState<string | null>(null);
-
-  // The renderer toggle. Defaults to the 3D diorama (the pitch); the 2D canvas
-  // stays a one-click fallback if 3D ever misbehaves on the projector.
-  const [renderer, setRenderer] = useState<Renderer>("3d");
 
   // Camera view-mode (issue #49). Defaults to "surface" — the rehearsed fixed
   // worksite framing (ADR-0004). The operator can flip to "orbit" to pull the
@@ -195,7 +185,7 @@ export default function App() {
 
   // The ghost the scene draws while placing: the catalog blueprint's tasks
   // instantiated at the cursor origin + rotation, with validity, threaded to the
-  // active renderer. Null when not placing or before the cursor hits the ground.
+  // 3D scene. Null when not placing or before the cursor hits the ground.
   const ghost = useMemo<Ghost | null>(() => {
     if (!placement || !placement.origin) return null;
     const bp = blueprintById(placement.blueprintId);
@@ -223,24 +213,6 @@ export default function App() {
         >
           {reloading ? "Reloading…" : "Reload demo"}
         </button>
-        <div className="renderer-toggle" role="group" aria-label="Renderer">
-          <button
-            type="button"
-            className={`renderer-btn ${renderer === "3d" ? "is-active" : ""}`}
-            aria-pressed={renderer === "3d"}
-            onClick={() => setRenderer("3d")}
-          >
-            3D
-          </button>
-          <button
-            type="button"
-            className={`renderer-btn ${renderer === "2d" ? "is-active" : ""}`}
-            aria-pressed={renderer === "2d"}
-            onClick={() => setRenderer("2d")}
-          >
-            2D
-          </button>
-        </div>
         <div className="meta">{url}</div>
       </header>
 
@@ -283,40 +255,22 @@ export default function App() {
             (top-left) as latency climbs, proving "Earth never knew" (issue 09). */}
         <EarthPanel earth={earth} snapshotAt={snapshot?.at ?? null} />
 
-        {/* Both renderers honor the SAME {snapshot, selected, onPick} contract,
-            so the toggle swaps them with no other change. The 2D WorldCanvas is
-            kept fully functional as the rehearsed fallback (ADR-0004). */}
-        {renderer === "3d" ? (
-          // Suspense covers the lazy three.js chunk; the fallback is the same 2D
-          // canvas, so the worksite is visible instantly even before 3D loads.
-          <Suspense
-            fallback={
-              <WorldCanvas
-                snapshot={snapshot}
-                selected={selectedRover ? selected : null}
-                onPick={setSelected}
-              />
-            }
-          >
-            <Scene3D
-              snapshot={snapshot}
-              selected={selectedRover ? selected : null}
-              onPick={setSelected}
-              placing={placement !== null}
-              ghost={ghost}
-              onPlaceMove={movePlacement}
-              onPlaceConfirm={confirmPlacement}
-              viewMode={viewMode}
-              onViewModeChange={setViewMode}
-            />
-          </Suspense>
-        ) : (
-          <WorldCanvas
+        {/* The 3D scene is the sole renderer (ADR-0004). Suspense covers the
+            lazy three.js chunk; a minimal placeholder stands in until the chunk
+            resolves — the branded LoadingScreen replaces this in slice #129. */}
+        <Suspense fallback={<div className="scene-loading" />}>
+          <Scene3D
             snapshot={snapshot}
             selected={selectedRover ? selected : null}
             onPick={setSelected}
+            placing={placement !== null}
+            ghost={ghost}
+            onPlaceMove={movePlacement}
+            onPlaceConfirm={confirmPlacement}
+            viewMode={viewMode}
+            onViewModeChange={setViewMode}
           />
-        )}
+        </Suspense>
       </main>
     </div>
   );
