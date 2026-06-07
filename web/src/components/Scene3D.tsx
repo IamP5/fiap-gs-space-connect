@@ -1442,11 +1442,12 @@ function SceneContents({
              black sky from above) standing in for sunlight bouncing off the bright
              lunar surface, plus a tiny ambient floor so nothing is pure black
              (ADR-0004 readability). */}
-      <ambientLight intensity={0.12} />
+      <ambientLight intensity={0.17} />
       <hemisphereLight args={["#1a1a26", "#8a8276", 0.35]} />
-      <directionalLight ref={lightRef} position={SUN_POSITION} intensity={2.1} />
-      {/* Earthshine — cool, dim, from Earth's actual position. */}
-      <directionalLight position={EARTH_POSITION} color="#7da2ff" intensity={0.55} />
+      <directionalLight ref={lightRef} position={SUN_POSITION} intensity={1.9} />
+      {/* Earthshine — cool, dim, from Earth's actual position. Softens the Moon's
+          night side so the terminator reads as a smooth gradient, not a hard cut. */}
+      <directionalLight position={EARTH_POSITION} color="#7da2ff" intensity={0.7} />
 
       {/* Surface-only horizon fog: dissolves the far ground edge into the black
           sky for a clean horizon + sense of vastness. The worksite (within ~30

@@ -151,6 +151,12 @@ function MoonGlobe({ visible }: { visible: boolean }) {
       metalness: 0,
       fog: false,
     });
+    // Soften the crater normal map. Under the harsh space back-light + low fill,
+    // a full-strength normal map over-shades every crater rim near the terminator,
+    // making the lit area read as a blotchy/flat patch instead of a smooth sphere.
+    // A gentle scale keeps subtle relief while the globe reads as a clean ball.
+    matNear.normalScale.set(0.35, 0.35);
+    matFar.normalScale.set(0.35, 0.35);
     return { geomNear, geomFar, matNear, matFar };
   }, []);
 
@@ -265,26 +271,96 @@ function EarthBody({ visible }: { visible: boolean }) {
 
 // --- Sun (both views) — the scene's light emitter ---------------------------
 // The Sun is the SINGLE light source: Scene3D's directionalLight sits at the same
-// SUN_POSITION, so the key light literally comes FROM this disc. It is rendered
-// WHITE-HOT (sunlight in vacuum is white — no atmosphere to redden it): the body
-// is self-illuminated by a strong WHITE `emissive` with `toneMapped={false}`, so
-// the disc stays pure white regardless of exposure. The Solar System Scope colour
-// map (CC-BY 4.0) is wired as a faint `map` for subtle granulation only — the
-// white emissive dominates, so the result reads white, never yellow. A failed
-// texture load just leaves the flat near-white fallback (ADR-0004). No per-frame
-// work. Placed very far (SUN_POSITION) so it subtends only a few degrees.
+// SUN_POSITION, so the key light literally comes FROM here. It is built from three
+// camera-facing, additive, snapshot-independent layers so it reads as a brilliant
+// DISTANT emitter throwing rays of light, not a near solid ball:
+//   1. core disc — a small white-hot sphere (the body itself; ADR-0004 fallback,
+//      always rendered even if the sprite textures somehow fail);
+//   2. glow — a soft radial-gradient sprite that fades smoothly to nothing (no
+//      hard ring);
+//   3. rays — a starburst sprite (alternating long/short spokes) giving the
+//      "shine waves" radiating outward.
+// Sprites always face the camera, so the flare looks right from any orbit angle.
+// All WHITE (sunlight in vacuum is white — no atmosphere to redden it) and
+// toneMapped:false so they stay white-hot. The glow/ray textures are generated
+// procedurally on a <canvas> (no external asset, no licensing) and disposed on
+// unmount. No per-frame work — the flare is static (a spinning flare would force
+// the demand loop to render forever).
+
+// Build a soft round radial-gradient glow texture (white centre → transparent).
+function makeGlowTexture(): THREE.Texture | null {
+  if (typeof document === "undefined") return null;
+  const size = 256;
+  const cv = document.createElement("canvas");
+  cv.width = cv.height = size;
+  const ctx = cv.getContext("2d");
+  if (!ctx) return null;
+  const g = ctx.createRadialGradient(size / 2, size / 2, 0, size / 2, size / 2, size / 2);
+  g.addColorStop(0, "rgba(255,255,255,1)");
+  g.addColorStop(0.18, "rgba(255,251,242,0.55)");
+  g.addColorStop(0.45, "rgba(255,247,233,0.14)");
+  g.addColorStop(1, "rgba(255,247,233,0)");
+  ctx.fillStyle = g;
+  ctx.fillRect(0, 0, size, size);
+  const tex = new THREE.CanvasTexture(cv);
+  tex.colorSpace = THREE.SRGBColorSpace;
+  return tex;
+}
+
+// Build a starburst "rays" texture: a faint core plus alternating long/short
+// spokes radiating from the centre — the sun's shine waves.
+function makeRaysTexture(): THREE.Texture | null {
+  if (typeof document === "undefined") return null;
+  const size = 512;
+  const cv = document.createElement("canvas");
+  cv.width = cv.height = size;
+  const ctx = cv.getContext("2d");
+  if (!ctx) return null;
+  const cx = size / 2;
+  const cy = size / 2;
+  // Faint round core so the rays emerge from a glow, not a hard point.
+  const core = ctx.createRadialGradient(cx, cy, 0, cx, cy, size * 0.14);
+  core.addColorStop(0, "rgba(255,255,255,0.85)");
+  core.addColorStop(1, "rgba(255,255,255,0)");
+  ctx.fillStyle = core;
+  ctx.fillRect(0, 0, size, size);
+  // Spokes — tapering triangles that fade to transparent at the tip.
+  const spokes = 14;
+  for (let i = 0; i < spokes; i++) {
+    const a = (i / spokes) * Math.PI * 2;
+    const len = (i % 2 === 0 ? 0.5 : 0.32) * size; // alternating long/short
+    const halfW = size * (i % 2 === 0 ? 0.013 : 0.009);
+    ctx.save();
+    ctx.translate(cx, cy);
+    ctx.rotate(a);
+    const lg = ctx.createLinearGradient(0, 0, len, 0);
+    lg.addColorStop(0, "rgba(255,250,235,0.55)");
+    lg.addColorStop(1, "rgba(255,250,235,0)");
+    ctx.fillStyle = lg;
+    ctx.beginPath();
+    ctx.moveTo(0, -halfW);
+    ctx.lineTo(len, 0);
+    ctx.lineTo(0, halfW);
+    ctx.closePath();
+    ctx.fill();
+    ctx.restore();
+  }
+  const tex = new THREE.CanvasTexture(cv);
+  tex.colorSpace = THREE.SRGBColorSpace;
+  return tex;
+}
+
 function SunBody() {
   const invalidate = useThree((s) => s.invalidate);
 
   const { geometry, material } = useMemo(() => {
     const geometry = new THREE.SphereGeometry(SUN_RADIUS, 48, 48);
-    // White-hot, self-lit. toneMapped:false keeps it pure white (not tinted by
-    // the renderer's tone mapping). The faint #fff8f0 base is the fallback colour
-    // if the map fails — still essentially white, never yellow.
+    // White-hot, self-lit. toneMapped:false keeps it pure white. #fff8f0 is the
+    // fallback colour if the diffuse map fails — still essentially white.
     const material = new THREE.MeshStandardMaterial({
       color: "#fff8f0",
       emissive: "#ffffff",
-      emissiveIntensity: 1.6,
+      emissiveIntensity: 1.7,
       roughness: 1,
       metalness: 0,
       toneMapped: false,
@@ -293,11 +369,22 @@ function SunBody() {
     return { geometry, material };
   }, []);
 
+  // Procedural flare textures (glow + rays), built once and disposed on unmount.
+  const { glowTex, raysTex } = useMemo(
+    () => ({ glowTex: makeGlowTexture(), raysTex: makeRaysTexture() }),
+    [],
+  );
+  useEffect(
+    () => () => {
+      glowTex?.dispose();
+      raysTex?.dispose();
+    },
+    [glowTex, raysTex],
+  );
+
   useEffect(() => {
-    // Faint diffuse granulation only. We deliberately do NOT wire an emissiveMap:
-    // an emissiveMap would multiply the white emissive by the (yellow) texture and
-    // re-introduce the yellow the user asked us to avoid. The white emissive stays
-    // flat, so the disc is white with just a hint of surface detail in the diffuse.
+    // Faint diffuse granulation only (NO emissiveMap — that would re-introduce the
+    // texture's yellow). The white emissive dominates, so the disc stays white.
     const cleanup = loadTexture(SUN_COLOR, material, "map", THREE.SRGBColorSpace, invalidate);
     return cleanup;
   }, [material, invalidate]);
@@ -310,27 +397,37 @@ function SunBody() {
     [geometry, material],
   );
 
-  // A faint additive glow shell around the disc so the Sun reads as a brilliant
-  // emitter (a soft corona), not a flat white ball. Static, cheap, non-pickable.
-  const glow = useMemo(() => {
-    const g = new THREE.SphereGeometry(SUN_RADIUS * 1.7, 32, 32);
-    const m = new THREE.MeshBasicMaterial({
-      color: "#ffffff",
-      transparent: true,
-      opacity: 0.22,
-      blending: THREE.AdditiveBlending,
-      depthWrite: false,
-      side: THREE.BackSide,
-      toneMapped: false,
-      fog: false,
-    });
-    return { g, m };
-  }, []);
-  useEffect(() => () => { glow.g.dispose(); glow.m.dispose(); }, [glow]);
-
   return (
     <group position={SUN_POSITION} raycast={() => null}>
-      <mesh geometry={glow.g} material={glow.m} raycast={() => null} />
+      {/* Rays — the radiating shine waves (largest, faintest). */}
+      {raysTex && (
+        <sprite scale={[SUN_RADIUS * 13, SUN_RADIUS * 13, 1]} raycast={() => null}>
+          <spriteMaterial
+            map={raysTex}
+            blending={THREE.AdditiveBlending}
+            transparent
+            depthWrite={false}
+            toneMapped={false}
+            opacity={0.9}
+            fog={false}
+          />
+        </sprite>
+      )}
+      {/* Soft round glow (mid). */}
+      {glowTex && (
+        <sprite scale={[SUN_RADIUS * 6, SUN_RADIUS * 6, 1]} raycast={() => null}>
+          <spriteMaterial
+            map={glowTex}
+            blending={THREE.AdditiveBlending}
+            transparent
+            depthWrite={false}
+            toneMapped={false}
+            opacity={0.95}
+            fog={false}
+          />
+        </sprite>
+      )}
+      {/* Core disc — the body itself (always present: ADR-0004 fallback). */}
       <mesh geometry={geometry} material={material} raycast={() => null} />
     </group>
   );
