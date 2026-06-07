@@ -70,6 +70,8 @@ import {
   type ActiveBeat,
   activeBeats,
   beatProgress,
+  earthriseEnvelope,
+  launchShake,
 } from "../lib/choreography";
 import { GLTFLoader } from "three/examples/jsm/loaders/GLTFLoader.js";
 import { DRACOLoader } from "three/examples/jsm/loaders/DRACOLoader.js";
@@ -1434,6 +1436,29 @@ const MOON_CLOSE_POSE: Pose = {
 };
 
 const TRANSITION_MS = 1500;
+// The cinematic intro fly-in (#108) reuses the descent rig but stretched, so the
+// experience opens as a slow deep-space arrival rather than a snappy mode toggle.
+const INTRO_MS = 4500;
+
+// ---- Earthrise hero pose (#108) --------------------------------------------
+// The `earthrise-hero` beat lerps the SURFACE camera from its current pose to a
+// framing that holds Earth over the lunar horizon: aim down the azimuth TOWARD
+// Earth (so Earth's disc sits in frame above the regolith line), at a low pitch
+// so a band of horizon reads beneath it. Derived from EARTH_POSITION so the aim
+// can never drift from the rendered Earth. Camera backs off slightly along the
+// opposite (away-from-Earth) heading and lifts a touch for a hero vantage.
+const EARTHRISE_HERO_POSE: Pose = (() => {
+  // Horizontal heading from the worksite toward Earth (ignore Earth's depth/Y).
+  const dir = new THREE.Vector2(EARTH_POSITION[0], EARTH_POSITION[2]).normalize();
+  // Look at a far point on that heading, raised so Earth's disc frames ABOVE the
+  // horizon (Earth is far + slightly below the plane, but its apparent disc rides
+  // the limb when aimed up the heading) — a touch of lift keeps the horizon in shot.
+  const target = new THREE.Vector3(dir.x * 60, 9, dir.y * 60);
+  // Camera sits behind the worksite, opposite Earth's heading, at surface height
+  // so the regolith plain leads the eye out to the Earthrise.
+  const position = new THREE.Vector3(-dir.x * 22, 8, -dir.y * 22);
+  return { position, target };
+})();
 
 // ---- descent easing (#84, SVS 4444) ----------------------------------------
 // The descent is choreographed with ASYMMETRIC easing instead of the old
@@ -1571,6 +1596,208 @@ function PlacementPlane({
 // ~30 units, well inside the 180 near plane) stays unaffected. Surface-only;
 // orbit skips it so the Moon globe stays crisp.
 const SURFACE_FOG_ARGS: [string, number, number] = ["#0a0f1a", 180, 680];
+
+// ---- cinematic camera beats (#108) -----------------------------------------
+//
+// CinematicCamera drives the camera-affecting Wave-3 beats (earthrise-hero +
+// launch shake) from the live beat list. It lives INSIDE the Canvas so it can
+// reach the camera/OrbitControls via useThree and animate them in a useFrame.
+// Like every beat it only DECORATES the snapshot — it never invents world state,
+// and it returns the camera to its base pose (and re-enables controls) the moment
+// the last beat clears, so the demand loop idles at 0 fps (the invariant; SceneⅭ
+// ontents' own useFrame keeps the loop alive while beats are live).
+//
+// EARTHRISE-HERO: disables controls, lerps the camera from its current pose to
+// EARTHRISE_HERO_POSE (Earth over the horizon), holds, then lerps back and
+// restores controls at the pose it left — driven by earthriseEnvelope (0 at both
+// ends, 1 in the hold), so the move is fully reversible with no residual offset.
+//
+// LAUNCH: leaves OrbitControls in charge and adds a DECAYING positional shake
+// (launchShake) on top of the camera each frame — applied as a transient offset
+// that is removed before the next frame's read, so it never accumulates and
+// settles to exactly zero (pick/click-to-kill stay intact: the shake never
+// touches controls.enabled or the raycaster).
+type CinematicControls = {
+  target: THREE.Vector3;
+  update: () => void;
+  enabled: boolean;
+};
+
+function CinematicCamera({ beats }: { beats: React.RefObject<ActiveBeat[]> }) {
+  const camera = useThree((s) => s.camera);
+  const controls = useThree((s) => s.controls) as CinematicControls | null;
+  const invalidate = useThree((s) => s.invalidate);
+
+  // Earthrise takeover state: the pose the camera was at when the beat began, so
+  // we can lerp out and restore it exactly. Null when no earthrise beat is active.
+  const heroFrom = useRef<Pose | null>(null);
+  // The shake offset applied last frame, removed at the top of the next frame so
+  // the shake is purely additive and never accumulates into the base pose.
+  const shakeOffset = useRef(new THREE.Vector3(0, 0, 0));
+  const tmpPos = useRef(new THREE.Vector3());
+  const tmpTgt = useRef(new THREE.Vector3());
+
+  useFrame(() => {
+    const list = beats.current;
+    // Always undo last frame's shake offset first so the base pose is clean,
+    // whether or not a launch beat is still active this frame.
+    if (shakeOffset.current.lengthSq() > 0) {
+      camera.position.sub(shakeOffset.current);
+      shakeOffset.current.set(0, 0, 0);
+    }
+    if (!list || list.length === 0) {
+      // No beats: if we were mid-earthrise (e.g. the beat was pruned), restore.
+      if (heroFrom.current) {
+        if (controls) {
+          controls.enabled = true;
+          controls.update();
+        }
+        heroFrom.current = null;
+        invalidate();
+      }
+      return;
+    }
+
+    const now = performance.now();
+    let hero = 0;
+    let launch = 0;
+    for (const b of list) {
+      if (b.kind === "earthrise-hero") hero = Math.max(hero, beatProgress(b, now));
+      else if (b.kind === "launch") launch = Math.max(launch, beatProgress(b, now));
+    }
+
+    // EARTHRISE-HERO — disable controls, lerp toward the hero framing, hold, then
+    // lerp back. earthriseEnvelope is 0 at both ends so we land back on `heroFrom`.
+    const heroActive = hero > 0 && hero < 1;
+    if (heroActive) {
+      if (!heroFrom.current) {
+        // Capture the pose to fly FROM (and back TO). Disable controls for the move.
+        heroFrom.current = {
+          position: camera.position.clone(),
+          target: controls ? controls.target.clone() : new THREE.Vector3(0, 4, 0),
+        };
+        if (controls) controls.enabled = false;
+      }
+      const k = earthriseEnvelope(hero);
+      tmpPos.current.lerpVectors(heroFrom.current.position, EARTHRISE_HERO_POSE.position, k);
+      tmpTgt.current.lerpVectors(heroFrom.current.target, EARTHRISE_HERO_POSE.target, k);
+      camera.position.copy(tmpPos.current);
+      camera.up.set(0, 1, 0);
+      camera.lookAt(tmpTgt.current);
+      if (controls) controls.target.copy(tmpTgt.current);
+    } else if (heroFrom.current) {
+      // Earthrise just finished — settle exactly back on the captured pose and
+      // hand the camera back to OrbitControls.
+      camera.position.copy(heroFrom.current.position);
+      camera.up.set(0, 1, 0);
+      camera.lookAt(heroFrom.current.target);
+      if (controls) {
+        controls.target.copy(heroFrom.current.target);
+        controls.enabled = true;
+        controls.update();
+      }
+      heroFrom.current = null;
+    }
+
+    // LAUNCH — decaying screen shake. A small positional jitter that decays to 0;
+    // applied AFTER any earthrise pose so a launch during the hold still rattles.
+    if (launch > 0 && launch < 1) {
+      const SHAKE = 0.5; // peak amplitude in scene units (subtle, not nauseating)
+      shakeOffset.current.set(
+        launchShake(launch, 0) * SHAKE,
+        launchShake(launch, 1) * SHAKE,
+        launchShake(launch, 2) * SHAKE * 0.5,
+      );
+      camera.position.add(shakeOffset.current);
+    }
+
+    invalidate();
+  });
+
+  return null;
+}
+
+// LaunchFlare draws the launch beat's additive exhaust + godray flare: a stack of
+// emissive, non-tone-mapped billboards at the launch pad that bloom up and fade
+// over the beat. Always mounted but hidden; visibility/scale/opacity are driven
+// in useFrame so it costs nothing between beats (mirrors the winner/recovery
+// rings). On the bloom layer so the flare glows. Snapshot-INDEPENDENT decoration.
+function LaunchFlare({ beats }: { beats: React.RefObject<ActiveBeat[]> }) {
+  const groupRef = useRef<THREE.Group>(null);
+  const coreMatRef = useRef<THREE.MeshBasicMaterial>(null);
+  const plumeMatRef = useRef<THREE.MeshBasicMaterial>(null);
+
+  // Put the flare on the bloom layer so it glows like the halos.
+  useEffect(() => {
+    groupRef.current?.traverse((o) => o.layers.enable(HALO_BLOOM_LAYER));
+  }, []);
+
+  useFrame(() => {
+    const group = groupRef.current;
+    if (!group) return;
+    const list = beats.current;
+    let launch = 0;
+    if (list) {
+      const now = performance.now();
+      for (const b of list) {
+        if (b.kind === "launch") {
+          launch = Math.max(launch, beatProgress(b, now));
+        }
+      }
+    }
+    const active = launch > 0 && launch < 1;
+    if (!active) {
+      if (group.visible) group.visible = false;
+      return;
+    }
+    group.visible = true;
+    // Ignition flash ramps up fast then the plume climbs and fades over the beat.
+    const ignite = Math.min(1, launch / 0.12); // quick flash-up in the first 12%
+    const fade = 1 - launch; // overall decay toward the end
+    const core = coreMatRef.current;
+    const plume = plumeMatRef.current;
+    if (core) core.opacity = ignite * fade;
+    if (plume) plume.opacity = ignite * fade * 0.8;
+    // The plume billboard stretches upward as the launch climbs.
+    group.scale.set(1, 1 + launch * 2.2, 1);
+  });
+
+  // Placed at the launch-pad corner of the worksite (matches LaunchScenery's
+  // edge placement). Two stacked emissive quads: a tight bright core + a taller
+  // soft plume, both additive + non-tone-mapped so they read as raw light.
+  return (
+    <group ref={groupRef} position={[GROUND_SPAN * 0.7, 0, GROUND_SPAN * 0.7]} visible={false}>
+      {/* Bright ignition core at the pad base. */}
+      <mesh position={[0, 1.2, 0]} raycast={() => null}>
+        <planeGeometry args={[2.2, 2.6]} />
+        <meshBasicMaterial
+          ref={coreMatRef}
+          color="#fff3d8"
+          transparent
+          opacity={0}
+          blending={THREE.AdditiveBlending}
+          depthWrite={false}
+          toneMapped={false}
+          side={THREE.DoubleSide}
+        />
+      </mesh>
+      {/* Taller soft exhaust plume climbing above the core. */}
+      <mesh position={[0, 3.4, 0]} raycast={() => null}>
+        <planeGeometry args={[1.6, 5.0]} />
+        <meshBasicMaterial
+          ref={plumeMatRef}
+          color="#ffd29a"
+          transparent
+          opacity={0}
+          blending={THREE.AdditiveBlending}
+          depthWrite={false}
+          toneMapped={false}
+          side={THREE.DoubleSide}
+        />
+      </mesh>
+    </group>
+  );
+}
 
 // The actual scene contents (inside <Canvas>). The snapshot → meshes mapping is
 // a single pure pass that re-renders ONLY when a new snapshot arrives. Beats
@@ -1836,6 +2063,10 @@ function SceneContents({
               worksite edge. Snapshot-INDEPENDENT decoration, raycast-suppressed. */}
           <LaunchScenery />
 
+          {/* Launch-beat flare (#108): additive exhaust + godray billboards at the
+              pad, hidden until a `launch` beat ramps them in useFrame. */}
+          <LaunchFlare beats={beats} />
+
           {/* Instanced decorative rock field (#58a) — snapshot-INDEPENDENT scatter of
               low-poly rocks in ONE draw call via <Instances frames={1}>, non-pickable. */}
           <DecorRocks />
@@ -1850,10 +2081,16 @@ function SceneContents({
         <PlacementPlane map={map} onMove={onPlaceMove} onConfirm={onPlaceConfirm} />
       ) : null}
 
+      {/* Cinematic camera beats (#108): earthrise-hero framing + decaying launch
+          shake. Reads the live beat list; idles (no camera motion) when no beat
+          is active, so the demand loop stays at 0 fps. */}
+      <CinematicCamera beats={beats} />
+
       {/* Cinematic post-processing stack (#99) — layer-gated bloom (halos +
           celestial Sun/Earth), SMAA, surface-gated DoF, orbit-only chromatic
           aberration, vignette, film grain. Rendered last; reads lightRef. All
-          passes static (demand-loop safe). */}
+          passes static (demand-loop safe). Supersedes the standalone HaloBloom —
+          the halo SelectiveBloom is now one pass inside this stack. */}
       <CinematicFX lightRef={lightRef} onSurface={onSurface} />
     </group>
   );
@@ -1931,15 +2168,17 @@ export function Scene3D({
   // re-render per frame) so the demand loop is never woken by React state churn.
   const glareRef = useRef<HTMLDivElement>(null);
 
-  // Glare-masked descent: on a view-mode change, fly the camera in two eased
-  // half-beats through a white sunlit flash that masks the scene swap. Runs a
-  // plain rAF loop (NOT a useFrame) only for its ~1.5s, invalidating each tick;
-  // when idle nothing renders, so the demand loop stays at 0 fps.
-  useEffect(() => {
-    const to = viewMode;
-    const from = shownRef.current;
-    if (to === from) return;
-
+  // Glare-masked descent runner (#84, reused by #108). Flies the camera in two
+  // eased half-beats through a white sunlit flash that masks the scene swap. Runs
+  // a plain rAF loop (NOT a useFrame) only for its `durationMs`, invalidating each
+  // tick; when idle nothing renders, so the demand loop stays at 0 fps. Returns a
+  // cleanup that cancels the rAF and re-enables controls if interrupted. The
+  // CINEMATIC INTRO (#108) reuses this exact rig — an orbit→surface descent
+  // stretched to ~4.5s — so the experience opens from deep space.
+  const runDescent = useRef<(from: ViewMode, to: ViewMode, durationMs: number) => () => void>(
+    () => () => {},
+  );
+  runDescent.current = (from, to, durationMs) => {
     const camera = cameraRef.current;
     const invalidate = invalidateRef.current;
     const controls = controlsRef.current;
@@ -1947,7 +2186,7 @@ export function Scene3D({
     if (!camera || !invalidate) {
       shownRef.current = to;
       setShown(to);
-      return;
+      return () => {};
     }
 
     // Beat 1 flies toward the Moon (descent) or lifts off the worksite (ascent);
@@ -1983,7 +2222,7 @@ export function Scene3D({
 
     const step = (now: number) => {
       if (!start) start = now;
-      const t = Math.min(1, (now - start) / TRANSITION_MS);
+      const t = Math.min(1, (now - start) / durationMs);
 
       // Slim glare (#84): a BRIEF off-center sun-bloom that only fully occludes the
       // scene swap for a few frames, rather than a full triangular wash. A narrow
@@ -2043,10 +2282,56 @@ export function Scene3D({
     raf = requestAnimationFrame(step);
     return () => {
       cancelAnimationFrame(raf);
+      if (glareRef.current) glareRef.current.style.opacity = "0";
       if (controls) controls.enabled = true; // never leave controls disabled if interrupted
     };
-    // Driven by viewMode only; the refs/state setters captured above are stable.
+  };
+
+  // View-mode change ⇒ play the glare-masked descent between modes.
+  useEffect(() => {
+    const to = viewMode;
+    const from = shownRef.current;
+    if (to === from) return;
+    return runDescent.current(from, to, TRANSITION_MS);
+    // Driven by viewMode only; the runDescent ref + state setters are stable.
   }, [viewMode]);
+
+  // CINEMATIC INTRO FLY-IN (#108): on first mount in surface view, open from deep
+  // space — reuse the descent rig (orbit→surface) stretched to ~4.5s so the
+  // experience arrives, rather than cutting in flat. Runs exactly ONCE; if the rig
+  // isn't ready on the first effect tick we retry on the next animation frame
+  // (RigBridge captures the camera/controls on commit, which may land after this
+  // effect). Controls are disabled by the rig for the duration, then restored.
+  const introPlayed = useRef(false);
+  useEffect(() => {
+    // Only auto-fly-in when the app opens directly on the surface (the default).
+    // If it opens in orbit, the user's own toggle drives the first descent instead.
+    if (introPlayed.current || viewMode !== "surface") return;
+    let cleanup: (() => void) | undefined;
+    let raf = 0;
+    const tryStart = () => {
+      if (introPlayed.current) return;
+      // Wait for the rig; without a live camera the descent would just snap.
+      if (!cameraRef.current || !invalidateRef.current) {
+        raf = requestAnimationFrame(tryStart);
+        return;
+      }
+      introPlayed.current = true;
+      // Render the surface immediately (shown is already "surface"), but fly the
+      // camera in from the orbit vantage — `from` only seeds the look target, and
+      // the start position is read live from the camera, so seed it at orbit.
+      const camera = cameraRef.current;
+      camera.position.set(ORBIT_POSE.position.x, ORBIT_POSE.position.y, ORBIT_POSE.position.z);
+      cleanup = runDescent.current("orbit", "surface", INTRO_MS);
+    };
+    tryStart();
+    return () => {
+      cancelAnimationFrame(raf);
+      cleanup?.();
+    };
+    // Once only — viewMode default is surface; the ref guards re-runs.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
 
   // Clamps + target follow the RENDERED mode so they match the visible scene.
   const preset = VIEW_PRESETS[shown];

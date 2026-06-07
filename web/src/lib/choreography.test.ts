@@ -9,6 +9,8 @@ import {
   activeBeats,
   beatLifetimeMs,
   beatProgress,
+  earthriseEnvelope,
+  launchShake,
   ringColor,
   ringFraction,
 } from "./choreography";
@@ -76,6 +78,11 @@ describe("beatLifetimeMs", () => {
     expect(beatLifetimeMs("killed")).toBe(500);
     expect(beatLifetimeMs("whatever")).toBe(500);
   });
+
+  it("maps the Wave-3 cinematic beats to their longer lifetimes (#108)", () => {
+    expect(beatLifetimeMs("launch")).toBe(3200);
+    expect(beatLifetimeMs("earthrise-hero")).toBe(4500);
+  });
 });
 
 describe("activeBeats", () => {
@@ -121,5 +128,68 @@ describe("beatProgress", () => {
     expect(beatProgress(b, 400)).toBeCloseTo(0.5);
     expect(beatProgress(b, 800)).toBe(1);
     expect(beatProgress(b, 5000)).toBe(1);
+  });
+});
+
+describe("launchShake (#108)", () => {
+  it("settles to exactly 0 at the end so the camera returns to its base pose", () => {
+    expect(launchShake(1, 0)).toBe(0);
+    expect(launchShake(1, 1)).toBe(0);
+    expect(launchShake(2, 0)).toBe(0); // clamped past the end
+  });
+
+  it("decays: the peak amplitude early is larger than late", () => {
+    // Compare envelope strength by sampling the same axis at a few phases; the
+    // exponential×linear envelope must be monotonically weaker as p grows.
+    const early = Math.abs(launchShake(0.05, 0));
+    const late = Math.abs(launchShake(0.85, 0));
+    // Envelope at 0.05 vs 0.85 differs by ~5x regardless of carrier phase, so the
+    // bound holds across the sampled carrier values.
+    expect(early).toBeGreaterThan(late);
+  });
+
+  it("gives uncorrelated waveforms per axis (x != y at the same progress)", () => {
+    const x = launchShake(0.3, 0);
+    const y = launchShake(0.3, 1);
+    expect(x).not.toBeCloseTo(y);
+  });
+
+  it("stays bounded in roughly [-1, 1] (an amplitude scalar, never a huge jolt)", () => {
+    for (let p = 0; p <= 1.0001; p += 0.013) {
+      expect(Math.abs(launchShake(p, 0))).toBeLessThanOrEqual(1);
+      expect(Math.abs(launchShake(p, 1))).toBeLessThanOrEqual(1);
+    }
+  });
+});
+
+describe("earthriseEnvelope (#108)", () => {
+  it("is 0 at both ends so controls restore at the pose they left", () => {
+    expect(earthriseEnvelope(0)).toBe(0);
+    expect(earthriseEnvelope(1)).toBe(0);
+    expect(earthriseEnvelope(-1)).toBe(0); // clamped
+    expect(earthriseEnvelope(2)).toBe(0); // clamped
+  });
+
+  it("holds at full (1) through the middle of the beat", () => {
+    expect(earthriseEnvelope(0.5)).toBe(1);
+    expect(earthriseEnvelope(0.4)).toBe(1);
+    expect(earthriseEnvelope(0.6)).toBe(1);
+  });
+
+  it("ramps in monotonically from 0 up to the hold", () => {
+    const a = earthriseEnvelope(0.05);
+    const b = earthriseEnvelope(0.1);
+    const c = earthriseEnvelope(0.2);
+    expect(a).toBeLessThan(b);
+    expect(b).toBeLessThan(c);
+    expect(c).toBeLessThanOrEqual(1);
+  });
+
+  it("ramps out monotonically from the hold back to 0", () => {
+    const a = earthriseEnvelope(0.8);
+    const b = earthriseEnvelope(0.9);
+    const c = earthriseEnvelope(0.98);
+    expect(a).toBeGreaterThan(b);
+    expect(b).toBeGreaterThan(c);
   });
 });
