@@ -49,6 +49,7 @@ import { batteryPercent } from "../lib/format";
 import { suppressRaycast } from "../lib/suppressRaycast";
 import {
   GROUND_SPAN,
+  MOON_POSITION,
   type SceneMap,
   isBuilt,
   sceneMap,
@@ -983,10 +984,18 @@ const REGOLITH_MAPS: {
   { url: "/assets/textures/regolith_ao_512.jpg", key: "aoMap", colorSpace: THREE.NoColorSpace },
 ];
 
-// Tile count across the ground span. ~12 repeats over GROUND_SPAN*1.6 keeps each
-// tile small enough to read as regolith grain without obvious seams (Moon 01 is
-// authored to tile). Tune here if the grain reads too large/small.
-const REGOLITH_REPEAT = 12;
+// The VISIBLE ground extends FAR past the worksite so its edge falls beyond the
+// horizon and (with the surface fog) dissolves into the black sky — it reads as an
+// endless regolith plain, not a platform. This is purely the terrain MESH size;
+// the world→scene projection still uses GROUND_SPAN (=20) so rover/task placement
+// is unchanged. Worksite detail lives in the central ~±16 units; the rest is plain.
+const GROUND_VISUAL = 700;
+
+// Tile count across the visible ground. Scaled WITH the ground size (~0.3 tiles
+// per world unit) so the regolith grain stays the same size whether the plane is
+// 32 or 700 units (Moon 01 is authored to tile). Tune the factor if grain reads
+// too large/small.
+const REGOLITH_REPEAT = Math.round(GROUND_VISUAL * 0.3);
 
 // Low-poly lunar ground: a single displaced plane primitive (ADR-0004 allows a
 // "simple ground plane / displaced primitive"). Static — built once, not driven
@@ -999,14 +1008,19 @@ function LunarTerrain() {
   const invalidate = useThree((s) => s.invalidate);
 
   const geom = useMemo(() => {
-    const g = new THREE.PlaneGeometry(GROUND_SPAN * 1.6, GROUND_SPAN * 1.6, 48, 48);
+    const g = new THREE.PlaneGeometry(GROUND_VISUAL, GROUND_VISUAL, 96, 96);
     const pos = g.attributes.position as THREE.BufferAttribute;
     for (let i = 0; i < pos.count; i++) {
       const x = pos.getX(i);
       const y = pos.getY(i);
-      // Deterministic pseudo-noise (sines) — gentle dunes, no physics, no asset.
-      const z = Math.sin(x * 0.6) * Math.cos(y * 0.55) * 0.18 + Math.sin(x * 1.7 + y) * 0.05;
-      pos.setZ(i, z);
+      // Deterministic pseudo-noise (sines): fine regolith ripple everywhere, plus a
+      // long, low rolling swell that fades IN with distance from the worksite so the
+      // far plain undulates toward the horizon while the center (where rovers/tasks
+      // sit at y=0) stays flat. No physics, no asset.
+      const fine = Math.sin(x * 0.6) * Math.cos(y * 0.55) * 0.18 + Math.sin(x * 1.7 + y) * 0.05;
+      const swellAmp = THREE.MathUtils.smoothstep(Math.hypot(x, y), 30, 200) * 4.0;
+      const swell = Math.sin(x * 0.018 + 1.3) * Math.cos(y * 0.021) * swellAmp;
+      pos.setZ(i, fine + swell);
     }
     g.computeVertexNormals();
     // aoMap reads from uv2; PlaneGeometry's uv works directly as the second set.
@@ -1153,21 +1167,66 @@ const VIEW_PRESETS: Record<
 > = {
   surface: {
     minDistance: 10,
-    maxDistance: 34,
+    maxDistance: 40,
     minPolarAngle: Math.PI / 6,
-    maxPolarAngle: Math.PI / 2.4,
-    target: [0, 0.6, 0],
+    // Allow a flatter, more horizon-facing look (up to ~80° from vertical) so the
+    // plain + sky + distant Earth read; still clamped short of dipping under it.
+    maxPolarAngle: Math.PI / 2.25,
+    target: [0, 4, 0],
   },
   orbit: {
-    // Pull back to a wide vantage that frames the worksite AND a parked Moon
-    // sitting out along -Z. Distinct clamps from surface — not a widened
-    // worksite zoom — and a target lifted/pushed toward the Moon's berth.
-    minDistance: 120,
-    maxDistance: 900,
-    minPolarAngle: Math.PI / 8,
-    maxPolarAngle: Math.PI / 2.1,
-    target: [0, 40, -200],
+    // The space vista: the camera ORBITS THE MOON GLOBE itself (target = the
+    // globe's berth, imported from SkyBodies so the two can never drift apart).
+    // The worksite is hidden in this mode (it's "on" the Moon), so there is no
+    // floating diorama in frame — just the Moon, distant Earth, and stars. The
+    // distance band keeps a radius-90 globe filling a good part of the 42° fov.
+    minDistance: 220,
+    maxDistance: 640,
+    minPolarAngle: Math.PI / 4,
+    maxPolarAngle: Math.PI / 2.2,
+    target: [MOON_POSITION[0], MOON_POSITION[1], MOON_POSITION[2]],
   },
+};
+
+// ---- view-transition poses + easing (glare-masked descent) ------------------
+// Each mode has a canonical camera pose the transition flies BETWEEN. The toggle
+// plays a two-beat, glare-masked move: fly toward the Moon (or lift off the
+// surface) into a white sunlit flash that hides the scene swap, then settle into
+// the destination pose. Tuned by eye; see CameraTransition.
+type Pose = { position: THREE.Vector3; target: THREE.Vector3 };
+
+// Surface: the rehearsed worksite framing (matches the Canvas `camera` default).
+// A lower pitch that looks OUT toward the horizon so the regolith plain recedes
+// into the fog and the sky (with a distant Earth) reads above it — "standing on
+// the Moon," not staring straight down at a platform.
+const SURFACE_POSE: Pose = {
+  position: new THREE.Vector3(0, 11, 30),
+  target: new THREE.Vector3(0, 4, 0),
+};
+// A high vantage straight over the worksite — the start/end of the descent half,
+// so the surface "drops in" from above rather than cutting in flat.
+const SURFACE_HIGH_POSE: Pose = {
+  position: new THREE.Vector3(0, 120, 80),
+  target: new THREE.Vector3(0, 0.6, 0),
+};
+// Orbit: the camera berthed off the Moon globe, framing it as the hero.
+const ORBIT_POSE: Pose = {
+  position: new THREE.Vector3(MOON_POSITION[0], MOON_POSITION[1] + 80, MOON_POSITION[2] + 410),
+  target: new THREE.Vector3(...MOON_POSITION),
+};
+// The closest point of the fly-to-Moon beat: the globe looms large just as the
+// glare peaks and the scene swaps. Target stays on the globe center.
+const MOON_CLOSE_POSE: Pose = {
+  position: new THREE.Vector3(MOON_POSITION[0], MOON_POSITION[1] + 20, MOON_POSITION[2] + 180),
+  target: new THREE.Vector3(...MOON_POSITION),
+};
+
+const TRANSITION_MS = 1500;
+// easeInOutCubic — smooth accelerate/decelerate for each half-beat.
+const easeInOut = (x: number) => (x < 0.5 ? 4 * x * x * x : 1 - Math.pow(-2 * x + 2, 3) / 2);
+const lerpPose = (a: Pose, b: Pose, k: number, outPos: THREE.Vector3, outTgt: THREE.Vector3) => {
+  outPos.lerpVectors(a.position, b.position, k);
+  outTgt.lerpVectors(a.target, b.target, k);
 };
 
 // GHOST_OK / GHOST_BAD tint the placement preview green when the spot is valid,
@@ -1338,11 +1397,19 @@ function SceneContents({
     [snapshot],
   );
 
+  // `viewMode` here is the RENDERED mode (Scene3D's `shown`, which flips at the
+  // glare peak). In orbit the worksite is hidden — you see only the Moon globe,
+  // distant Earth, and stars — so it never floats as a square in space.
+  const onSurface = viewMode === "surface";
+
   if (!snapshot || !map || !taskById) {
     return (
       <>
         <ambientLight intensity={0.4} />
-        <LunarTerrain />
+        {/* Surface-only horizon fog: dissolves the far ground edge into the black
+            sky for a clean horizon. Skipped in orbit (the Moon must stay crisp). */}
+        {onSurface && <fog attach="fog" args={["#000000", 180, 680]} />}
+        {onSurface && <LunarTerrain />}
         <SpaceEnvironment />
         <SkyBodies viewMode={viewMode} />
       </>
@@ -1357,58 +1424,69 @@ function SceneContents({
       <hemisphereLight args={["#9a9aae", "#1a1a22", 0.5]} />
       <directionalLight ref={lightRef} position={[6, 10, 6]} intensity={1.4} />
 
-      <LunarTerrain />
+      {/* Surface-only horizon fog: dissolves the far ground edge into the black
+          sky for a clean horizon + sense of vastness. The worksite (within ~30
+          units) is unaffected. Skipped in orbit so the Moon stays crisp. */}
+      {onSurface && <fog attach="fog" args={["#000000", 180, 680]} />}
 
       {/* Static, snapshot-independent backdrop: hand-rolled starfield + self-
-          hosted HDR skybox/IBL (issue #50). Encodes no world state — sits
-          OUTSIDE the snapshot-derived meshes; gives metallic glTFs real
-          reflections. The directional key light + halo bloom path below are
-          unaffected. */}
+          hosted HDR skybox/IBL (issue #50). Shown in BOTH views. Encodes no world
+          state; gives metallic glTFs real reflections. */}
       <SpaceEnvironment />
 
-      {/* Decorative sky bodies (issue #51) — snapshot-INDEPENDENT Scenery,
-          swapped by view mode: the Moon globe in orbit view, Earth in the black
-          surface sky. Never both. raycast-suppressed; no useFrame. */}
+      {/* Decorative sky bodies (issue #51) — snapshot-INDEPENDENT Scenery: the
+          Moon globe (orbit-only hero) + a distant Earth (both views). The Moon's
+          appear/vanish is hidden behind the descent glare. */}
       <SkyBodies viewMode={viewMode} />
 
-      {/* Tasks / rising dome. */}
-      {snapshot.tasks.map((t) => (
-        <TaskBlock key={t.id} task={t} map={map} geo={geo} beats={beats} />
-      ))}
+      {/* The WORKSITE — only in surface view. In orbit it would float as a square
+          in space ("moonbase lost in space"), so it is mounted only on the
+          surface (the rendered mode flips under the glare, so the swap is unseen). */}
+      {onSurface && (
+        <>
+          <LunarTerrain />
 
-      {/* Lease beams (rover → held task), under the rovers. */}
-      {snapshot.rovers.map((r) => {
-        if (!r.alive || !r.task) return null;
-        const held = taskById.get(r.task);
-        if (!held) return null;
-        return <LeaseBeam key={`beam-${r.id}`} from={r} to={held} map={map} />;
-      })}
+          {/* Tasks / rising dome. */}
+          {snapshot.tasks.map((t) => (
+            <TaskBlock key={t.id} task={t} map={map} geo={geo} beats={beats} />
+          ))}
 
-      {/* Rovers. */}
-      {snapshot.rovers.map((r) => (
-        <Rover3D
-          key={r.id}
-          rover={r}
-          map={map}
-          geo={geo}
-          selected={selected === r.id}
-          beats={beats}
-          onPick={onPick}
-        />
-      ))}
+          {/* Lease beams (rover → held task), under the rovers. */}
+          {snapshot.rovers.map((r) => {
+            if (!r.alive || !r.task) return null;
+            const held = taskById.get(r.task);
+            if (!held) return null;
+            return <LeaseBeam key={`beam-${r.id}`} from={r} to={held} map={map} />;
+          })}
 
-      {/* Launch infrastructure set-pieces (#56) — static NASA-PD Scenery at the
-          worksite edge. Snapshot-INDEPENDENT decoration, raycast-suppressed. */}
-      <LaunchScenery />
+          {/* Rovers. */}
+          {snapshot.rovers.map((r) => (
+            <Rover3D
+              key={r.id}
+              rover={r}
+              map={map}
+              geo={geo}
+              selected={selected === r.id}
+              beats={beats}
+              onPick={onPick}
+            />
+          ))}
 
-      {/* Instanced decorative rock field (#58a) — snapshot-INDEPENDENT scatter of
-          low-poly rocks in ONE draw call via <Instances frames={1}>, non-pickable. */}
-      <DecorRocks />
+          {/* Launch infrastructure set-pieces (#56) — static NASA-PD Scenery at the
+              worksite edge. Snapshot-INDEPENDENT decoration, raycast-suppressed. */}
+          <LaunchScenery />
 
-      {/* Drag-to-place ghost + cursor plane (bh-05). The plane is mounted only
-          while placing; the ghost only once the cursor has hit the ground. */}
-      {ghost ? <BlueprintGhost ghost={ghost} map={map} /> : null}
-      {placing && onPlaceMove && onPlaceConfirm ? (
+          {/* Instanced decorative rock field (#58a) — snapshot-INDEPENDENT scatter of
+              low-poly rocks in ONE draw call via <Instances frames={1}>, non-pickable. */}
+          <DecorRocks />
+        </>
+      )}
+
+      {/* Drag-to-place ghost + cursor plane (bh-05). Worksite-bound, so surface
+          only. The plane is mounted only while placing; the ghost only once the
+          cursor has hit the ground. */}
+      {onSurface && ghost ? <BlueprintGhost ghost={ghost} map={map} /> : null}
+      {onSurface && placing && onPlaceMove && onPlaceConfirm ? (
         <PlacementPlane map={map} onMove={onPlaceMove} onConfirm={onPlaceConfirm} />
       ) : null}
 
@@ -1428,55 +1506,40 @@ function SceneContents({
 // a new snapshot, an animating beat, or orbit interaction (OrbitControls is
 // makeDefault, so drei invalidates on change + damping). dpr is capped at 1.5
 // so a retina projector doesn't pay for 4× the pixels.
-// ViewModeSync — drives the camera + OrbitControls target to the active preset
-// whenever the view mode changes, then wakes the demand loop ONCE so the move
-// renders (and any future <Detailed> LOD re-evaluates). It lives INSIDE the
-// Canvas so it can read the default controls (OrbitControls makeDefault) and the
-// camera via useThree. It renders nothing and never animates per-frame, so the
-// demand loop returns to 0 fps once settled.
-function ViewModeSync({ viewMode }: { viewMode: ViewMode }) {
+// OrbitControls' minimal surface that the transition driver mutates.
+type OrbitLike = THREE.EventDispatcher & {
+  target: THREE.Vector3;
+  update: () => void;
+  enabled: boolean;
+};
+
+// RigBridge lives INSIDE the Canvas and exposes the live camera / OrbitControls /
+// invalidate to the OUT-OF-Canvas transition driver in Scene3D via refs. (The
+// driver runs a plain requestAnimationFrame loop — not a useFrame — so it must
+// reach these through refs.) It captures them on every commit so a late-mounting
+// OrbitControls (makeDefault) is picked up as soon as it exists. Renders nothing.
+function RigBridge({
+  cameraRef,
+  controlsRef,
+  invalidateRef,
+}: {
+  cameraRef: React.MutableRefObject<THREE.Camera | null>;
+  controlsRef: React.MutableRefObject<OrbitLike | null>;
+  invalidateRef: React.MutableRefObject<(() => void) | null>;
+}) {
   const camera = useThree((s) => s.camera);
-  const controls = useThree((s) => s.controls) as
-    | (THREE.EventDispatcher & {
-        target: THREE.Vector3;
-        update: () => void;
-      })
-    | null;
+  const controls = useThree((s) => s.controls) as OrbitLike | null;
   const invalidate = useThree((s) => s.invalidate);
-  // Skip the very first run: the initial mount already starts in the default
-  // (surface) framing from the Canvas `camera` prop + OrbitControls clamps, so
-  // re-positioning on mount would fight that fixed default angle (ADR-0004).
-  const mounted = useRef(false);
-
   useEffect(() => {
-    if (!controls) return;
-    if (!mounted.current) {
-      mounted.current = true;
-      return;
-    }
-    const preset = VIEW_PRESETS[viewMode];
-    const target = new THREE.Vector3(...preset.target);
-    // Place the camera BACK along its current world view direction at a sensible
-    // distance for the mode (mid-way between its clamps), looking at the preset
-    // target. We derive the direction from the camera's own orientation rather
-    // than (camera.position - controls.target): drei applies the declarative
-    // `target` prop during commit, so by the time this passive effect runs
-    // controls.target already holds the NEW preset target — subtracting it would
-    // mix an old position with a new target and skew the framing. The camera
-    // quaternion is the unambiguous source of the current view direction.
-    const dir = camera.getWorldDirection(new THREE.Vector3()).negate();
-    if (dir.lengthSq() === 0) dir.set(0, 0.5, 1); // degenerate guard
-    dir.normalize();
-    const dist = (preset.minDistance + preset.maxDistance) / 2;
-    controls.target.copy(target);
-    camera.position.copy(target).addScaledVector(dir, dist);
-    camera.lookAt(target);
-    controls.update();
-    invalidate(); // wake the demand loop so the new framing renders
-  }, [viewMode, controls, camera, invalidate]);
-
+    cameraRef.current = camera;
+    controlsRef.current = controls;
+    invalidateRef.current = invalidate;
+  });
   return null;
 }
+
+// The canonical settled pose for a mode (start/end of the descent transition).
+const poseFor = (m: ViewMode): Pose => (m === "orbit" ? ORBIT_POSE : SURFACE_POSE);
 
 export function Scene3D({
   snapshot,
@@ -1488,62 +1551,169 @@ export function Scene3D({
   onPlaceConfirm,
   viewMode = "surface",
 }: Scene3DProps) {
-  const preset = VIEW_PRESETS[viewMode];
+  // `viewMode` (prop) is the DESIRED mode; `shown` is the mode currently RENDERED.
+  // They differ only during the descent transition: `shown` flips at the glare
+  // peak, so the content/sky swap is hidden behind the flash. Clamps + the OrbitⅭ
+  // ontrols target track `shown` so they always match the visible scene.
+  const [shown, setShown] = useState<ViewMode>(viewMode);
+  const shownRef = useRef<ViewMode>(viewMode);
+  const [transitioning, setTransitioning] = useState(false);
+
+  // Live handles to the in-Canvas camera/controls/invalidate, captured by RigBridge.
+  const cameraRef = useRef<THREE.Camera | null>(null);
+  const controlsRef = useRef<OrbitLike | null>(null);
+  const invalidateRef = useRef<(() => void) | null>(null);
+  // The full-screen glare overlay (DOM). Driven by direct style mutation (no React
+  // re-render per frame) so the demand loop is never woken by React state churn.
+  const glareRef = useRef<HTMLDivElement>(null);
+
+  // Glare-masked descent: on a view-mode change, fly the camera in two eased
+  // half-beats through a white sunlit flash that masks the scene swap. Runs a
+  // plain rAF loop (NOT a useFrame) only for its ~1.5s, invalidating each tick;
+  // when idle nothing renders, so the demand loop stays at 0 fps.
+  useEffect(() => {
+    const to = viewMode;
+    const from = shownRef.current;
+    if (to === from) return;
+
+    const camera = cameraRef.current;
+    const invalidate = invalidateRef.current;
+    const controls = controlsRef.current;
+    // Rig not ready yet (shouldn't happen after first mount): snap, no animation.
+    if (!camera || !invalidate) {
+      shownRef.current = to;
+      setShown(to);
+      return;
+    }
+
+    // Beat 1 flies toward the Moon (descent) or lifts off the worksite (ascent);
+    // beat 2 settles into the destination once the content has swapped under the
+    // glare. Beat 1 starts from wherever the user actually left the camera.
+    const startPose: Pose = {
+      position: camera.position.clone(),
+      target: controls ? controls.target.clone() : poseFor(from).target.clone(),
+    };
+    const beat1To = to === "surface" ? MOON_CLOSE_POSE : SURFACE_HIGH_POSE;
+    const beat2From = to === "surface" ? SURFACE_HIGH_POSE : MOON_CLOSE_POSE;
+    const destPose = poseFor(to);
+
+    const tmpPos = new THREE.Vector3();
+    const tmpTgt = new THREE.Vector3();
+    let raf = 0;
+    let start = 0;
+    let swapped = false;
+    if (controls) controls.enabled = false; // we own the camera for the duration
+    setTransitioning(true);
+
+    const step = (now: number) => {
+      if (!start) start = now;
+      const t = Math.min(1, (now - start) / TRANSITION_MS);
+      // Triangle glare: 0 → 1 at the midpoint → 0. Direct DOM write, no re-render.
+      if (glareRef.current) glareRef.current.style.opacity = String(1 - Math.abs(t - 0.5) * 2);
+
+      if (t < 0.5) {
+        lerpPose(startPose, beat1To, easeInOut(t / 0.5), tmpPos, tmpTgt);
+      } else {
+        if (!swapped) {
+          swapped = true;
+          shownRef.current = to;
+          setShown(to); // swap content + sky under the full-glare peak
+        }
+        lerpPose(beat2From, destPose, easeInOut((t - 0.5) / 0.5), tmpPos, tmpTgt);
+      }
+      camera.position.copy(tmpPos);
+      camera.lookAt(tmpTgt);
+      if (controls) controls.target.copy(tmpTgt);
+      invalidate();
+
+      if (t < 1) {
+        raf = requestAnimationFrame(step);
+      } else {
+        if (glareRef.current) glareRef.current.style.opacity = "0";
+        if (controls) {
+          controls.target.copy(destPose.target);
+          controls.enabled = true;
+          controls.update();
+        }
+        setTransitioning(false);
+        invalidate(); // final settled frame, then the loop idles
+      }
+    };
+    raf = requestAnimationFrame(step);
+    return () => {
+      cancelAnimationFrame(raf);
+      if (controls) controls.enabled = true; // never leave controls disabled if interrupted
+    };
+    // Driven by viewMode only; the refs/state setters captured above are stable.
+  }, [viewMode]);
+
+  // Clamps + target follow the RENDERED mode so they match the visible scene.
+  const preset = VIEW_PRESETS[shown];
   return (
-    <Canvas
-      className="world-canvas"
-      frameloop="demand"
-      dpr={[1, 1.5]}
-      // far raised to ~8000 (issue #49) so a distant parked Moon is in-frustum;
-      // near kept at 0.1. Shipping WITHOUT logarithmicDepthBuffer — the low-poly
-      // worksite shows no z-fighting at this range.
-      camera={{ position: [0, 14, 18], fov: 42, near: 0.1, far: 8000 }}
-      // While placing, a click on empty space confirms the drop; otherwise it
-      // deselects a rover (the existing behaviour).
-      onPointerMissed={() => (placing ? onPlaceConfirm?.() : onPick(null))}
-      // antialias:false — the EffectComposer owns the framebuffers, so a
-      // multisampled default backbuffer is redundant AND, on ANGLE/macOS, forces
-      // a depth/stencil blitFramebuffer resolve that errors with "Read and write
-      // depth stencil attachments cannot be the same image". Turning it off
-      // removes the MSAA backbuffer (and that blit) entirely; the low-poly scene
-      // plus soft halo bloom reads fine without canvas-level AA.
-      gl={{ antialias: false, powerPreference: "high-performance" }}
-    >
-      {/* Black background as the GRACEFUL FALLBACK (issue #50): the HDR
-          Environment in <SpaceEnvironment> overrides scene.background once it
-          loads, but if the .hdr is missing/fails this black backdrop remains so
-          the scene never goes blank (ADR-0004 mandatory fallback). */}
-      <color attach="background" args={["#000000"]} />
-      <SceneContents
-        snapshot={snapshot}
-        selected={selected}
-        onPick={onPick}
-        placing={placing}
-        ghost={ghost}
-        onPlaceMove={onPlaceMove}
-        onPlaceConfirm={onPlaceConfirm}
-        viewMode={viewMode}
-      />
-      <ViewModeSync viewMode={viewMode} />
-      <OrbitControls
-        makeDefault
-        enablePan={false}
-        // Disable orbit drag while placing so a placement-drag doesn't spin the
-        // camera; the placement plane owns the cursor then.
-        enableRotate={!placing}
-        // Distance + polar clamps come from the active view preset (issue #49);
-        // surface = rehearsed worksite framing, orbit = distinct far-Moon
-        // vantage. Both stay clamped (ADR-0004) — never a free-fly camera.
-        minDistance={preset.minDistance}
-        maxDistance={preset.maxDistance}
-        // Clamp the vertical angle so the camera can't dip under the ground or
-        // look straight down — keeps the diorama readable from any orbit.
-        minPolarAngle={preset.minPolarAngle}
-        maxPolarAngle={preset.maxPolarAngle}
-        target={preset.target}
-        enableDamping
-        dampingFactor={0.08}
-      />
-    </Canvas>
+    <>
+      <Canvas
+        className="world-canvas"
+        frameloop="demand"
+        dpr={[1, 1.5]}
+        // far raised to ~8000 (issue #49) so the distant Moon + Earth are in-frustum;
+        // near kept at 0.1. Shipping WITHOUT logarithmicDepthBuffer — the low-poly
+        // worksite shows no z-fighting at this range.
+        camera={{ position: [0, 11, 30], fov: 42, near: 0.1, far: 8000 }}
+        // While placing, a click on empty space confirms the drop; otherwise it
+        // deselects a rover (the existing behaviour).
+        onPointerMissed={() => (placing ? onPlaceConfirm?.() : onPick(null))}
+        // antialias:false — the EffectComposer owns the framebuffers, so a
+        // multisampled default backbuffer is redundant AND, on ANGLE/macOS, forces
+        // a depth/stencil blitFramebuffer resolve that errors with "Read and write
+        // depth stencil attachments cannot be the same image". Turning it off
+        // removes the MSAA backbuffer (and that blit) entirely; the low-poly scene
+        // plus soft halo bloom reads fine without canvas-level AA.
+        gl={{ antialias: false, powerPreference: "high-performance" }}
+      >
+        {/* Black background as the GRACEFUL FALLBACK (issue #50): the HDR
+            Environment in <SpaceEnvironment> overrides scene.background once it
+            loads, but if the .hdr is missing/fails this black backdrop remains so
+            the scene never goes blank (ADR-0004 mandatory fallback). */}
+        <color attach="background" args={["#000000"]} />
+        <SceneContents
+          snapshot={snapshot}
+          selected={selected}
+          onPick={onPick}
+          placing={placing}
+          ghost={ghost}
+          onPlaceMove={onPlaceMove}
+          onPlaceConfirm={onPlaceConfirm}
+          viewMode={shown}
+        />
+        <RigBridge
+          cameraRef={cameraRef}
+          controlsRef={controlsRef}
+          invalidateRef={invalidateRef}
+        />
+        <OrbitControls
+          makeDefault
+          enablePan={false}
+          // Disable orbit drag while placing (the placement plane owns the cursor)
+          // and during the transition (the driver owns the camera).
+          enableRotate={!placing && !transitioning}
+          // Distance + polar clamps come from the RENDERED view preset (issue #49);
+          // surface = rehearsed worksite framing, orbit = the Moon vista. Both stay
+          // clamped (ADR-0004) — never a free-fly camera.
+          minDistance={preset.minDistance}
+          maxDistance={preset.maxDistance}
+          // Clamp the vertical angle so the camera can't dip under the ground or
+          // look straight down — keeps the diorama readable from any orbit.
+          minPolarAngle={preset.minPolarAngle}
+          maxPolarAngle={preset.maxPolarAngle}
+          target={preset.target}
+          enableDamping
+          dampingFactor={0.08}
+        />
+      </Canvas>
+      {/* Glare overlay for the descent transition. A child of .stage (position:
+          relative), so it fills the stage; pointer-events:none keeps clicks going
+          to the canvas; opacity is driven imperatively by the rAF above. */}
+      <div className="view-glare" ref={glareRef} aria-hidden="true" />
+    </>
   );
 }

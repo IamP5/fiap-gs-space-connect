@@ -21,6 +21,13 @@ import type { TaskView, Vec2 } from "../types/wire";
 export const GROUND_SPAN = 20;
 export const GROUND_MARGIN = 2.5; // scene units of padding around the worksite
 
+// The Moon globe's berth + radius (orbit-view hero). Lives here, not in the
+// SkyBodies component, so BOTH the renderer (SkyBodies) and the camera framing
+// (Scene3D's orbit preset + descent transition) import one source of truth — the
+// camera and the globe can never drift apart. See SkyBodies.tsx / Scene3D.tsx.
+export const MOON_RADIUS = 90;
+export const MOON_POSITION: [number, number, number] = [0, 60, -520];
+
 export type Bounds = { minX: number; minY: number; maxX: number; maxY: number };
 
 // A 3D point on/above the ground plane (y is "up").

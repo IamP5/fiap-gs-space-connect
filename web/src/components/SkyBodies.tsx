@@ -4,18 +4,22 @@
 // "scene is a pure function of the snapshot" invariant (decorative,
 // snapshot-INDEPENDENT elements are allowed). Mounted unconditionally.
 //
-// The worksite is ON the Moon, so the two bodies are swapped by view mode and
-// are NEVER both visible:
+// The worksite is ON the Moon, so:
 //   • Moon globe — ORBIT view ONLY. A drei <Detailed> (THREE.LOD) sphere sized
-//     to read as a real globe at orbit zoom distances (minDistance 120 …
-//     maxDistance 900, far plane ~8000). Crater relief comes from a NORMAL map
-//     (never a displacementMap). L0 (orbit-close): color + normal + roughness.
-//     L1 (pulled back): color + normal. Hidden in surface mode — the Moon must
-//     never hang in the surface sky (you are standing on it).
-//   • Earth — SURFACE view ONLY. A small, low-segment sphere with just an Earth
-//     color map, hung in the black surface sky (the Apollo "Earthrise" read).
-//     No LOD, no normal map. Hidden in orbit mode.
+//     to read as a real globe at orbit zoom distances (the orbit preset TARGETS
+//     this globe; far plane ~8000). Crater relief comes from a NORMAL map (never
+//     a displacementMap). L0 (orbit-close): color + normal + roughness. L1
+//     (pulled back): color + normal. Hidden in surface mode — the Moon must never
+//     hang in the surface sky (you are standing on it).
+//   • Earth — BOTH views. A distant marble (small angular size) hung high in the
+//     black sky with just an Earth color map (self-illuminated, the Apollo
+//     "Earthrise" read). No LOD, no normal map. A distant Earth belongs in the
+//     orbit space-vista as much as in the surface sky.
 // The starfield (from <SpaceEnvironment>, issue #50) shows in BOTH views.
+//
+// The `viewMode` passed here is the RENDERED mode (Scene3D's `shown`), which
+// flips at the glare peak of the descent transition — so the Moon appearing/
+// vanishing is hidden behind the flash, never seen as a pop.
 //
 // DEMAND-LOOP SAFETY (non-negotiable): NO useFrame of our own. Textures load
 // imperatively via THREE.TextureLoader (NOT a Suspense that can throw); each
@@ -37,6 +41,7 @@ import { useThree } from "@react-three/fiber";
 import * as THREE from "three";
 
 import type { ViewMode } from "./Scene3D";
+import { MOON_POSITION, MOON_RADIUS } from "../lib/scene";
 
 // Self-hosted NASA-PD textures (see public/assets/CREDITS.md). Downscaled jpgs.
 const MOON_COLOR = "/assets/textures/moon_color_1024.jpg";
@@ -45,23 +50,28 @@ const MOON_ROUGH = "/assets/textures/moon_rough_512.jpg";
 const EARTH_COLOR = "/assets/textures/earth_color_512.jpg";
 
 // --- Moon globe (orbit view) ------------------------------------------------
-// Placement + size: the orbit preset targets [0, 40, -200] and pulls the camera
-// back to 120…900 units. We berth the globe out along -Z, comfortably inside the
-// far plane, and size it so it reads as a real globe (not a dot) across that
-// zoom band.
-const MOON_RADIUS = 90;
-const MOON_POSITION: [number, number, number] = [0, 60, -520];
+// Placement + size: the orbit preset TARGETS this berth and frames the globe as
+// the hero of the space vista (see VIEW_PRESETS.orbit + the descent transition in
+// Scene3D, which both import these constants so the camera and the globe can never
+// drift apart). We berth the globe out along -Z, comfortably inside the far plane,
+// and size it so it reads as a real globe (not a dot) across the orbit zoom band.
+// MOON_RADIUS + MOON_POSITION are the single source of truth in lib/scene.ts so
+// Scene3D's orbit preset + descent transition target the globe exactly.
 
 // LOD switch distances (camera→object). L0 detail is shown until the camera is
 // MOON_LOD_SWITCH units away, then L1 (the cheaper material) takes over on
 // pull-back. Tuned to the orbit zoom band.
 const MOON_LOD_SWITCH = 420;
 
-// --- Earth (surface view) ---------------------------------------------------
-// A smallish disc hung high in the surface sky (the Earthrise read). Sized as a
-// modest sphere placed within the surface frustum.
-const EARTH_RADIUS = 9;
-const EARTH_POSITION: [number, number, number] = [4, -16, -65];
+// --- Earth (both views) -----------------------------------------------------
+// A distant marble hung high in the black sky to give the sense of deep space:
+// far enough that its angular size is small (~3–4° across the 42° fov), so it
+// reads as "Earth, a long way off" rather than a prop hanging over the worksite.
+// Shown in BOTH views — a distant Earth belongs in the orbit space-vista just as
+// much as in the surface sky. Self-illuminated (it sits well outside the worksite
+// key light), so it glows on its own with no per-frame work.
+const EARTH_RADIUS = 55;
+const EARTH_POSITION: [number, number, number] = [-120, 110, -820];
 
 // Imperatively load a texture and apply it to a material slot, demand-safely.
 // Returns a cleanup that detaches + disposes. A failed load is swallowed (the
@@ -116,15 +126,20 @@ function MoonGlobe({ visible }: { visible: boolean }) {
     const geomNear = new THREE.SphereGeometry(MOON_RADIUS, 96, 96);
     const geomFar = new THREE.SphereGeometry(MOON_RADIUS, 48, 48);
     // Flat fallback color: a believable regolith gray, used if textures fail.
+    // fog:false — celestial bodies sit far beyond the surface horizon fog (and
+    // are only shown in orbit, which has no fog anyway), so they must never be
+    // tinted toward the fog color.
     const matNear = new THREE.MeshStandardMaterial({
       color: "#9a958c",
       roughness: 1,
       metalness: 0,
+      fog: false,
     });
     const matFar = new THREE.MeshStandardMaterial({
       color: "#9a958c",
       roughness: 1,
       metalness: 0,
+      fog: false,
     });
     return { geomNear, geomFar, matNear, matFar };
   }, []);
@@ -173,8 +188,9 @@ function MoonGlobe({ visible }: { visible: boolean }) {
   );
 }
 
-// Earth, shown ONLY in surface view. A small low-segment sphere + color map. No
-// LOD, no normal map.
+// Earth, shown in BOTH views. A low-segment sphere + color map, far away. No LOD,
+// no normal map. (`visible` stays a prop for symmetry with MoonGlobe, but SkyBodies
+// now always mounts it visible.)
 function EarthBody({ visible }: { visible: boolean }) {
   const invalidate = useThree((s) => s.invalidate);
 
@@ -192,6 +208,9 @@ function EarthBody({ visible }: { visible: boolean }) {
       metalness: 0,
       emissive: "#3b6fc4",
       emissiveIntensity: 1,
+      // fog:false — Earth is a distant body well beyond the surface horizon fog;
+      // without this it would be tinted to black in surface view and vanish.
+      fog: false,
     });
     return { geometry, material };
   }, []);
@@ -234,14 +253,13 @@ function EarthBody({ visible }: { visible: boolean }) {
   );
 }
 
-// SkyBodies — mounts both bodies and shows exactly one per view mode. The Moon
-// globe is orbit-only; Earth is surface-only. The starfield (SpaceEnvironment)
-// shows in both.
+// SkyBodies — the Moon globe (orbit-only, the space-vista hero) plus Earth (a
+// distant marble in both views). The starfield (SpaceEnvironment) shows in both.
 export function SkyBodies({ viewMode }: { viewMode: ViewMode }) {
   return (
     <>
       <MoonGlobe visible={viewMode === "orbit"} />
-      <EarthBody visible={viewMode === "surface"} />
+      <EarthBody visible />
     </>
   );
 }
