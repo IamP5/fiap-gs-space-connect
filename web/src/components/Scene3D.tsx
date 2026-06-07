@@ -50,6 +50,7 @@ import { suppressRaycast } from "../lib/suppressRaycast";
 import {
   GROUND_SPAN,
   MOON_POSITION,
+  SUN_POSITION,
   type SceneMap,
   isBuilt,
   sceneMap,
@@ -1148,6 +1149,10 @@ type Scene3DProps = {
   // View-mode framing (issue #49). Defaults to "surface" so the scene keeps its
   // rehearsed worksite pose when the prop is omitted (tests / 2D fallback).
   viewMode?: ViewMode;
+  // Lets the in-scene lunar-base marker (orbit view) request a view change —
+  // clicking the marker calls this with "surface", flipping the app to surface
+  // view and triggering the descent. Optional (tests / 2D fallback omit it).
+  onViewModeChange?: (mode: ViewMode) => void;
 };
 
 // Per-mode OrbitControls clamps + target. Both presets are clamped (ADR-0004):
@@ -1332,9 +1337,13 @@ function SceneContents({
   onPlaceMove,
   onPlaceConfirm,
   viewMode = "surface",
+  onViewModeChange,
 }: Scene3DProps) {
   const lightRef = useRef<THREE.DirectionalLight>(null);
   const invalidate = useThree((s) => s.invalidate);
+
+  // Clicking the orbit-view lunar-base marker flips to surface view → the descent.
+  const onBaseClick = onViewModeChange ? () => onViewModeChange("surface") : undefined;
 
   // Shared geometry buffers — one set per Canvas mount, disposed on unmount.
   const geo = useMemo(makeSceneGeo, []);
@@ -1411,18 +1420,22 @@ function SceneContents({
         {onSurface && <fog attach="fog" args={["#000000", 180, 680]} />}
         {onSurface && <LunarTerrain />}
         <SpaceEnvironment />
-        <SkyBodies viewMode={viewMode} />
+        <SkyBodies viewMode={viewMode} onBaseClick={onBaseClick} />
       </>
     );
   }
 
   return (
     <group>
-      {/* Lighting — a fixed key light (drives the selective-bloom pass) + soft
-          fill, so the diorama reads without per-frame tweaking (ADR-0004). */}
+      {/* Lighting — the key light comes FROM the visible Sun (SUN_POSITION, same
+          body SkyBodies renders), WHITE (no colour = 0xffffff, sunlight in vacuum)
+          and distance-independent (directional), so the validated worksite look is
+          unchanged — only the source is now a real, distant sun. It also drives the
+          selective-bloom pass. Soft ambient + hemisphere fill so nothing reads as
+          pure black on the shadow side (ADR-0004). */}
       <ambientLight intensity={0.35} />
       <hemisphereLight args={["#9a9aae", "#1a1a22", 0.5]} />
-      <directionalLight ref={lightRef} position={[6, 10, 6]} intensity={1.4} />
+      <directionalLight ref={lightRef} position={SUN_POSITION} intensity={1.4} />
 
       {/* Surface-only horizon fog: dissolves the far ground edge into the black
           sky for a clean horizon + sense of vastness. The worksite (within ~30
@@ -1435,9 +1448,10 @@ function SceneContents({
       <SpaceEnvironment />
 
       {/* Decorative sky bodies (issue #51) — snapshot-INDEPENDENT Scenery: the
-          Moon globe (orbit-only hero) + a distant Earth (both views). The Moon's
-          appear/vanish is hidden behind the descent glare. */}
-      <SkyBodies viewMode={viewMode} />
+          Moon globe (orbit-only hero) + a distant Earth (both views) + the Sun
+          (light emitter) + the clickable lunar-base marker (orbit-only). The
+          Moon's appear/vanish is hidden behind the descent glare. */}
+      <SkyBodies viewMode={viewMode} onBaseClick={onBaseClick} />
 
       {/* The WORKSITE — only in surface view. In orbit it would float as a square
           in space ("moonbase lost in space"), so it is mounted only on the
@@ -1550,6 +1564,7 @@ export function Scene3D({
   onPlaceMove,
   onPlaceConfirm,
   viewMode = "surface",
+  onViewModeChange,
 }: Scene3DProps) {
   // `viewMode` (prop) is the DESIRED mode; `shown` is the mode currently RENDERED.
   // They differ only during the descent transition: `shown` flips at the glare
@@ -1684,6 +1699,7 @@ export function Scene3D({
           onPlaceMove={onPlaceMove}
           onPlaceConfirm={onPlaceConfirm}
           viewMode={shown}
+          onViewModeChange={onViewModeChange}
         />
         <RigBridge
           cameraRef={cameraRef}

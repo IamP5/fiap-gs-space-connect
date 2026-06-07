@@ -28,6 +28,19 @@ export const GROUND_MARGIN = 2.5; // scene units of padding around the worksite
 export const MOON_RADIUS = 90;
 export const MOON_POSITION: [number, number, number] = [0, 60, -520];
 
+// The Sun — the scene's single light emitter. Lives here so BOTH the renderer
+// (SkyBodies' SunBody mesh) and the lighting (Scene3D's directionalLight) share
+// one position: the light literally comes FROM the visible sun. Placed very far
+// (a nod to the real ~1 AU distance — vastly farther than the Moon at z=-520),
+// well inside the 8000 far-plane. Its direction matches the prior key-light
+// ([6,10,6]) so the validated worksite lighting is unchanged; only the source is
+// now a real, distant body. The sun reads WHITE (sunlight in vacuum has no
+// atmosphere to redden it) — see SunBody's white emissive.
+export const SUN_POSITION: [number, number, number] = [3014, 5024, 3014];
+// Modeled radius. Far enough that this subtends only a few degrees — a brilliant
+// distant disc, not a wall of light.
+export const SUN_RADIUS = 190;
+
 export type Bounds = { minX: number; minY: number; maxX: number; maxY: number };
 
 // A 3D point on/above the ground plane (y is "up").

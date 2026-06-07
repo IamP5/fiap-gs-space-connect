@@ -35,19 +35,23 @@
 // Both bodies are raycast={() => null} (non-pickable) so click-to-kill / pick is
 // unaffected.
 
-import { useEffect, useMemo } from "react";
+import { useEffect, useMemo, useState } from "react";
 import { Detailed } from "@react-three/drei";
 import { useThree } from "@react-three/fiber";
 import * as THREE from "three";
 
-import type { ViewMode } from "./Scene3D";
-import { MOON_POSITION, MOON_RADIUS } from "../lib/scene";
+import type { ThreeEvent } from "@react-three/fiber";
 
-// Self-hosted NASA-PD textures (see public/assets/CREDITS.md). Downscaled jpgs.
+import type { ViewMode } from "./Scene3D";
+import { MOON_POSITION, MOON_RADIUS, SUN_POSITION, SUN_RADIUS } from "../lib/scene";
+
+// Self-hosted textures (see public/assets/CREDITS.md). Downscaled jpgs. Moon +
+// Earth are NASA-PD; the Sun colour map is Solar System Scope (CC-BY 4.0).
 const MOON_COLOR = "/assets/textures/moon_color_1024.jpg";
 const MOON_NORMAL = "/assets/textures/moon_normal_1024.jpg";
 const MOON_ROUGH = "/assets/textures/moon_rough_512.jpg";
 const EARTH_COLOR = "/assets/textures/earth_color_512.jpg";
+const SUN_COLOR = "/assets/textures/sun_color_1024.jpg";
 
 // --- Moon globe (orbit view) ------------------------------------------------
 // Placement + size: the orbit preset TARGETS this berth and frames the globe as
@@ -64,14 +68,19 @@ const EARTH_COLOR = "/assets/textures/earth_color_512.jpg";
 const MOON_LOD_SWITCH = 420;
 
 // --- Earth (both views) -----------------------------------------------------
-// A distant marble hung high in the black sky to give the sense of deep space:
-// far enough that its angular size is small (~3–4° across the 42° fov), so it
-// reads as "Earth, a long way off" rather than a prop hanging over the worksite.
-// Shown in BOTH views — a distant Earth belongs in the orbit space-vista just as
-// much as in the surface sky. Self-illuminated (it sits well outside the worksite
-// key light), so it glows on its own with no per-frame work.
-const EARTH_RADIUS = 55;
-const EARTH_POSITION: [number, number, number] = [-120, 110, -820];
+// A distant marble hung high in the black sky to give the sense of deep space.
+// SIZED PROPORTIONALLY to the Moon: Earth's real diameter is ~3.67× the Moon's,
+// so EARTH_RADIUS = MOON_RADIUS × 3.67. It is hung far BEYOND the Moon (|pos| ≈
+// 3.5k vs the Moon's 520) so that, despite being the larger body, it subtends a
+// smaller angle (~10°) than the close Moon hero (~25°) — the correct read:
+// "Earth, the bigger planet, much farther away." Shown in BOTH views. Self-
+// illuminated (it sits well outside the worksite key light), so it glows on its
+// own with no per-frame work.
+const EARTH_RADIUS = Math.round(MOON_RADIUS * 3.67); // ≈ 330, proportional to the Moon
+// Up-and-right of the Moon, beyond it (|pos| ≈ 2.9k vs the Moon's 520), so both
+// share the orbit vista: the Moon is the close hero (~25° across) and Earth the
+// bigger-but-farther planet (~12°) — the proportions now read correctly.
+const EARTH_POSITION: [number, number, number] = [880, 640, -2750];
 
 // Imperatively load a texture and apply it to a material slot, demand-safely.
 // Returns a cleanup that detaches + disposes. A failed load is swallowed (the
@@ -253,13 +262,194 @@ function EarthBody({ visible }: { visible: boolean }) {
   );
 }
 
-// SkyBodies — the Moon globe (orbit-only, the space-vista hero) plus Earth (a
-// distant marble in both views). The starfield (SpaceEnvironment) shows in both.
-export function SkyBodies({ viewMode }: { viewMode: ViewMode }) {
+// --- Sun (both views) — the scene's light emitter ---------------------------
+// The Sun is the SINGLE light source: Scene3D's directionalLight sits at the same
+// SUN_POSITION, so the key light literally comes FROM this disc. It is rendered
+// WHITE-HOT (sunlight in vacuum is white — no atmosphere to redden it): the body
+// is self-illuminated by a strong WHITE `emissive` with `toneMapped={false}`, so
+// the disc stays pure white regardless of exposure. The Solar System Scope colour
+// map (CC-BY 4.0) is wired as a faint `map` for subtle granulation only — the
+// white emissive dominates, so the result reads white, never yellow. A failed
+// texture load just leaves the flat near-white fallback (ADR-0004). No per-frame
+// work. Placed very far (SUN_POSITION) so it subtends only a few degrees.
+function SunBody() {
+  const invalidate = useThree((s) => s.invalidate);
+
+  const { geometry, material } = useMemo(() => {
+    const geometry = new THREE.SphereGeometry(SUN_RADIUS, 48, 48);
+    // White-hot, self-lit. toneMapped:false keeps it pure white (not tinted by
+    // the renderer's tone mapping). The faint #fff8f0 base is the fallback colour
+    // if the map fails — still essentially white, never yellow.
+    const material = new THREE.MeshStandardMaterial({
+      color: "#fff8f0",
+      emissive: "#ffffff",
+      emissiveIntensity: 1.6,
+      roughness: 1,
+      metalness: 0,
+      toneMapped: false,
+      fog: false,
+    });
+    return { geometry, material };
+  }, []);
+
+  useEffect(() => {
+    // Faint diffuse granulation only. We deliberately do NOT wire an emissiveMap:
+    // an emissiveMap would multiply the white emissive by the (yellow) texture and
+    // re-introduce the yellow the user asked us to avoid. The white emissive stays
+    // flat, so the disc is white with just a hint of surface detail in the diffuse.
+    const cleanup = loadTexture(SUN_COLOR, material, "map", THREE.SRGBColorSpace, invalidate);
+    return cleanup;
+  }, [material, invalidate]);
+
+  useEffect(
+    () => () => {
+      geometry.dispose();
+      material.dispose();
+    },
+    [geometry, material],
+  );
+
+  return (
+    <mesh
+      geometry={geometry}
+      material={material}
+      position={SUN_POSITION}
+      raycast={() => null}
+    />
+  );
+}
+
+// --- Lunar base marker (orbit view only) — the clickable "objective" ---------
+// A game-style location marker pinned to the Moon globe at the worksite's berth,
+// shown ONLY in orbit. Clicking it (its invisible hit-proxy) calls onSelect,
+// which flips the app to surface view → the existing glare-masked descent flies
+// the camera down to the base. This is an INTENTIONAL second pickable surface,
+// admissible because it exists only in orbit, where NO rover/worksite is rendered
+// — so it never competes with the rover hit-proxies that own click-to-kill on the
+// surface (#48). Demand-loop safe: no useFrame; hover just brightens/scales via
+// React state, waking exactly one frame.
+//
+// It is seated on the Moon's near face (the point of the globe pointing back at
+// the orbit camera) and oriented to the surface normal there, so the ring lies
+// flat on the globe and the beacon rises straight up off the surface.
+const MARKER_COLOR = "#38e1ff"; // brand telemetry cyan (matches selection/revive)
+
+function LunarBaseMarker({ onSelect }: { onSelect: () => void }) {
+  const invalidate = useThree((s) => s.invalidate);
+  const [hover, setHover] = useState(false);
+
+  // Seat on the globe's near face + orient to the surface normal there. The orbit
+  // camera berths along +z/+y off the Moon (see ORBIT_POSE), so the near face
+  // normal points roughly that way; the marker is therefore camera-facing.
+  const { position, quaternion } = useMemo(() => {
+    const n = new THREE.Vector3(0, 80, 410).normalize(); // ≈ orbit camera dir off the Moon
+    const base = new THREE.Vector3(...MOON_POSITION).addScaledVector(n, MOON_RADIUS);
+    const q = new THREE.Quaternion().setFromUnitVectors(new THREE.Vector3(0, 1, 0), n);
+    return {
+      position: base.toArray() as [number, number, number],
+      quaternion: q.toArray() as [number, number, number, number],
+    };
+  }, []);
+
+  useEffect(() => {
+    invalidate();
+  }, [hover, invalidate]);
+
+  const onOver = (e: ThreeEvent<PointerEvent>) => {
+    e.stopPropagation();
+    setHover(true);
+    document.body.style.cursor = "pointer";
+  };
+  const onOut = () => {
+    setHover(false);
+    document.body.style.cursor = "default";
+  };
+
+  const intensity = hover ? 3.2 : 2.0;
+  const scale = hover ? 1.14 : 1;
+
+  return (
+    <group position={position} quaternion={quaternion} scale={scale}>
+      {/* Invisible, generous hit-proxy — the SOLE pickable part. A click flips to
+          surface view, triggering the descent. */}
+      <mesh
+        position={[0, 11, 0]}
+        onClick={(e: ThreeEvent<MouseEvent>) => {
+          e.stopPropagation();
+          onSelect();
+        }}
+        onPointerOver={onOver}
+        onPointerOut={onOut}
+      >
+        <cylinderGeometry args={[7, 7, 30, 16]} />
+        <meshBasicMaterial transparent opacity={0} depthWrite={false} />
+      </mesh>
+
+      {/* Pulsing-style ring flat on the surface (static — no per-frame work). */}
+      <mesh rotation={[-Math.PI / 2, 0, 0]} position={[0, 0.4, 0]} raycast={() => null}>
+        <ringGeometry args={[7, 10, 40]} />
+        <meshStandardMaterial
+          color={MARKER_COLOR}
+          emissive={MARKER_COLOR}
+          emissiveIntensity={intensity}
+          toneMapped={false}
+          transparent
+          opacity={0.95}
+          side={THREE.DoubleSide}
+        />
+      </mesh>
+
+      {/* A bright core disc inside the ring. */}
+      <mesh rotation={[-Math.PI / 2, 0, 0]} position={[0, 0.5, 0]} raycast={() => null}>
+        <circleGeometry args={[6.2, 32]} />
+        <meshStandardMaterial
+          color={MARKER_COLOR}
+          emissive={MARKER_COLOR}
+          emissiveIntensity={intensity * 0.5}
+          toneMapped={false}
+          transparent
+          opacity={0.28}
+          side={THREE.DoubleSide}
+        />
+      </mesh>
+
+      {/* Vertical beacon — a tapering glow column rising off the surface, the
+          "you are here / land here" signal. Additive so it reads as light. */}
+      <mesh position={[0, 18, 0]} raycast={() => null}>
+        <cylinderGeometry args={[0.4, 3.2, 36, 16, 1, true]} />
+        <meshBasicMaterial
+          color={MARKER_COLOR}
+          transparent
+          opacity={hover ? 0.5 : 0.32}
+          side={THREE.DoubleSide}
+          depthWrite={false}
+          blending={THREE.AdditiveBlending}
+          toneMapped={false}
+        />
+      </mesh>
+    </group>
+  );
+}
+
+// SkyBodies — the Sun (light emitter, both views) + the Moon globe (orbit-only,
+// the space-vista hero) + Earth (a distant marble, both views) + the clickable
+// lunar-base marker (orbit-only). The starfield (SpaceEnvironment) shows in both.
+// `onBaseClick`, when provided, flips the app to surface view (the descent) when
+// the marker is clicked.
+export function SkyBodies({
+  viewMode,
+  onBaseClick,
+}: {
+  viewMode: ViewMode;
+  onBaseClick?: () => void;
+}) {
+  const inOrbit = viewMode === "orbit";
   return (
     <>
-      <MoonGlobe visible={viewMode === "orbit"} />
+      <SunBody />
+      <MoonGlobe visible={inOrbit} />
       <EarthBody visible />
+      {inOrbit && onBaseClick ? <LunarBaseMarker onSelect={onBaseClick} /> : null}
     </>
   );
 }

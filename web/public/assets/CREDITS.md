@@ -236,6 +236,30 @@ excluded and are NOT used here. See
 https://www.nasa.gov/nasa-brand-center/images-and-media/ and
 https://github.com/nasa/NASA-3D-Resources.
 
+## Sun (Solar System Scope — CC-BY 4.0)
+
+Decorative, snapshot-independent sky body rendered by
+`web/src/components/SkyBodies.tsx` (`SunBody`): the scene's single light emitter
+(Scene3D's `directionalLight` shares its `SUN_POSITION`). It is a **Scenery**
+element (ADR-0004), never a snapshot-driven Asset; a failed/missing texture falls
+back to the sphere's flat near-white material color (ADR-0004 mandatory fallback).
+The disc is rendered **white-hot** (strong white `emissive`, `toneMapped:false`),
+so the colour map is wired only as a faint diffuse `map` for subtle granulation —
+the body reads white, never yellow. Downloaded: 2026-06-06; verified as a real
+JPEG (`file <path>` reports `JPEG image data`).
+
+| File | Source asset | Author | Source URL | License |
+|------|--------------|--------|-----------|---------|
+| `textures/sun_color_1024.jpg` | "2K Sun" texture, resized to 1024×512 | Solar System Scope (INOVE) | https://www.solarsystemscope.com/textures/ | CC-BY 4.0 |
+
+Original download (resized down for bundle size; otherwise unmodified):
+`https://www.solarsystemscope.com/textures/download/2k_sun.jpg`
+
+Solar System Scope publishes its texture pack under **CC-BY 4.0**
+(https://www.solarsystemscope.com/textures/) — admissible with attribution, which
+is recorded here. **Attribution:** Solar System Scope (solarsystemscope.com),
+licensed under CC BY 4.0 (https://creativecommons.org/licenses/by/4.0/).
+
 ## Rover model (NASA-PD)
 
 Used by `<Rover3D>` (issue #54) as the realistic worker-entity render — every
