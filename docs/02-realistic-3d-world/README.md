@@ -117,8 +117,8 @@ AFK; blockers noted.
 | [#107](https://github.com/IamP5/fiap-gs-space-connect/issues/107) | Snapshot-driven FX (rover dust, bid-war strobe, resurrection shockwave) | demand-safe | — |
 | [#108](https://github.com/IamP5/fiap-gs-space-connect/issues/108) | Cinematic beats (intro fly-in, Earthrise hero, launch + shake) | animated | — |
 | [#109](https://github.com/IamP5/fiap-gs-space-connect/issues/109) | Camera feel (idle drift, inertial damping, zoom exposure, parallax) | animated | — |
-| [#110](https://github.com/IamP5/fiap-gs-space-connect/issues/110) | Sun GodRays + lens flare (orbit-gated) | static | #99 |
-| [#111](https://github.com/IamP5/fiap-gs-space-connect/issues/111) | Material tier polish (dome roughness, clearcoat metal, rock PBR, solar glint, emissive windows) | static | #99 |
+| [#110](https://github.com/IamP5/fiap-gs-space-connect/issues/110) | Sun GodRays + lens flare (orbit-gated) | static | 🔬 branch wave3/godrays-material-polish (sign-off pending) |
+| [#111](https://github.com/IamP5/fiap-gs-space-connect/issues/111) | Material tier polish (dome roughness, clearcoat metal, rock PBR, solar glint, emissive windows) | static | 🔬 branch wave3/godrays-material-polish (sign-off pending) |
 | [#112](https://github.com/IamP5/fiap-gs-space-connect/issues/112) | Living Earth (cloud shell + city-light flicker) | animated | #102 |
 
 **Ready to start now (no blockers):** #99, #100, #101, #102, #103, #104, #105, #106, #107, #108, #109.

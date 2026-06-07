@@ -45,6 +45,7 @@ import {
   ChromaticAberration,
   DepthOfField,
   EffectComposer,
+  GodRays,
   Noise,
   SelectiveBloom,
   SMAA,
@@ -55,7 +56,7 @@ import * as THREE from "three";
 import type { RoverView, Snapshot, TaskView, Vec2 } from "../types/wire";
 import { batteryPercent } from "../lib/format";
 import { suppressRaycast } from "../lib/suppressRaycast";
-import { applyGltfTextureFidelity } from "../lib/textureFidelity";
+import { applyGltfTextureFidelity, polishGltfMaterials } from "../lib/textureFidelity";
 import {
   EARTH_POSITION,
   GROUND_SPAN,
@@ -1080,6 +1081,11 @@ function loadGLTF(url: string): Promise<THREE.Group> {
           // click-to-kill deterministic and letting onPointerMissed deselect on
           // empty space.
           suppressRaycast(g.scene);
+          // Material tier polish (#111): clearcoat on metal, solar glint when the
+          // URL names a panel, warm emissive on *window* submeshes (bloom layer).
+          // Run ONCE on the cached source so every clone inherits it (clone(true)
+          // shares materials + copies the per-mesh layers mask).
+          polishGltfMaterials(g.scene, { bloomLayer: CELESTIAL_BLOOM_LAYER, url });
           resolve(g.scene);
         },
         undefined,
@@ -1347,6 +1353,11 @@ function TaskBlock({
   const isCap = tier === "dome";
   const blockGeo = isCap ? geo.dome : tier === "foundation" ? geo.foundation : geo.wall;
 
+  // Per-tier roughness (#111): the polished pressurised cap reads smoothest, the
+  // walls matte fabric/panel, the foundation roughest poured regolith-crete — so
+  // the rising habitat reads as distinct materials, not one uniform grey block.
+  const tierRoughness = isCap ? 0.75 : tier === "foundation" ? 0.95 : 0.88;
+
   // Interpret the Task's Build spec (ADR-0006), if any, into renderable meshes.
   // EMPTY ⇒ the Task has no (renderable) spec, so we render EXACTLY today's
   // primitive — the fallback this slice must keep pixel-identical. Memoized on
@@ -1436,7 +1447,7 @@ function TaskBlock({
         <meshStandardMaterial
           ref={matRef}
           color={color}
-          roughness={isCap ? 0.85 : 0.9}
+          roughness={tierRoughness}
           metalness={0.05}
           transparent
           opacity={opacity}
@@ -1649,10 +1660,14 @@ const BLOOM_WAR_SPIKE = 2.6; // added at full contention
 
 const CinematicFX = memo(function CinematicFX({
   lightRef,
+  sunRef,
   onSurface,
   beats,
 }: {
   lightRef: React.RefObject<THREE.DirectionalLight>;
+  // The Sun core disc, used as the GodRays light source (#110). May be null until
+  // SkyBodies mounts; the GodRays pass is skipped until it resolves.
+  sunRef: React.RefObject<THREE.Mesh>;
   onSurface: boolean;
   beats: React.RefObject<ActiveBeat[]>;
 }) {
@@ -1690,6 +1705,9 @@ const CinematicFX = memo(function CinematicFX({
 
   const light = lightRef.current;
   if (!light) return null;
+  // Resolved by the post-mount re-render above (SkyBodies mounts in the same
+  // commit). null-safe: GodRays is simply skipped until the Sun core exists.
+  const sun = sunRef.current;
   return (
     // multisampling={0}: SMAA does the antialiasing inside the composer, so
     // composer MSAA buys nothing and would only cost a multisampled target.
@@ -1724,6 +1742,28 @@ const CinematicFX = memo(function CinematicFX({
         kernelSize={KernelSize.LARGE}
         radius={0.85}
       />
+      {/* Sun GodRays (#110) — volumetric light shafts radiating from the Sun core,
+          AFTER bloom in the stack. Orbit-gated (the Sun is the orbit hero) and a
+          graceful no-op when the Sun ref hasn't resolved. The Wave-4 orbit hero is
+          the dark-side crescent Moon, so the decoupled Sun sits off-frame in the
+          default pose — the shafts reveal as the user orbits around toward it; the
+          Moon's depth occludes them for a true volumetric shadow. Static pass. */}
+      {!onSurface && sun ? (
+        <GodRays
+          sun={sun}
+          blendFunction={BlendFunction.SCREEN}
+          samples={80}
+          density={0.5}
+          decay={0.93}
+          weight={0.3}
+          exposure={0.3}
+          clampMax={1}
+          kernelSize={KernelSize.SMALL}
+          blur
+        />
+      ) : (
+        <></>
+      )}
       {/* Surface-gated DoF — distant Earth/horizon soften while the worksite stays
           sharp. Mounted ONLY on the surface; in orbit the Moon hero stays crisp. */}
       {onSurface ? (
@@ -2256,6 +2296,9 @@ function SceneContents({
   onViewModeChange,
 }: Scene3DProps) {
   const lightRef = useRef<THREE.DirectionalLight>(null);
+  // Shared ref to the Sun core disc — surfaced from SkyBodies so the GodRays
+  // post-FX pass (#110) can use the Sun as its light source.
+  const sunRef = useRef<THREE.Mesh>(null);
   const invalidate = useThree((s) => s.invalidate);
 
   // Clicking the orbit-view lunar-base marker flips to surface view → the descent.
@@ -2339,7 +2382,7 @@ function SceneContents({
         {onSurface && <fog attach="fog" args={SURFACE_FOG_ARGS} />}
         {onSurface && <LunarTerrain />}
         <SpaceEnvironment />
-        <SkyBodies viewMode={viewMode} onBaseClick={onBaseClick} />
+        <SkyBodies viewMode={viewMode} onBaseClick={onBaseClick} sunRef={sunRef} />
       </>
     );
   }
@@ -2366,7 +2409,7 @@ function SceneContents({
           Moon globe (orbit-only hero) + a distant Earth (both views) + the Sun
           (light emitter) + the clickable lunar-base marker (orbit-only). The
           Moon's appear/vanish is hidden behind the descent glare. */}
-      <SkyBodies viewMode={viewMode} onBaseClick={onBaseClick} />
+      <SkyBodies viewMode={viewMode} onBaseClick={onBaseClick} sunRef={sunRef} />
 
       {/* The WORKSITE — only in surface view. In orbit it would float as a square
           in space ("moonbase lost in space"), so it is mounted only on the
@@ -2453,7 +2496,7 @@ function SceneContents({
           passes static (demand-loop safe). Supersedes the standalone HaloBloom —
           the halo SelectiveBloom is now one pass inside this stack, and it reads
           the live beats to spike intensity during a bid-war (#107). */}
-      <CinematicFX lightRef={lightRef} onSurface={onSurface} beats={beats} />
+      <CinematicFX lightRef={lightRef} sunRef={sunRef} onSurface={onSurface} beats={beats} />
     </group>
   );
 }

@@ -13,10 +13,24 @@ Research: `docs/02-realistic-3d-world/cinematic-beauty-immersion.md` (Wave 3).
 
 ## Acceptance criteria
 
-- [ ] GodRays after bloom; sun as light source (density ~0.5, decay ~0.93, weight ~0.3, samples ~80)
-- [ ] Orbit-gated; graceful no-op if the sun ref is unavailable
-- [ ] Optional lens-flare streak when the sun is on-screen
-- [ ] 0 idle fps preserved; lint+test+build green + orbit screenshot
+- [x] GodRays after bloom; sun as light source (density ~0.5, decay ~0.93, weight ~0.3, samples ~80)
+- [x] Orbit-gated; graceful no-op if the sun ref is unavailable
+- [x] Optional lens-flare streak when the sun is on-screen
+- [x] 0 idle fps preserved; lint+test+build green + orbit screenshot
+
+## Implementation notes
+
+- A shared `sunRef` is surfaced from `SkyBodies`/`SunBody` (the core disc mesh) up
+  through `SceneContents` into `CinematicFX`, where a `<GodRays>` pass sits **after**
+  both bloom passes. Orbit-gated (`!onSurface`) and skipped until the ref resolves.
+- The Wave-4 orbit hero is the **dark-side crescent Moon**, so the decoupled
+  `ORBIT_SUN_POSITION` sits off-frame in the default pose — GodRays is correctly
+  dormant there and reveals as the user orbits toward the Sun (the Moon's depth
+  occludes the shafts for a true volumetric edge). Verified by screenshot.
+- The "lens-flare streak" is a procedural **anamorphic streak sprite** added to the
+  Sun's existing additive flare stack (orbit-gated via `showStreak`), rather than the
+  heavyweight per-frame-raycasting `LensFlare` effect — it occludes correctly behind
+  the Moon via depth and adds no per-frame work.
 
 ## Blocked by
 

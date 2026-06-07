@@ -26,7 +26,8 @@ import { MeshoptDecoder } from "three/examples/jsm/libs/meshopt_decoder.module.j
 // if they don't. We pre-bucket by that signature so it never fails (see below).
 import { mergeGeometries } from "three/examples/jsm/utils/BufferGeometryUtils.js";
 import { suppressRaycast } from "../lib/suppressRaycast";
-import { applyGltfTextureFidelity } from "../lib/textureFidelity";
+import { applyGltfTextureFidelity, polishGltfMaterials } from "../lib/textureFidelity";
+import { CELESTIAL_BLOOM_LAYER } from "./Scene3D";
 
 // Self-contained loader + cache (mirrors Scene3D's loadGLTF): N references to the
 // same .glb parse it ONCE, and the parsed scene is cloned per placement so
@@ -54,6 +55,10 @@ function loadScenery(url: string): Promise<THREE.Group> {
         url,
         (g) => {
           suppressRaycast(g.scene);
+          // Material tier polish (#111): clearcoat on metal set-pieces (the crawler,
+          // launcher, gantry all read as steel), solar glint by URL, emissive
+          // *window* submeshes on the bloom layer. Once on the cached source.
+          polishGltfMaterials(g.scene, { bloomLayer: CELESTIAL_BLOOM_LAYER, url });
           resolve(g.scene);
         },
         undefined,

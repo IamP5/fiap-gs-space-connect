@@ -93,3 +93,115 @@ export function applyGltfTextureFidelity<T extends THREE.Object3D>(
   });
   return root;
 }
+
+// --- Material tier polish (issue #111) --------------------------------------
+//
+// Make imported glTF structures read as real materials, not uniform polygons.
+// This is the glTF half of #111 (the primitive dome tiers + DecorRocks PBR are
+// done at their own call sites). Run ONCE on the CACHED SOURCE scene in each
+// loader (before any clone), so every placement inherits the upgrade for free —
+// clone(true) shares the materials and copies the per-mesh `layers` mask, so the
+// emissive-window bloom flag rides along too. Cheap, static, idempotent.
+//
+// Three concerns, keyed off material/mesh names + metalness + the asset URL:
+//
+//   1. CLEARCOAT METAL. A material with metalness > 0.3 (the NASA/Kenney steel
+//      structures) gets a thin clearcoat lacquer (clearcoat 0.5 / roughness 0.4)
+//      for a factory-steel specular sheen. MeshStandardMaterial has no clearcoat,
+//      so such materials are upgraded to MeshPhysicalMaterial in place.
+//
+//   2. SOLAR GLINT. When the asset URL names a solar panel (e.g.
+//      /assets/models/solar-panel.glb), every material gets row-aligned
+//      ANISOTROPY (metalness 0.8, roughness 0.3, anisotropy 0.6) for the brushed,
+//      directional glint of a real photovoltaic array. Also a physical upgrade.
+//      Keyed off the URL because the vendored panel's material is generically
+//      named (PaletteMaterial001), so a name match alone would miss it.
+//
+//   3. EMISSIVE WINDOWS. A submesh OR material named `*window*` becomes a warm
+//      emissive (#FFD8A0, intensity 0.2) and its mesh joins the bloom layer, so
+//      habitat windows glow at distance. A no-op on assets without window
+//      submeshes (the current vendored set has none) — the mechanism is latent
+//      until such an asset ships, exactly the ADR-0004 graceful-fallback posture.
+//
+// MANDATORY FALLBACK (ADR-0004): a glTF that never loads keeps its primitive box,
+// untouched by this pass; a loaded one is only ever made richer, never blanked.
+const WINDOW_EMISSIVE = "#FFD8A0";
+
+type PolishOpts = { bloomLayer: number; url?: string };
+
+export function polishGltfMaterials<T extends THREE.Object3D>(
+  root: T,
+  opts: PolishOpts,
+): T {
+  const isSolar = !!opts.url && /solar|panel/i.test(opts.url);
+  // A material can be SHARED across submeshes; upgrade each unique instance once,
+  // reuse the result everywhere, and dispose the replaced originals once at the end
+  // (dispose() frees only the material program — never the shared textures).
+  const upgraded = new Map<THREE.Material, THREE.Material>();
+  const toDispose = new Set<THREE.Material>();
+
+  const polishOne = (
+    mat: THREE.Material,
+    nameWindow: boolean,
+  ): { material: THREE.Material; window: boolean } => {
+    const cached = upgraded.get(mat);
+    if (cached) return { material: cached, window: cached.userData.__window === true };
+    if (mat.userData.__polished) return { material: mat, window: mat.userData.__window === true };
+
+    const std = mat as THREE.MeshStandardMaterial;
+    const windowMatch = nameWindow || /window/i.test(mat.name);
+    const metalish = typeof std.metalness === "number" && std.metalness > 0.3;
+    const needsPhysical = isSolar || metalish;
+
+    let out: THREE.MeshStandardMaterial = std;
+    if (needsPhysical && !(mat as THREE.MeshPhysicalMaterial).isMeshPhysicalMaterial) {
+      const phys = new THREE.MeshPhysicalMaterial();
+      phys.copy(std); // copies all standard props + MAP REFERENCES (not clones)
+      toDispose.add(std);
+      out = phys;
+    }
+    const phys = out as THREE.MeshPhysicalMaterial;
+
+    if (isSolar) {
+      phys.metalness = 0.8;
+      phys.roughness = 0.3;
+      phys.anisotropy = 0.6;
+      phys.anisotropyRotation = 0; // rows run along U → a horizontal specular streak
+    } else if (metalish && phys.isMeshPhysicalMaterial) {
+      phys.clearcoat = 0.5;
+      phys.clearcoatRoughness = 0.4;
+    }
+    if (windowMatch) {
+      out.emissive = new THREE.Color(WINDOW_EMISSIVE);
+      out.emissiveIntensity = 0.2;
+      out.userData.__window = true;
+    }
+    out.userData.__polished = true;
+    out.needsUpdate = true;
+    upgraded.set(mat, out);
+    return { material: out, window: windowMatch };
+  };
+
+  root.traverse((o) => {
+    const mesh = o as THREE.Mesh;
+    if (!mesh.isMesh || !mesh.material) return;
+    const nameWindow = /window/i.test(mesh.name);
+    let anyWindow = false;
+    if (Array.isArray(mesh.material)) {
+      mesh.material = mesh.material.map((m) => {
+        const r = polishOne(m, nameWindow);
+        anyWindow = anyWindow || r.window;
+        return r.material;
+      });
+    } else {
+      const r = polishOne(mesh.material, nameWindow);
+      anyWindow = anyWindow || r.window;
+      mesh.material = r.material;
+    }
+    // Windows ride the celestial bloom layer so they glow at distance (#111).
+    if (anyWindow) mesh.layers.enable(opts.bloomLayer);
+  });
+
+  for (const m of toDispose) m.dispose();
+  return root;
+}

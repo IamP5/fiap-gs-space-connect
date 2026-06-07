@@ -29,9 +29,25 @@ import * as THREE from "three";
 import { GROUND_SPAN } from "../lib/scene";
 import { applyMaxAnisotropy } from "../lib/textureFidelity";
 
-// Self-hosted CC0 boulder diffuse (Poly Haven "Rock Boulder Dry", 512). Already
-// vendored + credited in public/assets/CREDITS.md — no new asset introduced.
-const ROCK_TEXTURE = "/assets/textures/rock_boulder_dry_diff_512.jpg";
+// Self-hosted CC0 boulder PBR set (Poly Haven "Rock Boulder Dry", 512). The
+// diffuse was already vendored (#58a); the normal + roughness maps were added for
+// the material tier polish (#111) so the boulders carry real microrelief + varied
+// specular instead of reading as flat diffuse spheres. All credited in CREDITS.md.
+const ROCK_DIFF = "/assets/textures/rock_boulder_dry_diff_512.jpg";
+const ROCK_NORMAL = "/assets/textures/rock_boulder_dry_nor_gl_512.jpg";
+const ROCK_ROUGH = "/assets/textures/rock_boulder_dry_rough_512.jpg";
+
+// The PBR channels loaded onto the shared boulder material, paired with the
+// material slot + correct colourSpace: diffuse is sRGB, normal/roughness linear.
+const ROCK_MAPS: {
+  url: string;
+  key: "map" | "normalMap" | "roughnessMap";
+  colorSpace: THREE.ColorSpace;
+}[] = [
+  { url: ROCK_DIFF, key: "map", colorSpace: THREE.SRGBColorSpace },
+  { url: ROCK_NORMAL, key: "normalMap", colorSpace: THREE.NoColorSpace },
+  { url: ROCK_ROUGH, key: "roughnessMap", colorSpace: THREE.NoColorSpace },
+];
 
 const ROCK_COUNT = 80;
 
@@ -66,10 +82,16 @@ function mulberry32(seed: number) {
   };
 }
 
+type RockMaps = {
+  map?: THREE.Texture;
+  normalMap?: THREE.Texture;
+  roughnessMap?: THREE.Texture;
+};
+
 export function DecorRocks() {
   const invalidate = useThree((s) => s.invalidate);
   const gl = useThree((s) => s.gl);
-  const [colorMap, setColorMap] = useState<THREE.Texture | null>(null);
+  const [maps, setMaps] = useState<RockMaps>({});
 
   // One low-poly rock geometry for the whole field, created ONCE. Icosahedron
   // (detail 0) reads as a faceted boulder; per-instance scale/rotation below add
@@ -100,36 +122,42 @@ export function DecorRocks() {
     return out;
   }, []);
 
-  // Imperative texture load with a SWALLOWED catch — NEVER a Suspense-throwing
-  // loader, so a missing/slow texture can't block first paint or blank the field.
-  // On success: skin the rocks and invalidate ONCE so the demand loop paints the
-  // new map; on failure: keep the flat regolith-grey fallback (ADR-0004).
+  // Imperative PBR load with a per-channel SWALLOWED catch — NEVER a
+  // Suspense-throwing loader, so a missing/slow map can't block first paint or
+  // blank the field. Each channel that resolves is folded into the material; any
+  // that fail simply leave that slot unset (#111: the diffuse-only / flat-grey
+  // fallback still holds — ADR-0004). invalidate() once per resolved channel so
+  // the demand loop paints the new skin, then returns to 0 idle fps.
   useEffect(() => {
     let disposed = false;
-    let loaded: THREE.Texture | null = null;
-    new THREE.TextureLoader().load(
-      ROCK_TEXTURE,
-      (tex) => {
-        if (disposed) {
-          tex.dispose();
-          return;
-        }
-        tex.colorSpace = THREE.SRGBColorSpace;
-        // Max anisotropy (#100): the rock field sprawls to the terrain edge, so
-        // far rocks are seen at a grazing angle — sharpen them like the terrain.
-        applyMaxAnisotropy(tex, gl.capabilities.getMaxAnisotropy());
-        loaded = tex;
-        setColorMap(tex);
-        invalidate(); // wake the demand loop once so the new skin shows
-      },
-      undefined,
-      () => {
-        // Missing/failed texture ⇒ keep the grey fallback below (never crash).
-      },
-    );
+    const loaded: THREE.Texture[] = [];
+    const loader = new THREE.TextureLoader();
+    const maxAniso = gl.capabilities.getMaxAnisotropy();
+    for (const slot of ROCK_MAPS) {
+      loader.load(
+        slot.url,
+        (tex) => {
+          if (disposed) {
+            tex.dispose();
+            return;
+          }
+          tex.colorSpace = slot.colorSpace;
+          // Max anisotropy (#100): the rock field sprawls to the terrain edge, so
+          // far rocks are seen at a grazing angle — sharpen them like the terrain.
+          applyMaxAnisotropy(tex, maxAniso);
+          loaded.push(tex);
+          setMaps((prev) => ({ ...prev, [slot.key]: tex }));
+          invalidate(); // wake the demand loop once so the new channel shows
+        },
+        undefined,
+        () => {
+          // Missing/failed channel ⇒ leave it unset (never crash).
+        },
+      );
+    }
     return () => {
       disposed = true;
-      loaded?.dispose();
+      for (const t of loaded) t.dispose();
     };
   }, [invalidate, gl]);
 
@@ -142,9 +170,13 @@ export function DecorRocks() {
     // raycast={() => null}: the field is decoration and must never be pickable.
     <Instances geometry={geometry} frames={1} raycast={() => null}>
       <meshStandardMaterial
-        map={colorMap ?? undefined}
-        color={colorMap ? "#ffffff" : REGOLITH_GREY}
-        roughness={0.95}
+        map={maps.map ?? undefined}
+        normalMap={maps.normalMap ?? undefined}
+        roughnessMap={maps.roughnessMap ?? undefined}
+        color={maps.map ? "#ffffff" : REGOLITH_GREY}
+        // The roughnessMap modulates this base when present; without it the field
+        // keeps the flat matte regolith look.
+        roughness={maps.roughnessMap ? 1 : 0.95}
         metalness={0}
       />
       {placements.map((p, i) => (
