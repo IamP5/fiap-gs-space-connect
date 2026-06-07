@@ -2906,6 +2906,16 @@ function CameraFeel({ active, onSurface }: { active: boolean; onSurface: boolean
     };
     document.addEventListener("visibilitychange", onVisibility);
 
+    // Recapture the rest pose on (re)activation. CameraFeel deactivates during a
+    // transition/placement (active=false) and reactivates when it ends — but a
+    // view toggle is a BUTTON click, not a canvas gesture, so markInput never
+    // fires and restAzimuthRef would still hold the rest pose captured at the
+    // PREVIOUS view's camera. Left stale, the first idle frame would rebuild the
+    // camera as `controls.target + staleOffset`, yanking it off the pose the
+    // transition just settled on (the old "snaps to a wrong orbit/surface pose
+    // right after the toggle" bug). Null it so the next idle frame recaptures the
+    // offset from the freshly-settled camera. (markInput also nulls it on input.)
+    restAzimuthRef.current = null;
     // Immediate-idle init (05-P2): backdate the last-input stamp by the full
     // idle delay so idleElapsed > 0 from the very first frame and the sway eases
     // in right away (IDLE_FADE_MS still ramps the amplitude, so there is no
@@ -3026,6 +3036,27 @@ export function Scene3D({
   activeSite = "lunar",
   onActiveSiteChange,
 }: Scene3DProps) {
+  // Initial camera pose, seeded to the DEFAULT view so the app opens already
+  // framed on it. The Canvas `camera` prop is applied ONCE on mount, so this is
+  // captured from the first viewMode and never changes identity. When the app
+  // opens in orbit (the current default), seed ORBIT_POSE so the very first frame
+  // is the settled Moon vista — without this the camera mounts at the surface
+  // default and OrbitControls clamps it against the orbit target into a dark,
+  // off-centre Moon (it did not match the pose a surface→orbit toggle settles on).
+  // Surface default keeps the rehearsed worksite seat; the #108 intro flies it in.
+  const initialCamera = useRef({
+    position: (viewMode === "orbit"
+      ? [ORBIT_POSE.position.x, ORBIT_POSE.position.y, ORBIT_POSE.position.z]
+      : [SURFACE_POSE.position.x, SURFACE_POSE.position.y, SURFACE_POSE.position.z]) as [
+      number,
+      number,
+      number,
+    ],
+    fov: 50,
+    near: 0.1,
+    far: 8000,
+  }).current;
+
   // `viewMode`/`activeSite` (props) are the DESIRED state; `shown`/`shownSite` are
   // what is currently RENDERED. They differ only DURING a transition: each flips at
   // its glare peak, so the content/sky swap is hidden behind the flash. Clamps + the
@@ -3360,7 +3391,9 @@ export function Scene3D({
         // its gl note + the logdepthbuf_* chunks in SkyBodies.tsx).
         // fov widened 42→50 (#101) for a more immersive, cinematic field — the
         // surface distance band (VIEW_PRESETS) is pulled in to hold framing.
-        camera={{ position: [2.5, 5, 6], fov: 50, near: 0.1, far: 8000 }}
+        // position is seeded per the default view (see initialCamera) so the app
+        // opens already framed on it (orbit → ORBIT_POSE, surface → worksite seat).
+        camera={initialCamera}
         // While placing, a click on empty space confirms the drop; otherwise it
         // deselects a rover (the existing behaviour).
         onPointerMissed={() => (placing ? onPlaceConfirm?.() : onPick(null))}
