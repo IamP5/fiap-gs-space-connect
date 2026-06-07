@@ -77,8 +77,12 @@ type SetPiece = {
   // each model to this size at load (see fitAndSeat) so presence is predictable
   // regardless of the source units. The fallback box uses the same number.
   fit: number;
-  // Tint for the box fallback shown until/if the glTF loads.
+  // Tint for the primitive fallback shown until/if the glTF loads.
   fallbackColor: string;
+  // Primitive used for the ADR-0004 fallback, both sized to the model's `fit`
+  // bbox. "box" (default) suits structures; "capsule" gives the astronaut a
+  // human-ish silhouette while the glTF loads (or forever, if it fails).
+  fallbackShape?: "box" | "capsule";
 };
 
 // Set-pieces parked along the FAR edge of the ~20-unit worksite (GROUND_SPAN=20,
@@ -118,6 +122,30 @@ const SET_PIECES: SetPiece[] = [
     rotation: [0, -Math.PI / 4, 0],
     fit: 3,
     fallbackColor: "#b8a070",
+  },
+  // Scale props (#89, rescoped). NASA-PD filler that gives the worksite human
+  // scale: a small Base Station (NASA/Ames) tucked just inside the far complex
+  // and an EVA Astronaut (NASA) standing beside it. The astronaut's `fit`
+  // (~0.9 world units tall) is the human-scale anchor against the ~8-unit
+  // towers. Both are draco-compressed (load via the vendored /draco/ decoder)
+  // and insignia-stripped — the US flags + NASA meatball were painted out of
+  // the suit texture (see CREDITS.md).
+  {
+    key: "base-station",
+    modelRef: "/assets/models/base-station.glb",
+    position: [9, 0, -9],
+    rotation: [0, Math.PI / 6, 0],
+    fit: 1.8,
+    fallbackColor: "#8c8c84",
+  },
+  {
+    key: "astronaut",
+    modelRef: "/assets/models/astronaut.glb",
+    position: [7.4, 0, -8],
+    rotation: [0, -Math.PI / 3, 0],
+    fit: 0.9,
+    fallbackColor: "#d9d9d9",
+    fallbackShape: "capsule",
   },
 ];
 
@@ -325,16 +353,26 @@ function SceneryPiece({ piece }: { piece: SetPiece }) {
     };
   }, [merged]);
 
-  // Fallback box approximates the normalized model: a slim upright volume whose
-  // height is `fit` (towers read tall, the crawler low-ish), seated on the ground.
+  // Primitive fallback (ADR-0004) approximating the normalized model: a slim
+  // upright volume whose height is `fit` (towers read tall, the crawler low-ish),
+  // seated on the ground. `fallbackShape` picks the silhouette: a box for
+  // structures, a capsule for the astronaut. Both are sized to the model's `fit`
+  // bbox so the proxy occupies the same footprint until/if the glTF loads.
   const fallbackSize = useMemo<Vec3>(
     () => [piece.fit * 0.6, piece.fit, piece.fit * 0.6],
     [piece.fit],
   );
-  const fallbackGeo = useMemo(
-    () => new THREE.BoxGeometry(...fallbackSize),
-    [fallbackSize],
-  );
+  const fallbackGeo = useMemo(() => {
+    if (piece.fallbackShape === "capsule") {
+      // CapsuleGeometry(radius, length, …): total height = length + 2·radius, so
+      // length = fit − 2·radius keeps the overall height at `fit`. A slim radius
+      // reads as a standing figure.
+      const radius = piece.fit * 0.2;
+      const length = Math.max(piece.fit - 2 * radius, 0.001);
+      return new THREE.CapsuleGeometry(radius, length, 4, 8);
+    }
+    return new THREE.BoxGeometry(...fallbackSize);
+  }, [piece.fallbackShape, piece.fit, fallbackSize]);
   useEffect(() => () => fallbackGeo.dispose(), [fallbackGeo]);
 
   useEffect(() => {
