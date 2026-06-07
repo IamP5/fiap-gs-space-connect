@@ -1006,7 +1006,7 @@
       "area": "realistic-3d-world",
       "title": "Lighting & framing grade (FOV 50, rim/fill lights, earthshine falloff, fog dedupe)",
       "user_visible_behavior": "A wider 50-degree FOV with surface rim/fill lights, distance-scaled earthshine, and warm atmospheric fog.",
-      "status": "not_started",
+      "status": "in_progress",
       "issue": 101,
       "epic": 46,
       "depends_on": [],
@@ -1014,8 +1014,11 @@
         "cd web && npm run build && npm test (TS-clean + vitest)",
         "manual: orbit & surface screenshots; animated slices pause when the tab is hidden"
       ],
-      "evidence": [],
-      "notes": "Wave 3 (cinematic beauty & immersion). AFK."
+      "evidence": [
+        "Implemented on branch worktree-agent-a474031a30da74922 (head dbcb39d): FOV 42->50 + surface distance band pulled in (10->8, 40->33) to hold framing; surface-only cool steel-blue rim + warm sun-side fill (gated onSurface); earthshine now a pointLight at EARTH_POSITION with decay=2 (physically-correct 1/r^2 falloff, pale steel-blue retained, void near-black in orbit, Sun hard white); duplicate surface <fog> consolidated into one shared SURFACE_FOG_ARGS warmed to #0a0f1a. Static — 0 idle fps preserved.",
+        "web baseline green: npm run lint clean + npm run build TS-clean + vitest 11 files / 116 tests pass. Coordinator runs the consolidated visual (orbit & surface) review."
+      ],
+      "notes": "Wave 3 (cinematic beauty & immersion). AFK. PR open; flips to passing on merge (issue-sync)."
     },
     {
       "id": "r3d-102",
