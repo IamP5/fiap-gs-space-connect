@@ -203,38 +203,43 @@ ambientCG publishes all of its assets under CC0 1.0 (https://ambientcg.com/licen
 ## Sky bodies — Moon & Earth (NASA-PD)
 
 Decorative, snapshot-independent sky bodies rendered by
-`web/src/components/SkyBodies.tsx` (issue #51): the Moon globe in orbit view, the
-"Earthrise" Earth in the black surface sky. These are **Scenery** (ADR-0004
+`web/src/components/SkyBodies.tsx` (issues #51, #82, #86): the Moon globe in orbit
+view, the day/night Earth marble in both views. These are **Scenery** (ADR-0004
 allows snapshot-independent decoration), never snapshot-driven Assets; a
 failed/missing texture falls back to the sphere's flat material color (ADR-0004
 mandatory fallback). All source images are US-government public-domain works from
-NASA's 3D Resources repository (`master` branch). Credited as `NASA` as a
-courtesy; this project is **not** affiliated with or endorsed by NASA, and the
-NASA insignia is **not** used. Each download was verified as a real JPEG
-(`file <path>` reports `JPEG image data`). Downloaded: 2026-06-06.
+NASA. Credited as `NASA` as a courtesy; this project is **not** affiliated with or
+endorsed by NASA, and the NASA insignia is **not** used. Each download was verified
+as a real JPEG (`file <path>` reports `JPEG image data`). Wave-2 realism upgrade
+(space-view-realism.md §1, §2, §5) — downloaded: 2026-06-07.
+
+The Moon now uses the NASA **CGI Moon Kit (SVS 4720)** data — the canonical NASA
+Moon-rendering source: the LROC WAC colour mosaic for albedo (real maria contrast +
+baked-in ray systems), and a normal map baked OFFLINE from the LOLA LDEM elevation
+so crater relief lines up with the albedo (relief is applied as a **normal map,
+never a displacementMap**). The Earth now uses NASA **Blue Marble: Next Generation**
+(day) + **Black Marble** (city-lights, night-side emissive).
 
 | File | Source asset | Author | Source URL | License |
 |------|--------------|--------|-----------|---------|
-| `textures/moon_color_1024.jpg` | NASA 3D Resources → `Images and Textures/Moon/Moon.jpg`, resized to 1024 | NASA | https://github.com/nasa/NASA-3D-Resources/blob/master/Images%20and%20Textures/Moon/Moon.jpg | Public Domain (NASA-PD) |
-| `textures/moon_normal_1024.jpg` | Baked OFFLINE from `Moon.jpg` (grayscale heightfield → Sobel-gradient OpenGL normal map, 1024) | NASA (derived) | https://github.com/nasa/NASA-3D-Resources/blob/master/Images%20and%20Textures/Moon/Moon.jpg | Public Domain (NASA-PD) |
-| `textures/moon_rough_512.jpg` | Baked OFFLINE from `Moon.jpg` (grayscale, clamped to a high-roughness band, 512) | NASA (derived) | https://github.com/nasa/NASA-3D-Resources/blob/master/Images%20and%20Textures/Moon/Moon.jpg | Public Domain (NASA-PD) |
-| `textures/earth_color_512.jpg` | NASA 3D Resources → `Images and Textures/Earth (A)/Earth (A).jpg`, resized to 1024×512 | NASA | https://github.com/nasa/NASA-3D-Resources/blob/master/Images%20and%20Textures/Earth%20(A)/Earth%20(A).jpg | Public Domain (NASA-PD) |
+| `textures/moon_color_2048.jpg` | NASA CGI Moon Kit (SVS 4720) → `lroc_color_2k.jpg` (LROC WAC colour mosaic), 2048×1024, neutral-graded (desaturate + gentle contrast so it reads grey, not warm-brown) | NASA's Scientific Visualization Studio | https://svs.gsfc.nasa.gov/vis/a000000/a004700/a004720/lroc_color_2k.jpg | Public Domain (NASA-PD) |
+| `textures/moon_normal_2048.jpg` | Baked OFFLINE from the CGI Moon Kit LOLA elevation `ldem_16_uint.tif` (16-bit LDEM heightfield, 5760×2880 → 2048×1024 → Sobel-gradient OpenGL normal map) | NASA's Scientific Visualization Studio (derived) | https://svs.gsfc.nasa.gov/vis/a000000/a004700/a004720/ldem_16_uint.tif | Public Domain (NASA-PD) |
+| `textures/earth_day_1024.jpg` | NASA Blue Marble: Next Generation (Jan 2004 topo+bathy), resized 5400×2700 → 1024×512 | NASA's Goddard Space Flight Center (Blue Marble: Next Generation) | https://assets.science.nasa.gov/content/dam/science/esd/eo/images/bmng/bmng-topography-bathymetry/january/world.topo.bathy.200401.3x5400x2700.jpg | Public Domain (NASA-PD) |
+| `textures/earth_night_1024.jpg` | NASA Black Marble (2016 night lights), resized 13500×6750 → 1024×512 | NASA's Earth Observatory (Black Marble) | https://eoimages.gsfc.nasa.gov/images/imagerecords/144000/144898/BlackMarble_2016_3km.jpg | Public Domain (NASA-PD) |
 
-Original downloads (raw `master`, the `.jpg` not the huge `.tif`):
-
-- `https://raw.githubusercontent.com/nasa/NASA-3D-Resources/master/Images%20and%20Textures/Moon/Moon.jpg`
-- `https://raw.githubusercontent.com/nasa/NASA-3D-Resources/master/Images%20and%20Textures/Earth%20(A)/Earth%20(A).jpg`
-
-The Moon color/Earth color were downscaled (ImageMagick `magick … -resize`) for
-bundle size; otherwise the photometry is unmodified. The Moon normal + roughness
-maps are baked offline from the same Moon photo (a heightfield-derived OpenGL
-normal map for crater relief — relief is applied as a **normal map, never a
-displacementMap**) and so are derivative NASA-PD works. NASA's image and media
-usage guidelines state NASA content is generally not copyrighted and may be used
-for educational/informational purposes; the NASA insignia/logo and flags are
-excluded and are NOT used here. See
-https://www.nasa.gov/nasa-brand-center/images-and-media/ and
-https://github.com/nasa/NASA-3D-Resources.
+The Earth colour maps were downscaled (ImageMagick `magick … -resize`) for bundle
+size; the Moon colour map is the full 2K LROC mosaic, neutral-graded for a
+reference-accurate grey (desaturate + gentle sigmoidal contrast). The Moon normal
+map is baked offline from the LOLA LDEM-16 elevation TIFF (a heightfield-derived
+OpenGL normal map for crater relief) and so is a derivative NASA-PD work; the bake
+step is reproducible via ImageMagick (16-bit grey raster extract) + a small node
+Sobel script (see the PR for the recipe). NASA's image
+and media usage guidelines state NASA content is generally not copyrighted and may
+be used for educational/informational purposes; the NASA insignia/logo and flags
+are excluded and are NOT used here. See
+https://www.nasa.gov/nasa-brand-center/images-and-media/, NASA's Scientific
+Visualization Studio (https://svs.gsfc.nasa.gov/4720/), and NASA's Earth
+Observatory.
 
 ## Sun (Solar System Scope — CC-BY 4.0)
 
@@ -259,6 +264,27 @@ Solar System Scope publishes its texture pack under **CC-BY 4.0**
 (https://www.solarsystemscope.com/textures/) — admissible with attribution, which
 is recorded here. **Attribution:** Solar System Scope (solarsystemscope.com),
 licensed under CC BY 4.0 (https://creativecommons.org/licenses/by/4.0/).
+
+## Nebula hero — ESA/Hubble Veil Nebula (CC-BY 4.0)
+
+Decorative, snapshot-independent deep-space vista accent rendered by
+`web/src/components/SkyBodies.tsx` (`NebulaHero`, issue #90): a 2–4 layer additive
+sprite stack shown ONLY in the orbit view. It is a **Scenery** element (ADR-0004),
+never a snapshot-driven Asset; a failed/missing image falls back to a procedural
+radial-gradient `CanvasTexture` cloud (ADR-0004 mandatory fallback). The source is
+the ESA/Hubble Veil Nebula "Witch's Broom" (heic0712a), which has a genuine black
+background (ideal for additive blending over the black sky). Downloaded: 2026-06-07;
+verified as a real JPEG (`file <path>` reports `JPEG image data`), resized
+1493×751 → 1024-wide for bundle size (otherwise unmodified).
+
+| File | Source asset | Author | Source URL | License |
+|------|--------------|--------|-----------|---------|
+| `textures/nebula_veil_1024.jpg` | ESA/Hubble Veil Nebula "Witch's Broom" (heic0712a), resized to 1024 wide | ESA/Hubble (see attribution below) | https://cdn.esahubble.org/archives/images/large/heic0712a.jpg | CC-BY 4.0 |
+
+ESA/Hubble publishes its images under **CC-BY 4.0**
+(https://esahubble.org/copyright/) — admissible with attribution, which is recorded
+here verbatim. **Attribution:** NASA, ESA, and the Hubble Heritage
+(STScI/AURA)-ESA/Hubble Collaboration. Acknowledgment: J. Hester (ASU).
 
 ## Rover model (NASA-PD)
 
