@@ -58,10 +58,10 @@ import {
 //   • Earth — NASA Blue Marble (day) + Black Marble (city lights, night) (NASA-PD).
 //   • Sun   — Solar System Scope colour map (CC-BY 4.0).
 //   • Nebula — ESA/Hubble Veil Nebula "Witch's Broom" (heic0712a) (CC-BY 4.0).
-const MOON_COLOR = "/assets/textures/moon_color_2048.jpg";
-const MOON_NORMAL = "/assets/textures/moon_normal_2048.jpg";
-const EARTH_DAY = "/assets/textures/earth_day_1024.jpg";
-const EARTH_NIGHT = "/assets/textures/earth_night_1024.jpg";
+const MOON_COLOR = "/assets/textures/moon_color_4096.jpg";
+const MOON_NORMAL = "/assets/textures/moon_normal_4096.jpg";
+const EARTH_DAY = "/assets/textures/earth_day_2048.jpg";
+const EARTH_NIGHT = "/assets/textures/earth_night_2048.jpg";
 const SUN_COLOR = "/assets/textures/sun_color_1024.jpg";
 const NEBULA_VEIL = "/assets/textures/nebula_veil_1024.jpg";
 
@@ -82,9 +82,9 @@ const MOON_LOD_SWITCH = 420;
 // --- Earth (both views) -----------------------------------------------------
 // A distant marble hung high in the black sky to give the sense of deep space.
 // SIZED PROPORTIONALLY to the Moon (EARTH_RADIUS = MOON_RADIUS × 3.67, the real
-// diameter ratio) and hung up-and-LEFT, beyond the Moon, so the orbit vista reads
-// correctly: the Moon is the close hero (~25°) and Earth the bigger-but-farther
-// planet (~12°). Shown in BOTH views. Self-illuminated so it glows on its own
+// diameter ratio) and hung beyond the Moon's upper-right limb so the orbit vista
+// matches the NASA reference: the Moon is the close hero (~38°) and Earth the
+// smaller-but-farther marble (~13°). Shown in BOTH views. Self-illuminated so it glows on its own
 // with no per-frame work. EARTH_RADIUS + EARTH_POSITION live in lib/scene so
 // Scene3D's earthshine light can share Earth's position.
 
@@ -153,14 +153,14 @@ function MoonGlobe({ visible }: { visible: boolean }) {
     // realism). Relief is the LOLA-baked normal map ONLY — never a displacementMap
     // (silhouette cracks on equirect poles).
     const matNear = new THREE.MeshStandardMaterial({
-      color: "#9a958c",
+      color: "#c2c2c2",
       roughness: 0.97,
       metalness: 0,
       envMapIntensity: 0,
       fog: false,
     });
     const matFar = new THREE.MeshStandardMaterial({
-      color: "#9a958c",
+      color: "#c2c2c2",
       roughness: 0.97,
       metalness: 0,
       envMapIntensity: 0,
@@ -171,7 +171,7 @@ function MoonGlobe({ visible }: { visible: boolean }) {
     // near (L0) material is pushed to ~0.9 for strong crater-rim definition at
     // orbit-close distance; the far (L1) material stays softer (~0.6) so distant
     // frames don't over-shade near the terminator. (Baked from the LOLA LDEM-16
-    // tier, 2048×1024.)
+    // tier and delivered at 4096×2048 — 4× the prior linear detail.)
     matNear.normalScale.set(0.9, 0.9);
     matFar.normalScale.set(0.6, 0.6);
     return { geomNear, geomFar, matNear, matFar };
@@ -239,6 +239,7 @@ function MoonGlobe({ visible }: { visible: boolean }) {
 // but SkyBodies always mounts Earth visible.)
 function EarthBody({ visible }: { visible: boolean }) {
   const invalidate = useThree((s) => s.invalidate);
+  const gl = useThree((s) => s.gl);
 
   const { geometry, material, rimGeometry, rimMaterial } = useMemo(() => {
     const geometry = new THREE.SphereGeometry(EARTH_RADIUS, 48, 48);
@@ -277,12 +278,16 @@ function EarthBody({ visible }: { visible: boolean }) {
   useEffect(() => {
     // Day map → diffuse (SRGB); night city-lights → emissive map (SRGB colour data).
     // A failed load on either channel leaves the flat fallback for that channel.
+    // Earth now reads at ~1/3 the Moon's apparent size in orbit (it sits just off
+    // the Moon's limb), so its maps get MAX anisotropy too — the day/night
+    // terminator + coastlines stay crisp at the grazing limb angle.
+    const aniso = gl.capabilities.getMaxAnisotropy();
     const cleanups = [
-      loadTexture(EARTH_DAY, material, "map", THREE.SRGBColorSpace, invalidate),
-      loadTexture(EARTH_NIGHT, material, "emissiveMap", THREE.SRGBColorSpace, invalidate),
+      loadTexture(EARTH_DAY, material, "map", THREE.SRGBColorSpace, invalidate, aniso),
+      loadTexture(EARTH_NIGHT, material, "emissiveMap", THREE.SRGBColorSpace, invalidate, aniso),
     ];
     return () => cleanups.forEach((c) => c());
-  }, [material, invalidate]);
+  }, [material, invalidate, gl]);
 
   useEffect(
     () => () => {

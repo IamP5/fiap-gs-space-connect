@@ -1501,10 +1501,12 @@ function SceneContents({
           whisper on the surface (0.25, regolith bounce under the worksite), all but
           OFF in orbit (0.05) so the Moon's shadow side isn't washed flat. */}
       <hemisphereLight args={["#ffe9cc", "#1a1814", onSurface ? 0.25 : 0.05]} />
-      {/* SUN — the key light, near-white (#FFFAF4) so the lit Moon reads as neutral
-          grey, not warm-brown (ACES + a warm sun was muddying it); kept at ~1.9 so
-          it stays the bloom driver and the lit limb is bright but not blown out. */}
-      <directionalLight ref={lightRef} position={SUN_POSITION} color="#fffaf4" intensity={1.9} />
+      {/* SUN — the key light, PURE WHITE (#FFFFFF): sunlight in vacuum has no
+          atmosphere to redden it (see lib/scene.ts), so a white key keeps the lit
+          Moon a neutral cool grey (the NASA reference look) instead of warm-tan;
+          kept at ~1.9 so it stays the bloom driver and the lit limb is bright but
+          not blown out. */}
+      <directionalLight ref={lightRef} position={SUN_POSITION} color="#ffffff" intensity={1.9} />
       {/* Earthshine — a cool DESATURATED whisper (pale steel-blue #A8BFDA), from
           Earth's actual position. NASA earthshine is a faint wash on the night-side
           terminator, NOT a blue glow — dimmest in orbit (0.16) so the shadow side

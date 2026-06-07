@@ -49,18 +49,36 @@ import * as THREE from "three";
 const HDR_FILE = "/assets/hdr/moonless_golf_2k.hdr";
 
 // Self-hosted Deep Star Maps 2020 (NASA/Goddard SVS 4851, Gaia DR2) equirect,
-// galactic coords (band sits as a clean horizontal stripe). Converted offline
-// from the 8k EXR → 4096×2048 sRGB JPG. See public/assets/CREDITS.md.
-const STAR_BG_FILE = "/assets/starmap_2020_4k_gal.jpg";
+// galactic coords (the warm dust band sits along the equator). Converted offline
+// from the 8k EXR → 8192×4096 sRGB JPG (4× the linear resolution of the prior 4k
+// → crisp pinpoint stars + smooth dust, matching the NASA SVS look). The galactic
+// projection lays the band horizontally; backgroundRotation (below) rolls/yaws it
+// so the bright galactic-centre dust runs DIAGONALLY through the orbit frame,
+// behind the Moon+Earth, as in the reference render (SVS #14992). See CREDITS.md.
+const STAR_BG_FILE = "/assets/starmap_2020_8k_gal.jpg";
 
-// The Milky-Way band now carries most of the sky detail, so the hand-rolled
-// points shell is reduced to a sparse foreground field (issue #91).
-const STAR_COUNT = 800;
+// scene.backgroundRotation (three r0.169): roll tilts the horizontal galactic band
+// to a diagonal; yaw swings the bright galactic-centre bulge toward the orbit
+// camera's look direction so the warm dust reads in-frame (not behind us). The
+// orbit camera looks mostly toward -X, which samples the equirect's galactic
+// ANTI-centre (the dimmest edge of the _gal map) by default — a 180° yaw brings
+// the bright central dust/bulge into the frame.
+const STAR_BG_YAW_DEG = 180; // swing galactic centre into the orbit view
+const STAR_BG_ROLL_DEG = 28; // diagonal tilt of the band
+// scene.backgroundIntensity (three r0.169): lifts the dust band above the void so
+// it reads without re-baking the JPG (raw Gaia map is fairly dim).
+const STAR_BG_INTENSITY = 1.35;
+
+// The Milky-Way band carries most of the sky detail, so the hand-rolled points
+// shell is a sparse near-field of foreground stars layered ON TOP of the band
+// for extra crisp, brighter accents (issue #91).
+const STAR_COUNT = 1400;
 const STAR_SHELL_RADIUS = 4000; // well inside the camera far plane (~8000, issue #49).
 
 // Base screen-pixel size; each star scales this by a power-law factor so a few
-// stars read bright/large and many stay faint/small.
-const STAR_BASE_SIZE = 1.6;
+// stars read bright/large and many stay faint/small. Kept small so stars read as
+// crisp pinpoints (the NASA reference) rather than soft blobs.
+const STAR_BASE_SIZE = 1.4;
 
 // A tiny error boundary so a missing/failed HDR can never blank the scene: if
 // the <Environment> loader throws, we render nothing and the Canvas's black
@@ -102,7 +120,20 @@ function StarBackground() {
         tex.mapping = THREE.EquirectangularReflectionMapping;
         tex.colorSpace = THREE.SRGBColorSpace;
         tex.anisotropy = gl.capabilities.getMaxAnisotropy();
+        // Keep trilinear mipmapping (three defaults) — sharpness comes from the 8k
+        // source, NOT from disabling mips (which would shimmer the minified stars).
+        tex.generateMipmaps = true;
+        tex.minFilter = THREE.LinearMipmapLinearFilter;
+        tex.magFilter = THREE.LinearFilter;
         scene.background = tex;
+        // Orient + brighten the galactic band (three r0.169) so the warm dust runs
+        // diagonally through the orbit frame behind the bodies.
+        scene.backgroundRotation = new THREE.Euler(
+          0,
+          THREE.MathUtils.degToRad(STAR_BG_YAW_DEG),
+          THREE.MathUtils.degToRad(STAR_BG_ROLL_DEG),
+        );
+        scene.backgroundIntensity = STAR_BG_INTENSITY;
         invalidate(); // wake the demand loop ONCE
       },
       undefined,
@@ -117,6 +148,8 @@ function StarBackground() {
       // still pending, `cur` is still `prev` and we must not dispose it.
       if (cur instanceof THREE.Texture && cur !== prev) {
         scene.background = prev;
+        scene.backgroundIntensity = 1;
+        scene.backgroundRotation = new THREE.Euler();
         cur.dispose();
       }
     };
@@ -176,12 +209,13 @@ function Starfield() {
       // Power-law magnitude: t∈[0,1] skewed toward 0 (faint) via ^3. A handful
       // land near 1 → the bright/large stars. Map to pixel size and brightness.
       const t = Math.pow(Math.random(), 3);
-      sizes[i] = STAR_BASE_SIZE * (0.6 + t * 3.0); // ~1.0px faint … ~5.8px bright
+      sizes[i] = STAR_BASE_SIZE * (0.5 + t * 2.0); // ~0.7px faint … ~3.5px bright (crisp)
       const brightness = 0.55 + t * 0.45; // faint stars are dimmer
 
-      // Color variance: ~80% white, ~10% warm, ~10% cool.
+      // Color variance: ~90% white, ~6% warm, ~4% cool — mostly neutral pinpoints
+      // (the NASA reference is a predominantly white field, not a colourful one).
       const c = Math.random();
-      const base = c < 0.1 ? WARM_STAR : c < 0.2 ? COOL_STAR : WHITE_STAR;
+      const base = c < 0.06 ? WARM_STAR : c < 0.1 ? COOL_STAR : WHITE_STAR;
       tmp.copy(base).multiplyScalar(brightness);
       colors[i * 3] = tmp.r;
       colors[i * 3 + 1] = tmp.g;

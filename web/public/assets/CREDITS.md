@@ -222,15 +222,15 @@ never a displacementMap**). The Earth now uses NASA **Blue Marble: Next Generati
 
 | File | Source asset | Author | Source URL | License |
 |------|--------------|--------|-----------|---------|
-| `textures/moon_color_2048.jpg` | NASA CGI Moon Kit (SVS 4720) → `lroc_color_2k.jpg` (LROC WAC colour mosaic), 2048×1024, neutral-graded (desaturate + gentle contrast so it reads grey, not warm-brown) | NASA's Scientific Visualization Studio | https://svs.gsfc.nasa.gov/vis/a000000/a004700/a004720/lroc_color_2k.jpg | Public Domain (NASA-PD) |
-| `textures/moon_normal_2048.jpg` | Baked OFFLINE from the CGI Moon Kit LOLA elevation `ldem_16_uint.tif` (16-bit LDEM heightfield, 5760×2880 → 2048×1024 → Sobel-gradient OpenGL normal map) | NASA's Scientific Visualization Studio (derived) | https://svs.gsfc.nasa.gov/vis/a000000/a004700/a004720/ldem_16_uint.tif | Public Domain (NASA-PD) |
-| `textures/earth_day_1024.jpg` | NASA Blue Marble: Next Generation (Jan 2004 topo+bathy), resized 5400×2700 → 1024×512 | NASA's Goddard Space Flight Center (Blue Marble: Next Generation) | https://assets.science.nasa.gov/content/dam/science/esd/eo/images/bmng/bmng-topography-bathymetry/january/world.topo.bathy.200401.3x5400x2700.jpg | Public Domain (NASA-PD) |
-| `textures/earth_night_1024.jpg` | NASA Black Marble (2016 night lights), resized 13500×6750 → 1024×512 | NASA's Earth Observatory (Black Marble) | https://eoimages.gsfc.nasa.gov/images/imagerecords/144000/144898/BlackMarble_2016_3km.jpg | Public Domain (NASA-PD) |
+| `textures/moon_color_4096.jpg` | NASA CGI Moon Kit (SVS 4720) → `lroc_color_poles_8k.tif` (LROC WAC colour mosaic), 8192×4096 → 4096×2048, neutral-graded (desaturate to ~38% so it reads cool grey, not warm-brown) | NASA's Scientific Visualization Studio | https://svs.gsfc.nasa.gov/vis/a000000/a004700/a004720/lroc_color_poles_8k.tif | Public Domain (NASA-PD) |
+| `textures/moon_normal_4096.jpg` | Baked OFFLINE from the CGI Moon Kit LOLA elevation `ldem_16_uint.tif` (16-bit LDEM heightfield, 5760×2880 → 4096×2048 → Sobel-gradient OpenGL normal map) | NASA's Scientific Visualization Studio (derived) | https://svs.gsfc.nasa.gov/vis/a000000/a004700/a004720/ldem_16_uint.tif | Public Domain (NASA-PD) |
+| `textures/earth_day_2048.jpg` | NASA Blue Marble: Next Generation (Dec 2004 topo+bathy), resized 5400×2700 → 2048×1024 | NASA's Goddard Space Flight Center (Blue Marble: Next Generation) | https://eoimages.gsfc.nasa.gov/images/imagerecords/73000/73909/world.topo.bathy.200412.3x5400x2700.jpg | Public Domain (NASA-PD) |
+| `textures/earth_night_2048.jpg` | NASA Black Marble (2016 night lights), resized 13500×6750 → 2048×1024 | NASA's Earth Observatory (Black Marble) | https://assets.science.nasa.gov/content/dam/science/esd/eo/images/imagerecords/144000/144898/BlackMarble_2016_3km.jpg | Public Domain (NASA-PD) |
 
-The Earth colour maps were downscaled (ImageMagick `magick … -resize`) for bundle
-size; the Moon colour map is the full 2K LROC mosaic, neutral-graded for a
-reference-accurate grey (desaturate + gentle sigmoidal contrast). The Moon normal
-map is baked offline from the LOLA LDEM-16 elevation TIFF (a heightfield-derived
+The Earth colour maps were downscaled (ImageMagick `magick … -resize`) to 2K for
+bundle size; the Moon colour map is the 8K LROC mosaic downscaled to 4K and
+neutral-graded for a reference-accurate cool grey (desaturate to ~38%). The Moon
+normal map is baked offline from the LOLA LDEM-16 elevation TIFF (a heightfield-derived
 OpenGL normal map for crater relief) and so is a derivative NASA-PD work; the bake
 step is reproducible via ImageMagick (16-bit grey raster extract) + a small node
 Sobel script (see the PR for the recipe). NASA's image
@@ -323,25 +323,27 @@ band sits as a clean horizontal stripe with the bulge centered) — the
 `starmap_*` file is the *composite* (Milky-Way band **+** discrete stars in one
 file). No constellation/grid overlay is baked in. The source is **EXR-only** at
 usable resolution (the SVS `.jpg` 404s; `_print.jpg` is a 1024×512 thumbnail),
-so the 8k EXR was converted OFFLINE to a 4096×2048 sRGB JPG (exposure-lifted so
-the faint band reads as soft grey-brown, not crushed to black). Downloaded &
-converted: 2026-06-07; verified as a real JPEG (`file` reports `JPEG image
-data, … 4096x2048`).
+so the 8k EXR was converted OFFLINE to a **full 8192×4096** sRGB JPG (kept at
+source resolution — 4× the linear detail of the prior 4k — so the stars read as
+crisp pinpoints and the dust band stays smooth). The galactic `_gal` projection
+lays the band horizontally; the renderer rolls/yaws it via `scene.backgroundRotation`
+so the bright galactic-centre dust runs diagonally through the orbit frame.
+Downloaded & converted: 2026-06-07.
 
 | File | Source asset | Author | Source URL | License |
 |------|--------------|--------|-----------|---------|
-| `starmap_2020_4k_gal.jpg` | Deep Star Maps 2020 (SVS 4851) → `starmap_2020_8k_gal.exr`, converted offline to 4096×2048 sRGB JPG | NASA/Goddard SVS (Gaia DR2: ESA/Gaia/DPAC) | https://svs.gsfc.nasa.gov/4851/ | Public Domain (NASA-PD) + ESA/Gaia co-credit |
+| `starmap_2020_8k_gal.jpg` | Deep Star Maps 2020 (SVS 4851) → `starmap_2020_8k_gal.exr`, converted offline to 8192×4096 sRGB JPG (warm-graded) | NASA/Goddard SVS (Gaia DR2: ESA/Gaia/DPAC) | https://svs.gsfc.nasa.gov/4851/ | Public Domain (NASA-PD) + ESA/Gaia co-credit |
 
 Original download (8192×4096 EXR; converted offline, not committed as-is):
 `https://svs.gsfc.nasa.gov/vis/a000000/a004800/a004851/starmap_2020_8k_gal.exr`
 
-Offline conversion (ImageMagick v7; `oiiotool` not available — exposure-lift then
-encode sRGB):
+Offline conversion (ImageMagick v7; EXR linear HDR → sRGB JPEG, warm grade to
+bring out the brown dust band):
 
 ```sh
-magick starmap_2020_8k_gal.exr -resize 4096x2048 \
-  -evaluate multiply 6.0 -colorspace sRGB -quality 90 \
-  web/public/assets/starmap_2020_4k_gal.jpg
+magick starmap_2020_8k_gal.exr -set colorspace RGB -colorspace sRGB \
+  -modulate 112,125,100 -depth 8 -quality 82 \
+  web/public/assets/starmap_2020_8k_gal.jpg
 ```
 
 NASA's Deep Star Maps are derived from ESA's Gaia DR2 (plus Hipparcos/Tycho)
