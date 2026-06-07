@@ -126,13 +126,68 @@
   height: 100%;
 }
 
-/* Minimal placeholder for the lazy Scene3D chunk's Suspense fallback — a plain
-   dark fill so the stage isn't blank while three.js loads. The branded
-   LoadingScreen replaces this in a later slice (#129). */
-.scene-loading {
-  width: 100%;
-  height: 100%;
+/* ---- loading screen (Epic 05 P1) ----
+   Branded SwarmBuild splash shown while EVERY asset preloads behind it; the Canvas
+   mounts only once it lifts (preload resolved or safety timeout), so nothing pops
+   in later. Styled off the dashboard tokens (pure black canvas, white display type,
+   hairline chrome). Fades out via opacity then unmounts; sits above the stage and
+   stops intercepting pointer events the moment it's revealed. */
+.loading-screen {
+  position: absolute;
+  inset: 0;
+  z-index: 10;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: var(--s-xl);
   background: var(--canvas-night);
+  opacity: 1;
+  transition: opacity 600ms ease;
+}
+
+.loading-screen--revealed {
+  opacity: 0;
+  pointer-events: none;
+}
+
+.loading-screen__brand {
+  font-family: var(--display);
+  font-size: 2rem;
+  letter-spacing: 2px;
+  text-transform: uppercase;
+  color: var(--on-primary);
+}
+
+.loading-screen__brand-sub {
+  font-family: var(--ui);
+  font-size: 0.9rem;
+  letter-spacing: 1px;
+  text-transform: none;
+  color: var(--ink-mute);
+  margin-left: var(--s-sm);
+}
+
+.loading-screen__bar {
+  width: min(320px, 60vw);
+  height: 3px;
+  background: var(--hairline-on-dark);
+  border-radius: var(--r-full);
+  overflow: hidden;
+}
+
+.loading-screen__fill {
+  height: 100%;
+  background: var(--on-primary);
+  border-radius: var(--r-full);
+  transition: width 200ms ease;
+}
+
+.loading-screen__status {
+  font-family: var(--ui);
+  font-size: 0.8rem;
+  letter-spacing: 0.5px;
+  color: var(--ink-mute);
 }
 
 /* ---- view-transition glare ----

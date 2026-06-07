@@ -43,6 +43,13 @@ import * as THREE from "three";
 import type { ThreeEvent } from "@react-three/fiber";
 
 import { CELESTIAL_BLOOM_LAYER, type ViewMode } from "./Scene3D";
+// Shared URL-keyed cache: preload and the bodies share ONE decoded texture per URL
+// (no pop-in). Aliased — this module already has a local `loadTexture` helper that
+// applies a texture to a material SLOT (a different concern). Epic 05 P1.
+import {
+  loadTexture as loadCachedTexture,
+  preloadTexture,
+} from "../lib/textureCache";
 import {
   EARTH_POSITION,
   EARTH_RADIUS,
@@ -59,13 +66,15 @@ import {
 //   • Earth — NASA Blue Marble (day) + Black Marble (city lights, night) (NASA-PD).
 //   • Sun   — Solar System Scope colour map (CC-BY 4.0).
 //   • Nebula — ESA/Hubble Veil Nebula "Witch's Broom" (heic0712a) (CC-BY 4.0).
-const MOON_COLOR = "/assets/textures/moon_color_4096.jpg";
-const MOON_NORMAL = "/assets/textures/moon_normal_4096.jpg";
-const EARTH_DAY = "/assets/textures/earth_day_2048.jpg";
-const EARTH_NIGHT = "/assets/textures/earth_night_2048.jpg";
-const EARTH_CLOUDS = "/assets/textures/earth_clouds_2048.jpg";
-const SUN_COLOR = "/assets/textures/sun_color_1024.jpg";
-const NEBULA_VEIL = "/assets/textures/nebula_veil_1024.jpg";
+// Exported so the preload manifest (lib/assets.ts) references the SAME URLs these
+// bodies render — the manifest can't drift from the component (Epic 05 P1).
+export const MOON_COLOR = "/assets/textures/moon_color_4096.jpg";
+export const MOON_NORMAL = "/assets/textures/moon_normal_4096.jpg";
+export const EARTH_DAY = "/assets/textures/earth_day_2048.jpg";
+export const EARTH_NIGHT = "/assets/textures/earth_night_2048.jpg";
+export const EARTH_CLOUDS = "/assets/textures/earth_clouds_2048.jpg";
+export const SUN_COLOR = "/assets/textures/sun_color_1024.jpg";
+export const NEBULA_VEIL = "/assets/textures/nebula_veil_1024.jpg";
 
 // --- Moon globe (orbit view) ------------------------------------------------
 // Placement + size: the orbit preset TARGETS this berth and frames the globe as
@@ -320,33 +329,26 @@ function loadUniformTexture(
   anisotropy: number,
 ): () => void {
   let disposed = false;
-  let texture: THREE.Texture | null = null;
-  new THREE.TextureLoader().load(
-    url,
-    (t) => {
-      if (disposed) {
-        t.dispose();
-        return;
-      }
-      t.colorSpace = THREE.NoColorSpace;
-      t.anisotropy = anisotropy;
-      t.wrapS = THREE.RepeatWrapping; // equirectangular maps wrap horizontally
-      t.wrapT = THREE.ClampToEdgeWrapping;
-      // Mipmaps ON (default) with max anisotropy minify the equirect cleanly at the
-      // grazing limb; the surface limb-fade in EARTH_FRAGMENT handles the residual
-      // foreshortening streak.
-      texture = t;
-      uniform.value = t;
-      invalidate();
-    },
-    undefined,
-    () => {
-      // Missing/failed ⇒ keep the solid fallback already in the uniform (ADR-0004).
-    },
-  );
+  // Shared cache: one decoded texture per URL (warm from preload). The cache OWNS
+  // it — never disposed. Per-URL config (colorSpace/wrap/anisotropy) applied here.
+  const t = loadCachedTexture(url);
+  void preloadTexture(url).then(() => {
+    if (disposed || !t.image) return; // failed ⇒ keep the solid fallback (ADR-0004)
+    t.colorSpace = THREE.NoColorSpace;
+    t.anisotropy = anisotropy;
+    t.wrapS = THREE.RepeatWrapping; // equirectangular maps wrap horizontally
+    t.wrapT = THREE.ClampToEdgeWrapping;
+    // Mipmaps ON (default) with max anisotropy minify the equirect cleanly at the
+    // grazing limb; the surface limb-fade in EARTH_FRAGMENT handles the residual
+    // foreshortening streak.
+    t.needsUpdate = true;
+    uniform.value = t;
+    invalidate();
+  });
   return () => {
     disposed = true;
-    texture?.dispose();
+    // The cache owns the texture — do NOT dispose. Leave the uniform pointing at
+    // the shared texture; a remount re-reads the same object.
   };
 }
 
@@ -372,33 +374,23 @@ function loadTexture(
   anisotropy = 4,
 ): () => void {
   let disposed = false;
-  let texture: THREE.Texture | null = null;
-  const loader = new THREE.TextureLoader();
-  loader.load(
-    url,
-    (t) => {
-      if (disposed) {
-        t.dispose();
-        return;
-      }
-      t.colorSpace = colorSpace;
-      t.anisotropy = anisotropy;
-      texture = t;
-      material[key] = t;
-      material.needsUpdate = true;
-      invalidate(); // wake the demand loop so the texture shows, then idle again
-    },
-    undefined,
-    () => {
-      // Missing/failed ⇒ keep the flat color for this channel (never crash).
-    },
-  );
+  // Shared cache: one decoded texture per URL (warm from preload). The cache OWNS
+  // it — never disposed. colorSpace/anisotropy is per-URL config applied here.
+  const t = loadCachedTexture(url);
+  void preloadTexture(url).then(() => {
+    if (disposed || !t.image) return; // failed ⇒ keep the flat colour (ADR-0004)
+    t.colorSpace = colorSpace;
+    t.anisotropy = anisotropy;
+    t.needsUpdate = true;
+    material[key] = t;
+    material.needsUpdate = true;
+    invalidate(); // wake the demand loop so the texture shows, then idle again
+  });
   return () => {
     disposed = true;
-    if (texture) {
-      if (material[key] === texture) material[key] = null;
-      texture.dispose();
-    }
+    // The cache owns the texture — do NOT dispose. Detach from the slot so a
+    // disposed material never references a shared texture meant for other bodies.
+    if (material[key] === t) material[key] = null;
   };
 }
 
@@ -1317,36 +1309,27 @@ function NebulaHero({ visible }: { visible: boolean }) {
   const fallbackTex = useMemo(() => makeNebulaFallbackTexture(), []);
   const [tex, setTex] = useState<THREE.Texture | null>(fallbackTex);
 
-  // Load the Veil image imperatively (no Suspense throw). On success, swap in the
-  // image and invalidate once; on failure keep the fallback.
+  // Load the Veil image from the shared cache (warm from preload, no Suspense
+  // throw). On success swap in the image and invalidate once; on failure keep the
+  // procedural fallback. The cache OWNS the image — we never dispose it.
   useEffect(() => {
     let disposed = false;
-    let loaded: THREE.Texture | null = null;
-    new THREE.TextureLoader().load(
-      NEBULA_VEIL,
-      (t) => {
-        if (disposed) {
-          t.dispose();
-          return;
-        }
-        t.colorSpace = THREE.SRGBColorSpace;
-        loaded = t;
-        setTex(t);
-        invalidate();
-      },
-      undefined,
-      () => {
-        // Load failed → keep the procedural fallback (ADR-0004).
-      },
-    );
+    const t = loadCachedTexture(NEBULA_VEIL);
+    void preloadTexture(NEBULA_VEIL).then(() => {
+      if (disposed || !t.image) return; // failed ⇒ keep the procedural fallback
+      t.colorSpace = THREE.SRGBColorSpace;
+      t.needsUpdate = true;
+      setTex(t);
+      invalidate();
+    });
     return () => {
       disposed = true;
-      loaded?.dispose();
+      // The cache owns the Veil image — do NOT dispose it here.
     };
   }, [invalidate]);
 
-  // Dispose the procedural fallback on unmount (the loaded image is disposed by the
-  // loader effect's cleanup above).
+  // Dispose the procedural fallback we OWN on unmount (the Veil image is owned by
+  // the shared texture cache, which keeps it for the session).
   useEffect(() => () => fallbackTex?.dispose(), [fallbackTex]);
 
   // Toggling visibility under the demand loop must wake one frame so the change is

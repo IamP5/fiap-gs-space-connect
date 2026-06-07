@@ -62,6 +62,7 @@ import type { RoverView, Snapshot, TaskView, Vec2 } from "../types/wire";
 import { batteryPercent } from "../lib/format";
 import { suppressRaycast } from "../lib/suppressRaycast";
 import { applyGltfTextureFidelity, polishGltfMaterials } from "../lib/textureFidelity";
+import { loadTexture, preloadTexture } from "../lib/textureCache";
 import {
   DEFAULT_SITE_FRAME,
   EARTH_POSITION,
@@ -322,7 +323,9 @@ function roverHaloColor(r: RoverView): string {
 // The one configured rover model. Self-hosted, conditioned + Draco-compressed by
 // scripts/condition-asset.mjs (recentered, fit-to-unit). A missing file just
 // keeps the primitive fallback below.
-const ROVER_MODEL_REF = "/assets/models/rassor_rover.glb";
+// Exported so the preload manifest (lib/assets.ts) references the SAME URL the
+// renderer uses — the manifest can't drift from the component (Epic 05 P1).
+export const ROVER_MODEL_REF = "/assets/models/rassor_rover.glb";
 // The native (authored) size the rover body, primitive fallback, hit-proxy, and
 // halos were all laid out at — the model's LARGEST bbox dim fits to this, and the
 // primitive box/mast/wheels + hit sphere + halo rings are all proportioned around
@@ -1090,7 +1093,10 @@ gltfLoader.setDRACOLoader(dracoLoader);
 gltfLoader.setMeshoptDecoder(MeshoptDecoder);
 const gltfCache = new Map<string, Promise<THREE.Group>>();
 
-function loadGLTF(url: string): Promise<THREE.Group> {
+// Exported so the preload pass (lib/assets.ts) can WARM this exact module-level
+// cache — preloading a rover/spec GLB through here means the descent reuses the
+// already-decoded model with zero rework (Epic 05 P1).
+export function loadGLTF(url: string): Promise<THREE.Group> {
   let p = gltfCache.get(url);
   if (!p) {
     p = new Promise<THREE.Group>((resolve, reject) => {
@@ -1164,8 +1170,6 @@ function SpecPrimitive({
       { url: desc.aoMap, key: "aoMap", colorSpace: THREE.NoColorSpace },
     ];
     let disposed = false;
-    const loaded: THREE.Texture[] = [];
-    const loader = new THREE.TextureLoader();
     for (const slot of slots) {
       // A slot with no URL is explicitly cleared so a re-render that DROPS a map
       // (this mesh's index now folds a different op) doesn't keep a stale texture.
@@ -1176,40 +1180,31 @@ function SpecPrimitive({
         }
         continue;
       }
-      loader.load(
-        slot.url,
-        (t) => {
-          if (disposed) {
-            t.dispose();
-            return;
-          }
-          t.colorSpace = slot.colorSpace;
-          loaded.push(t);
-          if (matRef.current) {
-            matRef.current[slot.key] = t;
-            matRef.current.needsUpdate = true;
-            invalidate(); // wake the demand loop so the texture shows
-          }
-        },
-        undefined,
-        () => {
-          // Missing/failed texture ⇒ keep the flat color for this channel
-          // (fallback, never crash).
-        },
-      );
+      // Shared URL-keyed cache (textureCache): one decoded texture per URL, shared
+      // with the preload pass so the descent shows no pop-in. The cache OWNS the
+      // texture (we never dispose it). colorSpace is per-URL config applied here.
+      const url = slot.url;
+      const t = loadTexture(url);
+      t.colorSpace = slot.colorSpace;
+      void preloadTexture(url).then(() => {
+        if (disposed || !matRef.current) return;
+        if (!t.image) return; // failed load ⇒ keep the flat colour (ADR-0004)
+        matRef.current[slot.key] = t;
+        matRef.current.needsUpdate = true;
+        invalidate(); // wake the demand loop so the texture shows
+      });
     }
     const mat = matRef.current;
     return () => {
       disposed = true;
-      // Detach our textures from the material BEFORE disposing them, so a
-      // re-render never leaves a freed texture referenced on the slot.
-      for (const t of loaded) {
-        if (mat) {
-          for (const slot of slots) {
-            if (mat[slot.key] === t) mat[slot.key] = null;
-          }
+      // The cache owns the textures (shared, session-lived) — do NOT dispose them.
+      // Detach our textures from the material so a re-render never leaves a stale
+      // slot pointing at a texture this op no longer uses.
+      if (mat) {
+        for (const slot of slots) {
+          if (!slot.url) continue;
+          if (mat[slot.key] === loadTexture(slot.url)) mat[slot.key] = null;
         }
-        t.dispose();
       }
     };
   }, [desc.map, desc.normalMap, desc.roughnessMap, desc.aoMap, invalidate]);
@@ -1490,7 +1485,9 @@ function TaskBlock({
 
 // The CC0 regolith PBR set (Poly Haven "Moon 01", 512 jpg) tiled over the ground.
 // Self-hosted under web/public so it works offline; see public/assets/CREDITS.md.
-const REGOLITH_MAPS: {
+// Exported so the preload manifest (lib/assets.ts) references the SAME terrain
+// URLs the renderer tiles — the manifest can't drift from the component (Epic 05 P1).
+export const REGOLITH_MAPS: {
   url: string;
   key: "map" | "normalMap" | "roughnessMap" | "aoMap";
   colorSpace: THREE.ColorSpace;
@@ -1595,40 +1592,31 @@ function LunarTerrain() {
 
   useEffect(() => {
     let disposed = false;
-    const loaded: THREE.Texture[] = [];
     const maxAniso = gl.capabilities.getMaxAnisotropy();
-    const loader = new THREE.TextureLoader();
     for (const m of REGOLITH_MAPS) {
-      loader.load(
-        m.url,
-        (t) => {
-          if (disposed) {
-            t.dispose();
-            return;
-          }
-          // Each map is loaded fresh here (no shared cache), so we own it and may
-          // mutate wrap/repeat directly before disposing it on unmount.
-          t.colorSpace = m.colorSpace;
-          t.wrapS = THREE.RepeatWrapping;
-          t.wrapT = THREE.RepeatWrapping;
-          t.repeat.set(REGOLITH_REPEAT, REGOLITH_REPEAT);
-          t.anisotropy = maxAniso;
-          loaded.push(t);
-          if (matRef.current) {
-            matRef.current[m.key] = t;
-            matRef.current.needsUpdate = true;
-            invalidate(); // wake the demand loop so the texture shows
-          }
-        },
-        undefined,
-        () => {
-          // Missing/failed map ⇒ keep the flat fallback for this channel.
-        },
-      );
+      // Shared URL-keyed cache (textureCache): preload and the renderer share ONE
+      // decoded texture so the descent shows no pop-in. The cache owns the texture
+      // (we never dispose it). Per-URL config (colorSpace/wrap/repeat/anisotropy) is
+      // applied here — regolith has a single consumer, so this is safe & idempotent.
+      const t = loadTexture(m.url);
+      t.colorSpace = m.colorSpace;
+      t.wrapS = THREE.RepeatWrapping;
+      t.wrapT = THREE.RepeatWrapping;
+      t.repeat.set(REGOLITH_REPEAT, REGOLITH_REPEAT);
+      t.anisotropy = maxAniso;
+      // Settle once the (possibly already-warm) load completes, then attach + paint.
+      // If it failed, the texture stays empty and the flat fallback colour holds.
+      void preloadTexture(m.url).then(() => {
+        if (disposed || !matRef.current) return;
+        if (!t.image) return; // failed load ⇒ keep the flat fallback (ADR-0004)
+        matRef.current[m.key] = t;
+        matRef.current.needsUpdate = true;
+        invalidate(); // wake the demand loop so the texture shows
+      });
     }
     return () => {
+      // The cache owns the textures (shared, session-lived) — do NOT dispose here.
       disposed = true;
-      for (const t of loaded) t.dispose();
     };
   }, [gl, invalidate]);
 

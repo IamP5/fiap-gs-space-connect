@@ -28,14 +28,17 @@ import { useThree } from "@react-three/fiber";
 import * as THREE from "three";
 import { GROUND_SPAN } from "../lib/scene";
 import { applyMaxAnisotropy } from "../lib/textureFidelity";
+import { loadTexture, preloadTexture } from "../lib/textureCache";
 
 // Self-hosted CC0 boulder PBR set (Poly Haven "Rock Boulder Dry", 512). The
 // diffuse was already vendored (#58a); the normal + roughness maps were added for
 // the material tier polish (#111) so the boulders carry real microrelief + varied
 // specular instead of reading as flat diffuse spheres. All credited in CREDITS.md.
-const ROCK_DIFF = "/assets/textures/rock_boulder_dry_diff_512.jpg";
-const ROCK_NORMAL = "/assets/textures/rock_boulder_dry_nor_gl_512.jpg";
-const ROCK_ROUGH = "/assets/textures/rock_boulder_dry_rough_512.jpg";
+// Exported so the preload manifest (lib/assets.ts) references the SAME URLs the
+// field tiles — the manifest can't drift from the component (Epic 05 P1).
+export const ROCK_DIFF = "/assets/textures/rock_boulder_dry_diff_512.jpg";
+export const ROCK_NORMAL = "/assets/textures/rock_boulder_dry_nor_gl_512.jpg";
+export const ROCK_ROUGH = "/assets/textures/rock_boulder_dry_rough_512.jpg";
 
 // The PBR channels loaded onto the shared boulder material, paired with the
 // material slot + correct colourSpace: diffuse is sRGB, normal/roughness linear.
@@ -130,34 +133,25 @@ export function DecorRocks() {
   // the demand loop paints the new skin, then returns to 0 idle fps.
   useEffect(() => {
     let disposed = false;
-    const loaded: THREE.Texture[] = [];
-    const loader = new THREE.TextureLoader();
     const maxAniso = gl.capabilities.getMaxAnisotropy();
     for (const slot of ROCK_MAPS) {
-      loader.load(
-        slot.url,
-        (tex) => {
-          if (disposed) {
-            tex.dispose();
-            return;
-          }
-          tex.colorSpace = slot.colorSpace;
-          // Max anisotropy (#100): the rock field sprawls to the terrain edge, so
-          // far rocks are seen at a grazing angle — sharpen them like the terrain.
-          applyMaxAnisotropy(tex, maxAniso);
-          loaded.push(tex);
-          setMaps((prev) => ({ ...prev, [slot.key]: tex }));
-          invalidate(); // wake the demand loop once so the new channel shows
-        },
-        undefined,
-        () => {
-          // Missing/failed channel ⇒ leave it unset (never crash).
-        },
-      );
+      // Shared URL-keyed cache (textureCache): one decoded texture per URL, shared
+      // with the preload pass so the descent shows no pop-in. The cache OWNS the
+      // texture (we never dispose it). colorSpace/anisotropy is per-URL config here.
+      const tex = loadTexture(slot.url);
+      tex.colorSpace = slot.colorSpace;
+      // Max anisotropy (#100): the rock field sprawls to the terrain edge, so far
+      // rocks are seen at a grazing angle — sharpen them like the terrain.
+      applyMaxAnisotropy(tex, maxAniso);
+      void preloadTexture(slot.url).then(() => {
+        if (disposed || !tex.image) return; // failed ⇒ leave the slot unset (ADR-0004)
+        setMaps((prev) => ({ ...prev, [slot.key]: tex }));
+        invalidate(); // wake the demand loop once so the new channel shows
+      });
     }
     return () => {
+      // The cache owns the textures (shared, session-lived) — do NOT dispose here.
       disposed = true;
-      for (const t of loaded) t.dispose();
     };
   }, [invalidate, gl]);
 

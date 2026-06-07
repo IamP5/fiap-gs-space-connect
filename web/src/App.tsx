@@ -22,6 +22,7 @@ import { KillPanel } from "./components/KillPanel";
 import { ControlsPanel } from "./components/ControlsPanel";
 import { EarthPanel } from "./components/EarthPanel";
 import { BlueprintPalette } from "./components/BlueprintPalette";
+import { LoadingScreen } from "./components/LoadingScreen";
 // Type-only — erased at build time, so referencing the camera view-mode type
 // here does NOT pull the lazy three.js Scene3D chunk into the eager shell bundle.
 import type { ViewMode } from "./components/Scene3D";
@@ -44,6 +45,11 @@ const Scene3D = lazy(() =>
   import("./components/Scene3D").then((m) => ({ default: m.Scene3D })),
 );
 
+// Reveal no later than this even if a load hangs entirely (ADR-0004 safety
+// backstop): preloadAllAssets settles per-asset (never rejects), but a load that
+// never settles at all must not trap the user behind the splash.
+const SAFETY_TIMEOUT_MS = 9000;
+
 export default function App() {
   const { snapshot, earth, wsOpen, url, send } = useSnapshot();
 
@@ -56,6 +62,35 @@ export default function App() {
   // worksite framing (ADR-0004). The operator can flip to "orbit" to pull the
   // camera back and take in the distant parked Moon; both framings stay clamped.
   const [viewMode, setViewMode] = useState<ViewMode>("surface");
+
+  // --- Preload-everything-behind-a-splash (Epic 05 P1). On mount we kick the
+  // explicit asset preload (lib/assets) AND warm the lazy Scene3D chunk, both via
+  // DYNAMIC import() so the three.js-pulling manifest never lands in the light
+  // shell bundle. The Canvas is gated on `ready`, which latches true when the
+  // preload resolves OR a safety timeout fires — ONE-WAY, so the splash never
+  // re-shows on later on-demand loads (ADR-0004). `progress` (0..1) drives the bar.
+  const [progress, setProgress] = useState(0);
+  const [ready, setReady] = useState(false);
+  useEffect(() => {
+    let settled = false; // one-way reveal guard
+    const reveal = () => {
+      if (settled) return;
+      settled = true;
+      setReady(true);
+    };
+    // Safety backstop: reveal even if a load hangs forever (ADR-0004).
+    const timer = window.setTimeout(reveal, SAFETY_TIMEOUT_MS);
+    // Warm the lazy Scene3D JS chunk in parallel with the asset decode so the
+    // chunk parse doesn't add a stall after the bar fills.
+    void import("./components/Scene3D");
+    // Kick the asset preload via a dynamic import (keeps three out of the shell).
+    void import("./lib/assets").then(({ preloadAllAssets }) =>
+      preloadAllAssets((loaded, total) => {
+        setProgress(total > 0 ? loaded / total : 1);
+      }).then(reveal),
+    );
+    return () => window.clearTimeout(timer);
+  }, []);
 
   // The currently-selected rover, resolved against the LATEST snapshot. If it
   // has vanished from the snapshot, this is undefined → treated as deselected.
@@ -255,22 +290,29 @@ export default function App() {
             (top-left) as latency climbs, proving "Earth never knew" (issue 09). */}
         <EarthPanel earth={earth} snapshotAt={snapshot?.at ?? null} />
 
-        {/* The 3D scene is the sole renderer (ADR-0004). Suspense covers the
-            lazy three.js chunk; a minimal placeholder stands in until the chunk
-            resolves — the branded LoadingScreen replaces this in slice #129. */}
-        <Suspense fallback={<div className="scene-loading" />}>
-          <Scene3D
-            snapshot={snapshot}
-            selected={selectedRover ? selected : null}
-            onPick={setSelected}
-            placing={placement !== null}
-            ghost={ghost}
-            onPlaceMove={movePlacement}
-            onPlaceConfirm={confirmPlacement}
-            viewMode={viewMode}
-            onViewModeChange={setViewMode}
-          />
-        </Suspense>
+        {/* The 3D scene is the sole renderer (ADR-0004). Everything preloads
+            behind the branded splash; the Canvas mounts only once `ready` (preload
+            resolved OR safety timeout), so nothing pops in later — even on descent.
+            The lazy chunk's Suspense fallback is the same splash, so a slow chunk
+            parse is covered by the same branded screen. */}
+        <LoadingScreen progress={progress} revealed={ready} />
+        {ready ? (
+          <Suspense
+            fallback={<LoadingScreen progress={progress} revealed={false} />}
+          >
+            <Scene3D
+              snapshot={snapshot}
+              selected={selectedRover ? selected : null}
+              onPick={setSelected}
+              placing={placement !== null}
+              ghost={ghost}
+              onPlaceMove={movePlacement}
+              onPlaceConfirm={confirmPlacement}
+              viewMode={viewMode}
+              onViewModeChange={setViewMode}
+            />
+          </Suspense>
+        ) : null}
       </main>
     </div>
   );

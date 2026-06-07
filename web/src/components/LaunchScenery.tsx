@@ -48,7 +48,10 @@ sceneryLoader.setDRACOLoader(sceneryDraco);
 sceneryLoader.setMeshoptDecoder(MeshoptDecoder);
 const sceneryCache = new Map<string, Promise<THREE.Group>>();
 
-function loadScenery(url: string): Promise<THREE.Group> {
+// Exported so the preload pass (lib/assets.ts) can WARM this exact module-level
+// cache — preloading a set-piece GLB through here means the surface reuses the
+// already-decoded model with zero rework (Epic 05 P1).
+export function loadScenery(url: string): Promise<THREE.Group> {
   let p = sceneryCache.get(url);
   if (!p) {
     p = new Promise<THREE.Group>((resolve, reject) => {
@@ -159,6 +162,12 @@ const SET_PIECES: SetPiece[] = [
     fallbackShape: "capsule",
   },
 ];
+
+// The 6 set-piece GLB URLs, derived from SET_PIECES so the preload manifest
+// (lib/assets.ts) can't drift from the actual scenery (Epic 05 P1).
+export const SCENERY_MODEL_REFS: readonly string[] = SET_PIECES.map(
+  (p) => p.modelRef,
+);
 
 // fitAndSeat normalizes a loaded model in place: scale its largest dimension to
 // `fit` world units, recenter on x/z, and seat its base at y=0 — so the wrapping
