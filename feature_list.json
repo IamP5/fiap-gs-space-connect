@@ -1067,7 +1067,7 @@
       "area": "realistic-3d-world",
       "title": "Soft shadows + contact shadows",
       "user_visible_behavior": "The sun casts soft shadows and rovers/domes have grounded contact shadows.",
-      "status": "not_started",
+      "status": "passing",
       "issue": 104,
       "epic": 46,
       "depends_on": [],
@@ -1075,7 +1075,9 @@
         "cd web && npm run build && npm test (TS-clean + vitest)",
         "manual: orbit & surface screenshots; animated slices pause when the tab is hidden"
       ],
-      "evidence": [],
+      "evidence": [
+        "commit 5161df8 — PCFSoftShadowMap + sun directionalLight castShadow (2048 map, frustum clamped to ±25 worksite, normalBias 0.05 / bias -0.0005); rovers (primitive + glTF) + built domes/spec ops cast+receive, regolith ground receives; drei ContactShadows (frames=1, blur 3, opacity 0.6) baked under the worksite. lint+build+test green (116 tests); 0 idle fps preserved (shadows render on invalidate only)."
+      ],
       "notes": "Wave 3 (cinematic beauty & immersion). AFK."
     },
     {

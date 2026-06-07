@@ -38,7 +38,7 @@
 
 import { memo, useEffect, useMemo, useRef, useState } from "react";
 import { Canvas, useFrame, useThree, type ThreeEvent } from "@react-three/fiber";
-import { Line, OrbitControls } from "@react-three/drei";
+import { ContactShadows, Line, OrbitControls } from "@react-three/drei";
 import { SpaceEnvironment } from "./SpaceEnvironment";
 import { SkyBodies } from "./SkyBodies";
 import {
@@ -110,6 +110,16 @@ export const CELESTIAL_BLOOM_LAYER = 12;
 // Subtle orbit-only chromatic-aberration offset. A module-level constant (stable
 // reference) so it never re-triggers the memoized effect across renders.
 const CHROMATIC_OFFSET = new THREE.Vector2(0.001, 0.002);
+
+// Distance from the origin worksite to the sun (#104). The sun's orthographic
+// shadow camera looks from SUN_POSITION toward the origin, so its near/far must
+// bracket the worksite slab at this depth along the sun ray.
+const SUN_POSITION_LEN = Math.hypot(SUN_POSITION[0], SUN_POSITION[1], SUN_POSITION[2]);
+
+// Half-extent of the sun shadow-camera frustum (#104) — clamps the 2048 map to
+// the ±25-unit worksite (GROUND_SPAN=20 + margin) so resolution isn't wasted on
+// the far regolith plain.
+const SHADOW_WORKSITE_HALF = 25;
 
 // ---- shared geometry buffers ------------------------------------------------
 
@@ -282,6 +292,15 @@ function RoverBody({ geo, dim }: { geo: SceneGeo; dim: boolean }) {
         // Dead rover ⇒ darken this placement's materials (clones, so the shared
         // cached materials and live rovers are untouched). Alive ⇒ no-op.
         if (dim) ownedMats = dimRoverModel(obj);
+        // Sun shadows (#104): the loaded model's meshes cast + receive the soft
+        // sun shadow, like the primitive fallback. clone(true) doesn't carry the
+        // flags, so set them per-placement on every mesh in the clone.
+        obj.traverse((o) => {
+          if ((o as THREE.Mesh).isMesh) {
+            o.castShadow = true;
+            o.receiveShadow = true;
+          }
+        });
         setScene(obj);
         invalidate(); // wake the demand loop once so the model shows when loaded
       })
@@ -307,8 +326,9 @@ function RoverBody({ geo, dim }: { geo: SceneGeo; dim: boolean }) {
   // raycast-suppressed so only the hit-proxy is pickable.
   return (
     <group>
-      {/* Body — low-poly box. */}
-      <mesh geometry={geo.body} position={[0, 0.42, 0]} raycast={() => null}>
+      {/* Body — low-poly box. castShadow/receiveShadow (#104): the rover throws a
+          soft sun shadow on the ground and catches shadow from its own mast. */}
+      <mesh geometry={geo.body} position={[0, 0.42, 0]} raycast={() => null} castShadow receiveShadow>
         <meshStandardMaterial
           color={bodyColor}
           metalness={0.2}
@@ -317,7 +337,13 @@ function RoverBody({ geo, dim }: { geo: SceneGeo; dim: boolean }) {
         />
       </mesh>
       {/* Sensor mast block, so the rover reads as front-facing. */}
-      <mesh geometry={geo.mast} position={[0, 0.66, -0.18]} raycast={() => null}>
+      <mesh
+        geometry={geo.mast}
+        position={[0, 0.66, -0.18]}
+        raycast={() => null}
+        castShadow
+        receiveShadow
+      >
         <meshStandardMaterial color={bodyColor} metalness={0.2} roughness={0.7} />
       </mesh>
       {/* Four cylinder wheels. */}
@@ -335,6 +361,8 @@ function RoverBody({ geo, dim }: { geo: SceneGeo; dim: boolean }) {
           position={[wx, 0.2, wz]}
           rotation={[0, 0, Math.PI / 2]}
           raycast={() => null}
+          castShadow
+          receiveShadow
         >
           <meshStandardMaterial color={dim ? "#141416" : "#3a3a3f"} roughness={0.9} />
         </mesh>
@@ -675,11 +703,16 @@ function SpecPrimitive({
   geo,
   color,
   opacity,
+  built,
 }: {
   desc: PrimitiveDesc;
   geo: SceneGeo;
   color: string;
   opacity: number;
+  // Sun shadows (#104): a built op casts/receives the soft sun shadow; a
+  // transparent ghost op does not, so unfinished blueprints don't throw solid
+  // shadows. Defaults true for the model fallback, which is itself only a built op.
+  built?: boolean;
 }) {
   const matRef = useRef<THREE.MeshStandardMaterial>(null);
   const invalidate = useThree((s) => s.invalidate);
@@ -762,6 +795,8 @@ function SpecPrimitive({
       rotation={desc.rotation}
       scale={desc.scale}
       raycast={() => null}
+      castShadow={built !== false}
+      receiveShadow={built !== false}
     >
       <meshStandardMaterial
         ref={matRef}
@@ -788,11 +823,13 @@ function SpecModel({
   geo,
   color,
   opacity,
+  built,
 }: {
   desc: ModelDesc;
   geo: SceneGeo;
   color: string;
   opacity: number;
+  built: boolean;
 }) {
   const [scene, setScene] = useState<THREE.Group | null>(null);
   const invalidate = useThree((s) => s.invalidate);
@@ -811,7 +848,18 @@ function SpecModel({
         // Re-suppress raycast on this clone: clone(true) does not carry over the
         // own-property override applied to the cached source, so every placement
         // must re-apply it to stay non-pickable (see suppressRaycast / loadGLTF).
-        setScene(suppressRaycast(g.clone(true)));
+        const obj = suppressRaycast(g.clone(true));
+        // Sun shadows (#104): a built op's model casts + receives the soft sun
+        // shadow. clone(true) doesn't carry the flags, so set them per-placement.
+        if (built) {
+          obj.traverse((o) => {
+            if ((o as THREE.Mesh).isMesh) {
+              o.castShadow = true;
+              o.receiveShadow = true;
+            }
+          });
+        }
+        setScene(obj);
         invalidate();
       })
       .catch(() => {
@@ -820,11 +868,13 @@ function SpecModel({
     return () => {
       disposed = true;
     };
-  }, [desc.modelRef, invalidate]);
+  }, [desc.modelRef, invalidate, built]);
 
   if (!scene) {
     // Fallback primitive (a box at the op's transform) until/if the glTF loads.
-    return <SpecPrimitive desc={desc.fallback} geo={geo} color={color} opacity={opacity} />;
+    return (
+      <SpecPrimitive desc={desc.fallback} geo={geo} color={color} opacity={opacity} built={built} />
+    );
   }
 
   return (
@@ -855,9 +905,9 @@ function SpecMesh({
 }) {
   const color = built ? desc.color : ghostColor;
   if (desc.kind === "model") {
-    return <SpecModel desc={desc} geo={geo} color={color} opacity={opacity} />;
+    return <SpecModel desc={desc} geo={geo} color={color} opacity={opacity} built={built} />;
   }
-  return <SpecPrimitive desc={desc} geo={geo} color={color} opacity={opacity} />;
+  return <SpecPrimitive desc={desc} geo={geo} color={color} opacity={opacity} built={built} />;
 }
 
 // ---- a task / dome block ----------------------------------------------------
@@ -967,7 +1017,16 @@ function TaskBlock({
   // PRIMITIVE FALLBACK — EXACTLY today's tierOf block (unchanged).
   return (
     <group position={[p.x, 0, p.z]}>
-      <mesh ref={meshRef} geometry={blockGeo} position={[0, h, 0]} raycast={() => null}>
+      {/* castShadow/receiveShadow only once BUILT (#104): a transparent blueprint
+          ghost shouldn't throw a solid sun shadow — it grounds only when finished. */}
+      <mesh
+        ref={meshRef}
+        geometry={blockGeo}
+        position={[0, h, 0]}
+        raycast={() => null}
+        castShadow={built}
+        receiveShadow={built}
+      >
         <meshStandardMaterial
           ref={matRef}
           color={color}
@@ -1131,7 +1190,9 @@ function LunarTerrain() {
   }, [gl, invalidate]);
 
   return (
-    <mesh rotation={[-Math.PI / 2, 0, 0]} raycast={() => null}>
+    // receiveShadow (#104): the regolith ground catches the sun shadows cast by
+    // the rovers and domes. It never casts (it's the floor), so castShadow is off.
+    <mesh rotation={[-Math.PI / 2, 0, 0]} raycast={() => null} receiveShadow>
       <primitive object={geom} attach="geometry" />
       {/* Flat #3a3a40 is the fallback until/if the regolith maps load. */}
       <meshStandardMaterial ref={matRef} color="#8a8a8e" roughness={1} metalness={0} />
@@ -1643,7 +1704,32 @@ function SceneContents({
           Moon a neutral cool grey (the NASA reference look) instead of warm-tan;
           kept at ~1.9 so it stays the bloom driver and the lit limb is bright but
           not blown out. */}
-      <directionalLight ref={lightRef} position={SUN_POSITION} color="#ffffff" intensity={1.9} />
+      {/* Soft sun shadow (#104) — the sun is the ONLY shadow caster (one cheap
+          2048 map). Its shadow camera is an orthographic frustum CLAMPED to the
+          ±25-unit worksite (GROUND_SPAN=20 + margin) so the whole map's resolution
+          is spent on the rovers/domes, not the 700-unit plain. SUN_POSITION sits
+          ~7050 units out along the sun direction, so near/far bracket the origin
+          worksite slab along that ray (≈6990 → ≈7110). normalBias is lifted for the
+          airless extreme contrast: it pushes sample points along the surface normal
+          to kill self-shadow acne on the low-poly faces without peter-panning the
+          contact line. Shadows render on invalidate only (demand loop) — 0 idle fps. */}
+      <directionalLight
+        ref={lightRef}
+        position={SUN_POSITION}
+        color="#ffffff"
+        intensity={1.9}
+        castShadow
+        shadow-mapSize-width={2048}
+        shadow-mapSize-height={2048}
+        shadow-camera-near={SUN_POSITION_LEN - SHADOW_WORKSITE_HALF - 35}
+        shadow-camera-far={SUN_POSITION_LEN + SHADOW_WORKSITE_HALF + 35}
+        shadow-camera-left={-SHADOW_WORKSITE_HALF}
+        shadow-camera-right={SHADOW_WORKSITE_HALF}
+        shadow-camera-top={SHADOW_WORKSITE_HALF}
+        shadow-camera-bottom={-SHADOW_WORKSITE_HALF}
+        shadow-normalBias={0.05}
+        shadow-bias={-0.0005}
+      />
       {/* Earthshine — a cool DESATURATED whisper (pale steel-blue #A8BFDA) emitted
           FROM Earth's actual position. Now a POINT light with physically-correct
           inverse-square falloff (decay=2): brightness scales 1/r² with distance to
@@ -1700,6 +1786,25 @@ function SceneContents({
       {onSurface && (
         <>
           <LunarTerrain />
+
+          {/* Contact shadows (#104) — drei bakes a soft ambient-occlusion-like
+              contact shadow under the rovers + domes so they read as GROUNDED, not
+              floating, even where the directional sun shadow is grazing. Sits a hair
+              above the regolith (y=0.02) to avoid z-fighting the displaced plane.
+              frames={1} bakes the shadow exactly ONCE (on the first rendered
+              frame), so it never forces a continuous render loop — 0 idle fps holds.
+              width/height span the ~±18-unit worksite detail zone; the soft blur +
+              ~0.6 opacity keep it a subtle ground occlusion, not a hard disc. */}
+          <ContactShadows
+            position={[0, 0.02, 0]}
+            scale={40}
+            resolution={1024}
+            far={6}
+            blur={3}
+            opacity={0.6}
+            color="#000000"
+            frames={1}
+          />
 
           {/* Tasks / rising dome. */}
           {snapshot.tasks.map((t) => (
@@ -1950,6 +2055,12 @@ export function Scene3D({
       <Canvas
         className="world-canvas"
         frameloop="demand"
+        // Soft sun shadows (#104): PCFSoftShadowMap on the renderer's shadow map
+        // gives the directional sun light penumbra-softened edges. Shadows are
+        // re-rendered ONLY on invalidated frames (frameloop="demand"), so the
+        // static scene still holds 0 idle fps — the shadow map bakes on a wake,
+        // then sits idle with the rest of the demand loop.
+        shadows={{ type: THREE.PCFSoftShadowMap }}
         dpr={[1, 1.5]}
         // far raised to ~8000 (issue #49) so the distant Moon + Earth are in-frustum;
         // near kept at 0.1. Shipping WITHOUT logarithmicDepthBuffer — the low-poly
