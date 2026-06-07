@@ -272,14 +272,16 @@ Decorative, snapshot-independent deep-space vista accent rendered by
 sprite stack shown ONLY in the orbit view. It is a **Scenery** element (ADR-0004),
 never a snapshot-driven Asset; a failed/missing image falls back to a procedural
 radial-gradient `CanvasTexture` cloud (ADR-0004 mandatory fallback). The source is
-the ESA/Hubble Veil Nebula "Witch's Broom" (heic0712a), which has a genuine black
-background (ideal for additive blending over the black sky). Downloaded: 2026-06-07;
-verified as a real JPEG (`file <path>` reports `JPEG image data`), resized
-1493×751 → 1024-wide for bundle size (otherwise unmodified).
+the ESA/Hubble Veil Nebula "Witch's Broom" (heic0712a). The raw image has a BRIGHT,
+busy background (corner luminance ≈ 116/255), so for additive sprite use it is
+conditioned OFFLINE: black-point crush (`-level 46%,100%`) drops the background to
+true black so additive adds nothing there, and a radial vignette (multiply by a
+sigmoidal radial-gradient) fades the sprite-quad edges to black so the square never
+reads as a hard rectangle. Downloaded: 2026-06-07; resized 1493×751 → 1024-wide.
 
 | File | Source asset | Author | Source URL | License |
 |------|--------------|--------|-----------|---------|
-| `textures/nebula_veil_1024.jpg` | ESA/Hubble Veil Nebula "Witch's Broom" (heic0712a), resized to 1024 wide | ESA/Hubble (see attribution below) | https://cdn.esahubble.org/archives/images/large/heic0712a.jpg | CC-BY 4.0 |
+| `textures/nebula_veil_1024.jpg` | ESA/Hubble Veil Nebula "Witch's Broom" (heic0712a), resized to 1024 wide, black-crushed + radial-vignetted for additive sprite use | ESA/Hubble (see attribution below) | https://cdn.esahubble.org/archives/images/large/heic0712a.jpg | CC-BY 4.0 |
 
 ESA/Hubble publishes its images under **CC-BY 4.0**
 (https://esahubble.org/copyright/) — admissible with attribution, which is recorded

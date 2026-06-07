@@ -705,12 +705,13 @@ function LunarBaseMarker({ onSelect }: { onSelect: () => void }) {
 }
 
 // --- Nebula hero (orbit view only) — a deep-space vista accent ---------------
-// A 2–4 layer ADDITIVE sprite stack using the ESA/Hubble Veil Nebula ("Witch's
-// Broom", heic0712a — CC-BY 4.0, genuine black background, ideal for additive).
-// Additive over the black sky hides the image's black background, so it reads as
-// faint nebulosity hanging in deep space (space-view-realism.md §4). It reads
-// against the Milky-Way background added by a sibling unit; here it sits over the
-// current black background, which is fine.
+// A 3-layer ADDITIVE sprite stack using the ESA/Hubble Veil Nebula ("Witch's
+// Broom", heic0712a — CC-BY 4.0). The raw image has a BRIGHT, busy background, so
+// it is conditioned OFFLINE for additive use: the dark background is crushed to
+// true black (so additive adds nothing there) and a radial vignette fades the
+// edges to black (so the square sprite quad never reads as a hard rectangle). With
+// that, additive over the sky shows only the bright filaments as faint nebulosity
+// hanging in deep space (space-view-realism.md §4), against the Milky-Way band.
 //
 // Orbit-view-only — gated exactly like MoonGlobe (the worksite is ON the Moon, so
 // a deep-space accent only belongs in the orbit vista). Demand-loop safe: the
@@ -795,12 +796,16 @@ function NebulaHero({ visible }: { visible: boolean }) {
 
   if (!visible || !tex) return null;
 
-  // Three additive layers at decreasing size/opacity → a layered, soft cloud with
-  // a brighter core. Slight offsets give the stack some internal structure.
-  const layers: { scale: number; opacity: number; offset: [number, number] }[] = [
-    { scale: 1.0, opacity: 0.5, offset: [0, 0] },
-    { scale: 0.66, opacity: 0.42, offset: [NEBULA_SIZE * 0.12, NEBULA_SIZE * 0.05] },
-    { scale: 0.4, opacity: 0.35, offset: [-NEBULA_SIZE * 0.08, -NEBULA_SIZE * 0.06] },
+  // Three CONCENTRIC additive layers at decreasing size/opacity → a layered, soft
+  // cloud with a brighter core. The layers are concentric (NOT offset): the texture
+  // is now vignetted to fade to black at its edges, so offsetting would re-expose
+  // the (faded) quad edges as faint rectangles. Concentric + edge-vignetted reads
+  // as one soft cloud. Opacities kept low so it's a subtle deep-space accent, not a
+  // dominating panel that fights the Moon/Earth/Milky-Way composition.
+  const layers: { scale: number; opacity: number }[] = [
+    { scale: 1.0, opacity: 0.3 },
+    { scale: 0.66, opacity: 0.26 },
+    { scale: 0.4, opacity: 0.22 },
   ];
 
   return (
@@ -808,7 +813,6 @@ function NebulaHero({ visible }: { visible: boolean }) {
       {layers.map((l, i) => (
         <sprite
           key={i}
-          position={[l.offset[0], l.offset[1], 0]}
           scale={[NEBULA_SIZE * l.scale, NEBULA_SIZE * l.scale, 1]}
           raycast={() => null}
         >
