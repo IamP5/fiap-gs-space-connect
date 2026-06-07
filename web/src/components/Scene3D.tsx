@@ -48,6 +48,7 @@ import type { RoverView, Snapshot, TaskView, Vec2 } from "../types/wire";
 import { batteryPercent } from "../lib/format";
 import { suppressRaycast } from "../lib/suppressRaycast";
 import {
+  EARTH_POSITION,
   GROUND_SPAN,
   MOON_POSITION,
   SUN_POSITION,
@@ -1427,15 +1428,25 @@ function SceneContents({
 
   return (
     <group>
-      {/* Lighting — the key light comes FROM the visible Sun (SUN_POSITION, same
-          body SkyBodies renders), WHITE (no colour = 0xffffff, sunlight in vacuum)
-          and distance-independent (directional), so the validated worksite look is
-          unchanged — only the source is now a real, distant sun. It also drives the
-          selective-bloom pass. Soft ambient + hemisphere fill so nothing reads as
-          pure black on the shadow side (ADR-0004). */}
-      <ambientLight intensity={0.35} />
-      <hemisphereLight args={["#9a9aae", "#1a1a22", 0.5]} />
-      <directionalLight ref={lightRef} position={SUN_POSITION} intensity={1.4} />
+      {/* SPACE LIGHTING — one harsh white sun + faint reflected fills, the way
+          airless space really lights a scene (no atmosphere to scatter, so high
+          contrast and near-black shadows). Three contributions:
+          1. SUN — the key light, FROM the visible Sun body (shared SUN_POSITION),
+             WHITE (0xffffff, sunlight in vacuum), strong. Also drives the bloom.
+          2. EARTHSHINE — a dim COOL-BLUE light FROM the visible Earth
+             (EARTH_POSITION): Earth reflects sunlight back, faintly lighting the
+             Moon's night side (the classic "earthshine") and filling the
+             worksite's shadow side. This is the "bodies reflect their sunlight"
+             effect the scene is replicating.
+          3. Regolith bounce — a low hemisphere (lit ground colour from below,
+             black sky from above) standing in for sunlight bouncing off the bright
+             lunar surface, plus a tiny ambient floor so nothing is pure black
+             (ADR-0004 readability). */}
+      <ambientLight intensity={0.12} />
+      <hemisphereLight args={["#1a1a26", "#8a8276", 0.35]} />
+      <directionalLight ref={lightRef} position={SUN_POSITION} intensity={2.1} />
+      {/* Earthshine — cool, dim, from Earth's actual position. */}
+      <directionalLight position={EARTH_POSITION} color="#7da2ff" intensity={0.55} />
 
       {/* Surface-only horizon fog: dissolves the far ground edge into the black
           sky for a clean horizon + sense of vastness. The worksite (within ~30

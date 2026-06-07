@@ -32,14 +32,25 @@ export const MOON_POSITION: [number, number, number] = [0, 60, -520];
 // (SkyBodies' SunBody mesh) and the lighting (Scene3D's directionalLight) share
 // one position: the light literally comes FROM the visible sun. Placed very far
 // (a nod to the real ~1 AU distance — vastly farther than the Moon at z=-520),
-// well inside the 8000 far-plane. Its direction matches the prior key-light
-// ([6,10,6]) so the validated worksite lighting is unchanged; only the source is
-// now a real, distant body. The sun reads WHITE (sunlight in vacuum has no
-// atmosphere to redden it) — see SunBody's white emissive.
-export const SUN_POSITION: [number, number, number] = [3014, 5024, 3014];
+// well inside the 8000 far-plane. It sits in the FORWARD sky (−z, upper-right) so
+// it is actually VISIBLE in the orbit vista; because it is then beyond the Moon,
+// the Moon reads back-lit (a sunlit crescent) — true space lighting — with the
+// dark side filled by EARTHSHINE (see EARTH_POSITION + Scene3D's earthshine
+// light). The sun reads WHITE (sunlight in vacuum has no atmosphere to redden it)
+// — see SunBody's white emissive.
+export const SUN_POSITION: [number, number, number] = [1555, 858, -4383];
 // Modeled radius. Far enough that this subtends only a few degrees — a brilliant
 // distant disc, not a wall of light.
 export const SUN_RADIUS = 190;
+
+// Earth — a distant decorative body, sized PROPORTIONALLY to the Moon (real
+// diameter ratio ≈ 3.67×) and hung up-and-LEFT of the Moon, beyond it, so the
+// orbit vista balances: Sun upper-right, Earth upper-left, Moon the close hero
+// between them. Lives here (not in SkyBodies) so Scene3D's EARTHSHINE light can
+// share Earth's position — the blue fill on the Moon's night side comes FROM the
+// visible Earth, the way reflected earthlight really does.
+export const EARTH_RADIUS = Math.round(MOON_RADIUS * 3.67); // ≈ 330, proportional to the Moon
+export const EARTH_POSITION: [number, number, number] = [-220, 640, -3050];
 
 export type Bounds = { minX: number; minY: number; maxX: number; maxY: number };
 

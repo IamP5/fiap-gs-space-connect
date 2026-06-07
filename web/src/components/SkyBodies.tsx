@@ -43,7 +43,14 @@ import * as THREE from "three";
 import type { ThreeEvent } from "@react-three/fiber";
 
 import type { ViewMode } from "./Scene3D";
-import { MOON_POSITION, MOON_RADIUS, SUN_POSITION, SUN_RADIUS } from "../lib/scene";
+import {
+  EARTH_POSITION,
+  EARTH_RADIUS,
+  MOON_POSITION,
+  MOON_RADIUS,
+  SUN_POSITION,
+  SUN_RADIUS,
+} from "../lib/scene";
 
 // Self-hosted textures (see public/assets/CREDITS.md). Downscaled jpgs. Moon +
 // Earth are NASA-PD; the Sun colour map is Solar System Scope (CC-BY 4.0).
@@ -69,18 +76,12 @@ const MOON_LOD_SWITCH = 420;
 
 // --- Earth (both views) -----------------------------------------------------
 // A distant marble hung high in the black sky to give the sense of deep space.
-// SIZED PROPORTIONALLY to the Moon: Earth's real diameter is ~3.67× the Moon's,
-// so EARTH_RADIUS = MOON_RADIUS × 3.67. It is hung far BEYOND the Moon (|pos| ≈
-// 3.5k vs the Moon's 520) so that, despite being the larger body, it subtends a
-// smaller angle (~10°) than the close Moon hero (~25°) — the correct read:
-// "Earth, the bigger planet, much farther away." Shown in BOTH views. Self-
-// illuminated (it sits well outside the worksite key light), so it glows on its
-// own with no per-frame work.
-const EARTH_RADIUS = Math.round(MOON_RADIUS * 3.67); // ≈ 330, proportional to the Moon
-// Up-and-right of the Moon, beyond it (|pos| ≈ 2.9k vs the Moon's 520), so both
-// share the orbit vista: the Moon is the close hero (~25° across) and Earth the
-// bigger-but-farther planet (~12°) — the proportions now read correctly.
-const EARTH_POSITION: [number, number, number] = [880, 640, -2750];
+// SIZED PROPORTIONALLY to the Moon (EARTH_RADIUS = MOON_RADIUS × 3.67, the real
+// diameter ratio) and hung up-and-LEFT, beyond the Moon, so the orbit vista reads
+// correctly: the Moon is the close hero (~25°) and Earth the bigger-but-farther
+// planet (~12°). Shown in BOTH views. Self-illuminated so it glows on its own
+// with no per-frame work. EARTH_RADIUS + EARTH_POSITION live in lib/scene so
+// Scene3D's earthshine light can share Earth's position.
 
 // Imperatively load a texture and apply it to a material slot, demand-safely.
 // Returns a cleanup that detaches + disposes. A failed load is swallowed (the
@@ -309,13 +310,29 @@ function SunBody() {
     [geometry, material],
   );
 
+  // A faint additive glow shell around the disc so the Sun reads as a brilliant
+  // emitter (a soft corona), not a flat white ball. Static, cheap, non-pickable.
+  const glow = useMemo(() => {
+    const g = new THREE.SphereGeometry(SUN_RADIUS * 1.7, 32, 32);
+    const m = new THREE.MeshBasicMaterial({
+      color: "#ffffff",
+      transparent: true,
+      opacity: 0.22,
+      blending: THREE.AdditiveBlending,
+      depthWrite: false,
+      side: THREE.BackSide,
+      toneMapped: false,
+      fog: false,
+    });
+    return { g, m };
+  }, []);
+  useEffect(() => () => { glow.g.dispose(); glow.m.dispose(); }, [glow]);
+
   return (
-    <mesh
-      geometry={geometry}
-      material={material}
-      position={SUN_POSITION}
-      raycast={() => null}
-    />
+    <group position={SUN_POSITION} raycast={() => null}>
+      <mesh geometry={glow.g} material={glow.m} raycast={() => null} />
+      <mesh geometry={geometry} material={material} raycast={() => null} />
+    </group>
   );
 }
 
