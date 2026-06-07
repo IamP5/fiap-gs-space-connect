@@ -539,6 +539,16 @@
   color: var(--on-primary-mute);
 }
 
+/* Surface site toggle (Epic 04 P2) — same hairline-boxed caps pair as the view
+   toggle. Its labels ("Lunar Base" / "Shackleton") are longer than the view
+   labels, so loosen the letter-spacing/padding and keep each on one line so the
+   active site reads clearly. */
+.site-toggle .view-btn {
+  letter-spacing: 0.6px;
+  padding: 6px var(--s-xs);
+  white-space: nowrap;
+}
+
 /* Range input — hairline track, square white thumb; no fills/glows. */
 .control-slider {
   -webkit-appearance: none;

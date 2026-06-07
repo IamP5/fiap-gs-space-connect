@@ -25,7 +25,7 @@ import { BlueprintPalette } from "./components/BlueprintPalette";
 import { LoadingScreen } from "./components/LoadingScreen";
 // Type-only — erased at build time, so referencing the camera view-mode type
 // here does NOT pull the lazy three.js Scene3D chunk into the eager shell bundle.
-import type { ViewMode } from "./components/Scene3D";
+import type { SiteId, ViewMode } from "./components/Scene3D";
 import { blueprintById } from "./lib/blueprintCatalog";
 import {
   ghostTasks,
@@ -63,6 +63,13 @@ export default function App() {
   // fly-in self-disables off-surface). Clicking the base marker flies the descent
   // to the rehearsed worksite framing (ADR-0004); both framings stay clamped.
   const [viewMode, setViewMode] = useState<ViewMode>("orbit");
+
+  // Active surface site (Epic 04 P2). The surface renders ONE worksite at a time;
+  // this picks which. Defaults to "lunar" so the existing single base marker
+  // descends to the lunar site and the snapshot's untagged rovers/tasks (?? "lunar")
+  // are shown. Orthogonal to viewMode: orbit is site-agnostic, surface shows this
+  // site. (Two orbit markers + descend-to-site are a later slice, #137.)
+  const [activeSite, setActiveSite] = useState<SiteId>("lunar");
 
   // --- Preload-everything-behind-a-splash (Epic 05 P1). On mount we kick the
   // explicit asset preload (lib/assets) AND warm the lazy Scene3D chunk, both via
@@ -183,8 +190,14 @@ export default function App() {
   // envelope). Pure read of the snapshot.
   const obstacles = useMemo<Footprint[]>(() => {
     const ts = snapshot?.tasks ?? [];
-    return ts.map((t) => ({ cx: t.pos.X, cy: t.pos.Y, halfX: 6, halfY: 6 }));
-  }, [snapshot]);
+    // Filter to the active site (Epic 04 P2): drag-to-place must only collide with
+    // THIS site's tasks, else placing on the lunar surface would conflict with
+    // Shackleton's worksite (and vice versa). `?? "lunar"` keeps untagged tasks on
+    // the default site (back-compat).
+    return ts
+      .filter((t) => (t.site ?? "lunar") === activeSite)
+      .map((t) => ({ cx: t.pos.X, cy: t.pos.Y, halfX: 6, halfY: 6 }));
+  }, [snapshot, activeSite]);
 
   // The live validity of the current placement (client mirror of the server gate),
   // recomputed as the cursor/rotation move. Null origin ⇒ "move the cursor" hint
@@ -285,6 +298,8 @@ export default function App() {
           send={send}
           viewMode={viewMode}
           onViewModeChange={setViewMode}
+          activeSite={activeSite}
+          onActiveSiteChange={setActiveSite}
         />
 
         {/* The DELAYED Earth view, bottom-right — it lags the live TaskLedger
@@ -311,6 +326,7 @@ export default function App() {
               onPlaceConfirm={confirmPlacement}
               viewMode={viewMode}
               onViewModeChange={setViewMode}
+              activeSite={activeSite}
             />
           </Suspense>
         ) : null}

@@ -2,6 +2,12 @@
 // Kept clearly separated from the live WebSocket path. This is a single static
 // snapshot exercising all three task statuses, an alive + a dead rover, and a
 // lease beam (rover R1 holds wall-1, which is LEASED to it).
+//
+// TWO SITES (Epic 04 P2): every rover/task carries a `site` tag and the snapshot
+// includes BOTH sites — "lunar" (the original equatorial worksite, world coords
+// near the origin) and "shackleton" (the south-pole outpost, world coords near
+// X≈400, matching SITE_FRAMES.shackleton.cx so siteMap recenters it). VITE_MOCK=1
+// thus shows live rovers/tasks on EITHER site as the operator toggles.
 
 import type { EarthUplink, Snapshot } from "../types/wire";
 
@@ -10,14 +16,20 @@ export const MOCK_SNAPSHOT: Snapshot = {
   connected: true,
   at: 5000,
   rovers: [
-    { id: "R1", pos: { X: 12, Y: 8 }, battery: 0.82, alive: true, load: 1, task: "wall-1" },
-    { id: "R2", pos: { X: 4, Y: 14 }, battery: 0.45, alive: true, load: 0 },
-    { id: "R3", pos: { X: 18, Y: 3 }, battery: 0.0, alive: false, load: 0 },
+    // --- lunar site ---
+    { id: "R1", pos: { X: 12, Y: 8 }, battery: 0.82, alive: true, load: 1, task: "wall-1", site: "lunar" },
+    { id: "R2", pos: { X: 4, Y: 14 }, battery: 0.45, alive: true, load: 0, site: "lunar" },
+    { id: "R3", pos: { X: 18, Y: 3 }, battery: 0.0, alive: false, load: 0, site: "lunar" },
+    // --- shackleton site (world coords offset to cx≈400) ---
+    { id: "S1", pos: { X: 408, Y: 6 }, battery: 0.74, alive: true, load: 1, task: "shk-wall-1", site: "shackleton" },
+    { id: "S2", pos: { X: 396, Y: 12 }, battery: 0.6, alive: true, load: 0, site: "shackleton" },
+    { id: "S3", pos: { X: 414, Y: 2 }, battery: 0.0, alive: false, load: 0, site: "shackleton" },
   ],
   tasks: [
     {
       id: "foundation-1",
       type: "foundation",
+      site: "lunar",
       pos: { X: 6, Y: 6 },
       status: "DONE",
       version: 3,
@@ -76,6 +88,7 @@ export const MOCK_SNAPSHOT: Snapshot = {
     {
       id: "wall-1",
       type: "wall",
+      site: "lunar",
       pos: { X: 13, Y: 9 },
       status: "LEASED",
       assignee: "R1",
@@ -86,6 +99,7 @@ export const MOCK_SNAPSHOT: Snapshot = {
     {
       id: "wall-2",
       type: "wall",
+      site: "lunar",
       pos: { X: 16, Y: 12 },
       status: "UNCLAIMED",
       version: 1,
@@ -94,10 +108,49 @@ export const MOCK_SNAPSHOT: Snapshot = {
     {
       id: "dome-cap",
       type: "dome",
+      site: "lunar",
       pos: { X: 10, Y: 16 },
       status: "UNCLAIMED",
       version: 1,
       deps: ["wall-1", "wall-2"],
+    },
+    // --- shackleton site (world coords offset to cx≈400; siteMap recenters) ---
+    {
+      id: "shk-foundation-1",
+      type: "foundation",
+      site: "shackleton",
+      pos: { X: 406, Y: 6 },
+      status: "DONE",
+      version: 2,
+    },
+    {
+      id: "shk-wall-1",
+      type: "wall",
+      site: "shackleton",
+      pos: { X: 408, Y: 9 },
+      status: "LEASED",
+      assignee: "S1",
+      lease_expiry: 140,
+      version: 3,
+      deps: ["shk-foundation-1"],
+    },
+    {
+      id: "shk-wall-2",
+      type: "wall",
+      site: "shackleton",
+      pos: { X: 411, Y: 12 },
+      status: "UNCLAIMED",
+      version: 1,
+      deps: ["shk-foundation-1"],
+    },
+    {
+      id: "shk-dome-cap",
+      type: "dome",
+      site: "shackleton",
+      pos: { X: 405, Y: 15 },
+      status: "UNCLAIMED",
+      version: 1,
+      deps: ["shk-wall-1", "shk-wall-2"],
     },
   ],
 };

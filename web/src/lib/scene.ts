@@ -52,32 +52,189 @@ export const REAL_METERS = {
   radome: 5,
 } as const;
 
+// A SCENERY set-piece — static, snapshot-INDEPENDENT launch-infrastructure
+// decoration (a crawler, launcher, gantry, lander, base station, astronaut).
+// Lives here (pure data, no three) so BOTH SITE_FRAMES (below) and LaunchScenery
+// share one definition: each SiteFrame carries its OWN `pieces` list, so the two
+// sites can reuse the same GLBs but reposition/retint them (Epic 04 P2). The
+// LaunchScenery component reads these and loads/renders the active site's pieces.
+export type SetPiece = {
+  key: string;
+  modelRef: string;
+  position: [number, number, number];
+  rotation?: [number, number, number];
+  // Real-world size (meters) of the model's LARGEST dimension. The NASA glTFs have
+  // arbitrary native units + off-origin pivots, so a fixed scale scalar is
+  // meaningless; LaunchScenery fits each to realMeters · SCENE_UNITS_PER_METER.
+  realMeters: number;
+  // Tint for the primitive fallback shown until/if the glTF loads.
+  fallbackColor: string;
+  // Primitive used for the ADR-0004 fallback. "box" (default) suits structures;
+  // "capsule" gives the astronaut a human-ish silhouette.
+  fallbackShape?: "box" | "capsule";
+};
+
+// The LUNAR launch complex (the original SET_PIECES). The mobile launcher
+// (120 m → 14.4 u) + gantry (90 m → 10.8 u) tower over the ~2.5 m rovers; the
+// crawler sits low/wide; the human-scale base station + astronaut anchor the
+// scale. POSITIONS are art-directed for the literal scale (literal sizes, staged
+// layout — what every NASA press render does).
+export const LUNAR_SET_PIECES: SetPiece[] = [
+  {
+    key: "crawler",
+    modelRef: "/assets/models/nasa_crawler.glb",
+    position: [-22, 0, -26],
+    rotation: [0, Math.PI / 5, 0],
+    realMeters: REAL_METERS.crawler,
+    fallbackColor: "#5a5a4e",
+  },
+  {
+    key: "mobile-launcher",
+    modelRef: "/assets/models/nasa_mobile_launcher.glb",
+    position: [-9, 0, -34],
+    rotation: [0, 0, 0],
+    realMeters: REAL_METERS.mobileLauncher,
+    fallbackColor: "#6b6b72",
+  },
+  {
+    key: "gantry",
+    modelRef: "/assets/models/nasa_gantry.glb",
+    position: [12, 0, -32],
+    rotation: [0, -Math.PI / 8, 0],
+    realMeters: REAL_METERS.gantry,
+    fallbackColor: "#7a4a3a",
+  },
+  {
+    key: "lander",
+    modelRef: "/assets/models/nasa_lunar_module.glb",
+    position: [22, 0, -22],
+    rotation: [0, -Math.PI / 4, 0],
+    realMeters: REAL_METERS.lander,
+    fallbackColor: "#b8a070",
+  },
+  {
+    key: "base-station",
+    modelRef: "/assets/models/base-station.glb",
+    position: [4, 0, -6],
+    rotation: [0, Math.PI / 6, 0],
+    realMeters: REAL_METERS.baseStation,
+    fallbackColor: "#8c8c84",
+  },
+  {
+    key: "astronaut",
+    modelRef: "/assets/models/astronaut.glb",
+    position: [2.6, 0, -4.5],
+    rotation: [0, -Math.PI / 3, 0],
+    realMeters: REAL_METERS.astronaut,
+    fallbackColor: "#d9d9d9",
+    fallbackShape: "capsule",
+  },
+];
+
+// The SHACKLETON (lunar south pole) complex. REUSES the SAME GLBs as lunar (NO new
+// assets), but RECOMPOSED + RETINTED for the pole: pieces pushed wider/farther and
+// darkened/cooled so the rim outpost reads as a sparser, colder forward base under
+// the grazing pole sun. The pole base is supplied (not a launch site), so the
+// heavy launch towers (launcher/gantry) are dropped for a leaner outpost
+// silhouette — reusing the base station, lander, crawler, and astronaut GLBs.
+export const SHACKLETON_SET_PIECES: SetPiece[] = [
+  {
+    key: "shk-base-station",
+    modelRef: "/assets/models/base-station.glb",
+    position: [-10, 0, -16],
+    rotation: [0, Math.PI / 4, 0],
+    realMeters: REAL_METERS.baseStation,
+    fallbackColor: "#5a5e66",
+  },
+  {
+    key: "shk-lander",
+    modelRef: "/assets/models/nasa_lunar_module.glb",
+    position: [14, 0, -18],
+    rotation: [0, -Math.PI / 3, 0],
+    realMeters: REAL_METERS.lander,
+    fallbackColor: "#7d7466",
+  },
+  {
+    key: "shk-crawler",
+    modelRef: "/assets/models/nasa_crawler.glb",
+    position: [-26, 0, -30],
+    rotation: [0, Math.PI / 3, 0],
+    realMeters: REAL_METERS.crawler,
+    fallbackColor: "#43464d",
+  },
+  {
+    key: "shk-astronaut",
+    modelRef: "/assets/models/astronaut.glb",
+    position: [3.2, 0, -5],
+    rotation: [0, -Math.PI / 2.4, 0],
+    realMeters: REAL_METERS.astronaut,
+    fallbackColor: "#b9bcc4",
+    fallbackShape: "capsule",
+  },
+];
+
 // A per-site framing transform. The fixed scale is uniform across sites; each
 // site recenters its worksite (cx,cy in world coords) onto the scene origin and
 // rotates it (rot, radians) so the hero composition is art-directed per site.
 // `worksiteUnitsToMeters` converts the (abstract) worksite units into meters —
-// the single remaining free knob for a site's overall footprint (start 1.0).
+// the single remaining free knob for a site's overall footprint. Per-site LIGHTING
+// (sunDir/sunIntensity), terrain TINT, FOG, and the SCENERY `pieces` list ride
+// here too (Epic 04 P2) so SceneContents reads everything for the active site from
+// one record.
 export type SiteFrame = {
   cx: number;
   cy: number;
   rot: number;
   worksiteUnitsToMeters: number;
+  // Off-screen directional sun direction for the SURFACE view (the surface uses a
+  // directional light only; the orbit Sun *body* stays at the global SUN_POSITION).
+  // Lunar: high key light. Shackleton: low grazing pole sun (small Y vs large X|Z).
+  sunDir: [number, number, number];
+  // Surface key-light intensity. Shackleton reads dimmer (the grazing pole sun).
+  sunIntensity: number;
+  // Base color tint of the regolith terrain for this site.
+  terrainTint: string;
+  // Surface horizon fog: [color, near, far].
+  fog: [string, number, number];
+  // The static scenery set-pieces rendered at this site.
+  pieces: SetPiece[];
 };
 
-// The default (single-site) frame for P0: worksite origin at the scene origin, no
-// rotation. The dome ring radii (24/46) are ABSTRACT worksite units, not meters
-// (see SiteFrame.worksiteUnitsToMeters), so we read them as ~2.5 m each — a ~45 m
-// construction site — which renders the worksite at a readable ~5–6 scene-unit
-// footprint while the literally-sized launch complex (120 m launcher → 14.4 u)
-// still towers believably over it. This is the single free framing knob (tune on
-// screen). The full per-site SITE_FRAMES table is a later slice — P0 only needs
-// siteMap to exist and take a frame.
-export const DEFAULT_SITE_FRAME: SiteFrame = {
-  cx: 0,
-  cy: 0,
-  rot: 0,
-  worksiteUnitsToMeters: 2.5,
+// The full per-site framing + lighting + scenery table (Epic 04 P2). `siteMap`
+// takes one of these to project that site's worksite; SceneContents reads
+// lighting/tint/fog/pieces from the active site's entry. worksiteUnitsToMeters is
+// kept at the tuned 2.5 (from #134's DEFAULT_SITE_FRAME), NOT the plan's stale 1.0.
+export const SITE_FRAMES: Record<"lunar" | "shackleton", SiteFrame> = {
+  lunar: {
+    cx: 0,
+    cy: 0,
+    rot: 0,
+    worksiteUnitsToMeters: 2.5,
+    sunDir: [2300, 1265, -6490],
+    sunIntensity: 1.9,
+    terrainTint: "#9a948c",
+    fog: ["#000000", 180, 680],
+    pieces: LUNAR_SET_PIECES,
+  },
+  shackleton: {
+    cx: 400,
+    cy: 0,
+    rot: 0.3,
+    worksiteUnitsToMeters: 2.5,
+    sunDir: [6490, 90, -2300],
+    sunIntensity: 1.25,
+    terrainTint: "#6f6a66",
+    fog: ["#05060a", 120, 520],
+    pieces: SHACKLETON_SET_PIECES,
+  },
 };
+
+// The default (single-site) frame — points at the lunar site for back-compat (the
+// pre-P2 single-site renderer + tests use this). The dome ring radii (24/46) are
+// ABSTRACT worksite units, not meters (see worksiteUnitsToMeters), read as ~2.5 m
+// each so the worksite renders at a readable footprint while the literally-sized
+// launch complex still towers over it.
+export const DEFAULT_SITE_FRAME: SiteFrame = SITE_FRAMES.lunar;
 
 // The Moon globe's berth + radius (orbit-view hero). Lives here, not in the
 // SkyBodies component, so BOTH the renderer (SkyBodies) and the camera framing
@@ -212,8 +369,11 @@ export type SceneMap = {
 // scene -z (so +Y heads away from a camera on the +z side). This is the single
 // source of truth used for BOTH rendering and the raycast hit-proxy — they can
 // never disagree, and `at`/`invert` stay exact inverses (drag-to-place + the
-// hit-proxy depend on it).
-export function siteMap(site: SiteFrame): SceneMap {
+// hit-proxy depend on it). It reads ONLY the framing fields, so it accepts any
+// object carrying them (a full SiteFrame, or a bare framing literal in tests).
+export function siteMap(
+  site: Pick<SiteFrame, "cx" | "cy" | "rot" | "worksiteUnitsToMeters">,
+): SceneMap {
   const s = SCENE_UNITS_PER_METER * site.worksiteUnitsToMeters;
   const { cx, cy, rot } = site;
   const cos = Math.cos(rot),

@@ -27,7 +27,12 @@ import { MeshoptDecoder } from "three/examples/jsm/libs/meshopt_decoder.module.j
 import { mergeGeometries } from "three/examples/jsm/utils/BufferGeometryUtils.js";
 import { suppressRaycast } from "../lib/suppressRaycast";
 import { applyGltfTextureFidelity, polishGltfMaterials } from "../lib/textureFidelity";
-import { REAL_METERS, SCENE_UNITS_PER_METER } from "../lib/scene";
+import {
+  LUNAR_SET_PIECES,
+  SCENE_UNITS_PER_METER,
+  SHACKLETON_SET_PIECES,
+  type SetPiece,
+} from "../lib/scene";
 import { CELESTIAL_BLOOM_LAYER } from "./Scene3D";
 
 // Self-contained loader + cache (mirrors Scene3D's loadGLTF): N references to the
@@ -76,97 +81,18 @@ export function loadScenery(url: string): Promise<THREE.Group> {
 
 type Vec3 = [number, number, number];
 
-type SetPiece = {
-  key: string;
-  modelRef: string;
-  position: Vec3;
-  rotation?: Vec3;
-  // Real-world size (meters) of the model's LARGEST dimension. The NASA glTFs have
-  // arbitrary native units + off-origin pivots, so a fixed scale scalar is
-  // meaningless (one model fills the sky, another is a speck). We fit each model
-  // to realMeters · SCENE_UNITS_PER_METER scene units at load (see fitAndSeat), so
-  // presence is predictable AND its size is literal/believable next to the rovers
-  // and astronaut (Epic 04 P0). The fallback box uses the same computed size.
-  realMeters: number;
-  // Tint for the primitive fallback shown until/if the glTF loads.
-  fallbackColor: string;
-  // Primitive used for the ADR-0004 fallback, both sized to the model's `fit`
-  // bbox. "box" (default) suits structures; "capsule" gives the astronaut a
-  // human-ish silhouette while the glTF loads (or forever, if it fails).
-  fallbackShape?: "box" | "capsule";
-};
+// SetPiece + the per-site arrays (LUNAR_SET_PIECES / SHACKLETON_SET_PIECES) now
+// live in lib/scene (pure data, no three) so SITE_FRAMES can carry each site's
+// `pieces` list; LaunchScenery just renders the active site's pieces (Epic 04 P2).
 
-// Set-pieces of the launch complex. Sizes are now LITERAL real-world meters
-// (Epic 04 P0): the mobile launcher (120 m → 14.4 u) + gantry (90 m → 10.8 u)
-// tower over the ~2.5 m rovers and ~2 m astronaut, the crawler (40 m → 4.8 u)
-// sits low and wide, the lander (7 m) is smallest — true NASA proportions.
-// POSITIONS are RE-COMPOSED for the literal scale (literal sizes, staged layout —
-// what every NASA press render does): the worksite now renders at its real
-// ~2-unit footprint near the origin, so the big towers are pushed BACK + OUT
-// to read as a complex on the HORIZON behind it, while the human-scale base
-// station + astronaut sit just behind the worksite as the scale reference.
-const SET_PIECES: SetPiece[] = [
-  {
-    key: "crawler",
-    modelRef: "/assets/models/nasa_crawler.glb",
-    position: [-22, 0, -26],
-    rotation: [0, Math.PI / 5, 0],
-    realMeters: REAL_METERS.crawler,
-    fallbackColor: "#5a5a4e",
-  },
-  {
-    key: "mobile-launcher",
-    modelRef: "/assets/models/nasa_mobile_launcher.glb",
-    position: [-9, 0, -34],
-    rotation: [0, 0, 0],
-    realMeters: REAL_METERS.mobileLauncher,
-    fallbackColor: "#6b6b72",
-  },
-  {
-    key: "gantry",
-    modelRef: "/assets/models/nasa_gantry.glb",
-    position: [12, 0, -32],
-    rotation: [0, -Math.PI / 8, 0],
-    realMeters: REAL_METERS.gantry,
-    fallbackColor: "#7a4a3a",
-  },
-  {
-    key: "lander",
-    modelRef: "/assets/models/nasa_lunar_module.glb",
-    position: [22, 0, -22],
-    rotation: [0, -Math.PI / 4, 0],
-    realMeters: REAL_METERS.lander,
-    fallbackColor: "#b8a070",
-  },
-  // Scale props (#89, rescoped). NASA-PD filler that gives the worksite human
-  // scale: a small Base Station (NASA/Ames) tucked just behind the worksite and
-  // an EVA Astronaut (NASA) standing beside it — the human-scale anchor against
-  // the towering launcher/gantry on the horizon. Both are draco-compressed (load
-  // via the vendored /draco/ decoder) and insignia-stripped — the US flags + NASA
-  // meatball were painted out of the suit texture (see CREDITS.md).
-  {
-    key: "base-station",
-    modelRef: "/assets/models/base-station.glb",
-    position: [4, 0, -6],
-    rotation: [0, Math.PI / 6, 0],
-    realMeters: REAL_METERS.baseStation,
-    fallbackColor: "#8c8c84",
-  },
-  {
-    key: "astronaut",
-    modelRef: "/assets/models/astronaut.glb",
-    position: [2.6, 0, -4.5],
-    rotation: [0, -Math.PI / 3, 0],
-    realMeters: REAL_METERS.astronaut,
-    fallbackColor: "#d9d9d9",
-    fallbackShape: "capsule",
-  },
-];
-
-// The 6 set-piece GLB URLs, derived from SET_PIECES so the preload manifest
-// (lib/assets.ts) can't drift from the actual scenery (Epic 05 P1).
-export const SCENERY_MODEL_REFS: readonly string[] = SET_PIECES.map(
-  (p) => p.modelRef,
+// Every distinct set-piece GLB URL across BOTH sites, de-duplicated (Shackleton
+// reuses the SAME GLBs as lunar — no new assets), so the preload manifest
+// (lib/assets.ts) warms every model the surface can show and can't drift from the
+// actual scenery (Epic 05 P1).
+export const SCENERY_MODEL_REFS: readonly string[] = Array.from(
+  new Set(
+    [...LUNAR_SET_PIECES, ...SHACKLETON_SET_PIECES].map((p) => p.modelRef),
+  ),
 );
 
 // fitAndSeat normalizes a loaded model in place: scale its largest dimension to
@@ -467,13 +393,15 @@ function SceneryPiece({ piece }: { piece: SetPiece }) {
   );
 }
 
-// LaunchScenery — ONE component wrapping every static set-piece. Renders nothing
-// snapshot-dependent and never animates, so the demand loop returns to 0 fps once
-// the models have loaded.
-export function LaunchScenery() {
+// LaunchScenery — ONE component wrapping the ACTIVE site's static set-pieces
+// (Epic 04 P2). Renders nothing snapshot-dependent and never animates. The two
+// sites reuse the same GLBs but compose/retint them differently (see
+// LUNAR_SET_PIECES / SHACKLETON_SET_PIECES in lib/scene); the active site's
+// `pieces` list is threaded down from SceneContents via the site frame.
+export function LaunchScenery({ pieces }: { pieces: SetPiece[] }) {
   return (
     <group>
-      {SET_PIECES.map((piece) => (
+      {pieces.map((piece) => (
         <SceneryPiece key={piece.key} piece={piece} />
       ))}
     </group>

@@ -64,15 +64,15 @@ import { suppressRaycast } from "../lib/suppressRaycast";
 import { applyGltfTextureFidelity, polishGltfMaterials } from "../lib/textureFidelity";
 import { loadTexture, preloadTexture } from "../lib/textureCache";
 import {
-  DEFAULT_SITE_FRAME,
   EARTH_POSITION,
   GROUND_SPAN,
   MOON_POSITION,
   ORBIT_SUN_POSITION,
   REAL_METERS,
   SCENE_UNITS_PER_METER,
-  SUN_POSITION,
+  SITE_FRAMES,
   type SceneMap,
+  type SiteFrame,
   isBuilt,
   siteMap,
   tierHeight,
@@ -135,10 +135,10 @@ export const CELESTIAL_BLOOM_LAYER = 12;
 // reference) so it never re-triggers the memoized effect across renders.
 const CHROMATIC_OFFSET = new THREE.Vector2(0.0006, 0.0012);
 
-// Distance from the origin worksite to the sun (#104). The sun's orthographic
-// shadow camera looks from SUN_POSITION toward the origin, so its near/far must
-// bracket the worksite slab at this depth along the sun ray.
-const SUN_POSITION_LEN = Math.hypot(SUN_POSITION[0], SUN_POSITION[1], SUN_POSITION[2]);
+// The sun's orthographic shadow camera looks from the (per-site) surface sun
+// position toward the origin worksite; its near/far bracket the worksite slab at
+// the sun's distance along that ray. The distance is now computed PER SITE inside
+// SpaceLights (each site has its own sunDir), so this is no longer a module const.
 
 // Half-extent of the sun shadow-camera frustum (#104) — clamps the 2048 map to
 // the ±25-unit worksite (GROUND_SPAN=20 + margin) so resolution isn't wasted on
@@ -189,24 +189,35 @@ function EnvironmentGrade({ onSurface }: { onSurface: boolean }) {
 function SpaceLights({
   onSurface,
   lightRef,
+  surfaceSunDir,
+  surfaceSunIntensity,
 }: {
   onSurface: boolean;
   lightRef: React.RefObject<THREE.DirectionalLight>;
+  // Per-site SURFACE key-light direction + intensity (Epic 04 P2). Lunar: a high
+  // bright key; Shackleton: a low grazing pole sun that reads dimmer. The orbit Sun
+  // *body* light stays at the global ORBIT_SUN_POSITION (the two views never co-
+  // render). The shadow-camera near/far track the chosen sun's distance so the
+  // worksite slab stays inside the frustum at either site's sun angle.
+  surfaceSunDir: [number, number, number];
+  surfaceSunIntensity: number;
 }) {
+  const sunPos = onSurface ? surfaceSunDir : ORBIT_SUN_POSITION;
+  const sunLen = Math.hypot(sunPos[0], sunPos[1], sunPos[2]);
   return (
     <>
       <ambientLight color="#0e1014" intensity={onSurface ? 0.12 : 0.01} />
       <hemisphereLight args={["#ffe9cc", "#1a1814", onSurface ? 0.25 : 0.0]} />
       <directionalLight
         ref={lightRef}
-        position={onSurface ? SUN_POSITION : ORBIT_SUN_POSITION}
+        position={sunPos}
         color="#ffffff"
-        intensity={1.9}
+        intensity={onSurface ? surfaceSunIntensity : 1.9}
         castShadow
         shadow-mapSize-width={2048}
         shadow-mapSize-height={2048}
-        shadow-camera-near={SUN_POSITION_LEN - SHADOW_WORKSITE_HALF - 35}
-        shadow-camera-far={SUN_POSITION_LEN + SHADOW_WORKSITE_HALF + 35}
+        shadow-camera-near={sunLen - SHADOW_WORKSITE_HALF - 35}
+        shadow-camera-far={sunLen + SHADOW_WORKSITE_HALF + 35}
         shadow-camera-left={-SHADOW_WORKSITE_HALF}
         shadow-camera-right={SHADOW_WORKSITE_HALF}
         shadow-camera-top={SHADOW_WORKSITE_HALF}
@@ -1552,7 +1563,7 @@ function valueNoise2(x: number, y: number): number {
 // by the snapshot. Subtle deterministic vertex displacement gives a regolith
 // feel, and a tiling CC0 regolith PBR set (issue #53) clothes it. A missing/
 // failed texture leaves the flat fallback color, so the scene never breaks.
-function LunarTerrain() {
+function LunarTerrain({ terrainTint }: { terrainTint: string }) {
   const matRef = useRef<THREE.MeshStandardMaterial>(null);
   const gl = useThree((s) => s.gl);
   const invalidate = useThree((s) => s.invalidate);
@@ -1625,8 +1636,10 @@ function LunarTerrain() {
     // the rovers and domes. It never casts (it's the floor), so castShadow is off.
     <mesh rotation={[-Math.PI / 2, 0, 0]} raycast={() => null} receiveShadow>
       <primitive object={geom} attach="geometry" />
-      {/* Flat #3a3a40 is the fallback until/if the regolith maps load. */}
-      <meshStandardMaterial ref={matRef} color="#8a8a8e" roughness={1} metalness={0} />
+      {/* Per-site tint (Epic 04 P2): multiplies the regolith map once loaded (and
+          is the flat fallback colour before/if it fails) — lunar reads warm grey,
+          Shackleton darker/cooler. */}
+      <meshStandardMaterial ref={matRef} color={terrainTint} roughness={1} metalness={0} />
     </mesh>
   );
 }
@@ -1855,6 +1868,12 @@ const CinematicFX = memo(function CinematicFX({
 // its own clamps/target so neither can be knocked into a useless pose.
 export type ViewMode = "surface" | "orbit";
 
+// The active worksite shown on the surface (Epic 04 P2). The surface renders ONE
+// site at a time; the operator toggles between them. Snapshot rovers/tasks are
+// sliced by this (back-compat: an untagged rover/task ⇒ "lunar"). Keep in lockstep
+// with lib/scene's SITE_FRAMES keys.
+export type SiteId = "lunar" | "shackleton";
+
 type Scene3DProps = {
   snapshot: Snapshot | null;
   selected: string | null;
@@ -1874,6 +1893,10 @@ type Scene3DProps = {
   // clicking the marker calls this with "surface", flipping the app to surface
   // view and triggering the descent. Optional (tests / 2D fallback omit it).
   onViewModeChange?: (mode: ViewMode) => void;
+  // The active surface site (Epic 04 P2). Defaults to "lunar" when omitted so the
+  // single-site path / tests keep working. SceneContents slices the snapshot to
+  // this site and reads its per-site framing/lighting/tint/fog/pieces.
+  activeSite?: SiteId;
 };
 
 // Per-mode OrbitControls clamps + target. Both presets are clamped (ADR-0004):
@@ -2125,15 +2148,11 @@ function PlacementPlane({
   );
 }
 
-// Surface-only horizon fog — SINGLE SOURCE OF TRUTH (#101). Previously the same
-// <fog> was declared twice in two SceneContents return branches (the loading
-// fallback + the main render) and could drift apart; consolidated here so both
-// branches render the identical fog. Tinted a warm deep blue-grey (#0a0f1a)
-// instead of pure black for atmospheric depth — the far regolith plain dissolves
-// into a faint dusk rather than a hard black void, while the worksite (within
-// ~30 units, well inside the 180 near plane) stays unaffected. Surface-only;
-// orbit skips it so the Moon globe stays crisp.
-const SURFACE_FOG_ARGS: [string, number, number] = ["#0a0f1a", 180, 680];
+// Surface horizon fog is now PER-SITE (Epic 04 P2): each SiteFrame carries its own
+// `fog: [color, near, far]` (see SITE_FRAMES in lib/scene), read in BOTH
+// SceneContents return branches so they stay consistent. Lunar keeps the warm deep
+// grey dusk (#101); Shackleton uses a tighter/darker fog for the pole. Surface-
+// only; orbit skips it so the Moon globe stays crisp.
 
 // ---- cinematic camera beats (#108) -----------------------------------------
 //
@@ -2352,6 +2371,7 @@ function SceneContents({
   onPlaceConfirm,
   viewMode = "surface",
   onViewModeChange,
+  activeSite = "lunar",
 }: Scene3DProps) {
   const lightRef = useRef<THREE.DirectionalLight>(null);
   // Shared ref to the Sun core disc — surfaced from SkyBodies so the GodRays
@@ -2405,19 +2425,35 @@ function SceneContents({
     if (beats.current.length > 0 || before > 0) invalidate();
   });
 
-  // The world→scene map is now FIXED (Epic 04 P0): a single real-meters scale +
-  // the default site frame, independent of the snapshot, so the framing never
-  // jitters as the swarm moves and every object renders at its true relative
-  // size. Memoized once (empty deps). The full per-site SITE_FRAMES table is a
-  // later slice — P0 uses the single DEFAULT_SITE_FRAME. The task lookup still
-  // tracks the snapshot.
-  const map = useMemo(
-    () => siteMap(DEFAULT_SITE_FRAME),
-    [],
+  // Per-site framing (Epic 04 P2): the active site's frame drives the FIXED
+  // real-meters world→scene map (recenter + rotate + scale), so the framing never
+  // jitters as the swarm moves and each site composes to its own hero pose. The
+  // map is rebuilt only when the site changes, not per snapshot.
+  const frame: SiteFrame = SITE_FRAMES[activeSite];
+  const map = useMemo(() => siteMap(frame), [frame]);
+
+  // Slice the snapshot to the active site (Epic 04 P2). `?? "lunar"` keeps an
+  // untagged rover/task on the default site (back-compat), so a single-site
+  // snapshot renders unchanged. The surface shows ONE site's swarm + structure.
+  const siteRovers = useMemo(
+    () =>
+      snapshot
+        ? snapshot.rovers.filter((r) => (r.site ?? "lunar") === activeSite)
+        : [],
+    [snapshot, activeSite],
   );
+  const siteTasks = useMemo(
+    () =>
+      snapshot
+        ? snapshot.tasks.filter((t) => (t.site ?? "lunar") === activeSite)
+        : [],
+    [snapshot, activeSite],
+  );
+  // Task lookup over the FILTERED tasks, so a lease beam only resolves a held task
+  // within the active site (a cross-site beam would point off-frame).
   const taskById = useMemo(
-    () => (snapshot ? new Map(snapshot.tasks.map((t) => [t.id, t])) : null),
-    [snapshot],
+    () => (snapshot ? new Map(siteTasks.map((t) => [t.id, t])) : null),
+    [snapshot, siteTasks],
   );
 
   // `viewMode` here is the RENDERED mode (Scene3D's `shown`, which flips at the
@@ -2430,12 +2466,17 @@ function SceneContents({
       <>
         {/* Same decorative lighting rig as the main branch (snapshot-independent), so
             the orbit vista's dark-side Moon reads correctly even before the first
-            snapshot arrives. */}
-        <SpaceLights onSurface={onSurface} lightRef={lightRef} />
+            snapshot arrives. Per-site surface sun (Epic 04 P2). */}
+        <SpaceLights
+          onSurface={onSurface}
+          lightRef={lightRef}
+          surfaceSunDir={frame.sunDir}
+          surfaceSunIntensity={frame.sunIntensity}
+        />
         <EnvironmentGrade onSurface={onSurface} />
-        {/* Surface-only horizon fog — shared SURFACE_FOG_ARGS (#101, see above). */}
-        {onSurface && <fog attach="fog" args={SURFACE_FOG_ARGS} />}
-        {onSurface && <LunarTerrain />}
+        {/* Surface-only horizon fog — per-site (Epic 04 P2). */}
+        {onSurface && <fog attach="fog" args={frame.fog} />}
+        {onSurface && <LunarTerrain terrainTint={frame.terrainTint} />}
         <SpaceEnvironment />
         <SkyBodies viewMode={viewMode} onBaseClick={onBaseClick} sunRef={sunRef} />
       </>
@@ -2446,14 +2487,21 @@ function SceneContents({
     <group>
       {/* SPACE LIGHTING rig — shared with the pre-snapshot fallback branch (see the
           SpaceLights definition above for the full physical rationale of each light
-          and the Wave-4 decoupled-sun / dark-side-Moon tuning). */}
-      <SpaceLights onSurface={onSurface} lightRef={lightRef} />
+          and the Wave-4 decoupled-sun / dark-side-Moon tuning). Per-site surface
+          sun direction + intensity (Epic 04 P2): lunar high/bright, Shackleton low
+          grazing/dim. */}
+      <SpaceLights
+        onSurface={onSurface}
+        lightRef={lightRef}
+        surfaceSunDir={frame.sunDir}
+        surfaceSunIntensity={frame.sunIntensity}
+      />
       <EnvironmentGrade onSurface={onSurface} />
 
-      {/* Surface-only horizon fog — shared SURFACE_FOG_ARGS (#101, see above): one
-          consolidated definition (was duplicated across two return branches), warm
-          deep blue-grey tint for atmospheric depth. Skipped in orbit. */}
-      {onSurface && <fog attach="fog" args={SURFACE_FOG_ARGS} />}
+      {/* Surface-only horizon fog — PER-SITE (Epic 04 P2): lunar warm deep grey,
+          Shackleton tighter/darker for the pole. Skipped in orbit (the Moon globe
+          stays crisp). */}
+      {onSurface && <fog attach="fog" args={frame.fog} />}
 
       {/* Static, snapshot-independent backdrop: hand-rolled starfield + self-
           hosted HDR skybox/IBL (issue #50). Shown in BOTH views. Encodes no world
@@ -2471,7 +2519,7 @@ function SceneContents({
           surface (the rendered mode flips under the glare, so the swap is unseen). */}
       {onSurface && (
         <>
-          <LunarTerrain />
+          <LunarTerrain terrainTint={frame.terrainTint} />
 
           {/* Contact shadows (#104) — drei bakes a soft ambient-occlusion-like
               contact shadow under the rovers + domes so they read as GROUNDED, not
@@ -2492,21 +2540,21 @@ function SceneContents({
             frames={1}
           />
 
-          {/* Tasks / rising dome. */}
-          {snapshot.tasks.map((t) => (
+          {/* Tasks / rising dome — ACTIVE SITE only (Epic 04 P2). */}
+          {siteTasks.map((t) => (
             <TaskBlock key={t.id} task={t} map={map} geo={geo} beats={beats} />
           ))}
 
-          {/* Lease beams (rover → held task), under the rovers. */}
-          {snapshot.rovers.map((r) => {
+          {/* Lease beams (rover → held task), under the rovers — active site only. */}
+          {siteRovers.map((r) => {
             if (!r.alive || !r.task) return null;
             const held = taskById.get(r.task);
             if (!held) return null;
             return <LeaseBeam key={`beam-${r.id}`} from={r} to={held} map={map} />;
           })}
 
-          {/* Rovers. */}
-          {snapshot.rovers.map((r) => (
+          {/* Rovers — active site only. */}
+          {siteRovers.map((r) => (
             <Rover3D
               key={r.id}
               rover={r}
@@ -2519,8 +2567,10 @@ function SceneContents({
           ))}
 
           {/* Launch infrastructure set-pieces (#56) — static NASA-PD Scenery at the
-              worksite edge. Snapshot-INDEPENDENT decoration, raycast-suppressed. */}
-          <LaunchScenery />
+              worksite edge. Snapshot-INDEPENDENT decoration, raycast-suppressed.
+              Per-site pieces (Epic 04 P2): the two sites reuse the same GLBs but
+              compose/retint them — Shackleton is a leaner, cooler outpost. */}
+          <LaunchScenery pieces={frame.pieces} />
 
           {/* Launch-beat flare (#108): additive exhaust + godray billboards at the
               pad, hidden until a `launch` beat ramps them in useFrame. */}
@@ -2817,6 +2867,7 @@ export function Scene3D({
   onPlaceConfirm,
   viewMode = "surface",
   onViewModeChange,
+  activeSite = "lunar",
 }: Scene3DProps) {
   // `viewMode` (prop) is the DESIRED mode; `shown` is the mode currently RENDERED.
   // They differ only during the descent transition: `shown` flips at the glare
@@ -3073,6 +3124,7 @@ export function Scene3D({
           onPlaceConfirm={onPlaceConfirm}
           viewMode={shown}
           onViewModeChange={onViewModeChange}
+          activeSite={activeSite}
         />
         <RigBridge
           cameraRef={cameraRef}

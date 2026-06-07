@@ -13,7 +13,7 @@ import { memo, useCallback, useState } from "react";
 import type { Control } from "../types/wire";
 // Type-only import — erased at build time, so this does NOT pull the lazy
 // three.js Scene3D chunk into the eager dashboard bundle.
-import type { ViewMode } from "./Scene3D";
+import type { SiteId, ViewMode } from "./Scene3D";
 
 const FAILURE_MAX = 1;
 const FAILURE_STEP = 0.05;
@@ -24,12 +24,18 @@ export const ControlsPanel = memo(function ControlsPanel({
   send,
   viewMode,
   onViewModeChange,
+  activeSite,
+  onActiveSiteChange,
 }: {
   send: (c: Control) => void;
   // Camera view-mode toggle (issue #49). Threaded from App; the 3D scene reads
   // it as a prop.
   viewMode: ViewMode;
   onViewModeChange: (mode: ViewMode) => void;
+  // Surface site toggle (Epic 04 P2). Threaded from App; the 3D scene renders the
+  // active site only.
+  activeSite: SiteId;
+  onActiveSiteChange: (site: SiteId) => void;
 }) {
   // Local UI state for the dial positions — operator inputs, not world state.
   const [failure, setFailure] = useState(0);
@@ -88,6 +94,38 @@ export const ControlsPanel = memo(function ControlsPanel({
         </div>
         <p className="control-caption">
           surface worksite · orbit flies up to the Moon vista
+        </p>
+      </div>
+
+      {/* Surface SITE toggle (Epic 04 P2): the surface renders one worksite at a
+          time — Lunar Base (equatorial, high sun) or Shackleton (south pole, low
+          grazing sun, darker). Switching swaps which site's rovers/tasks/framing
+          the scene shows. Only meaningful on the surface; left visible in orbit so
+          the operator can pre-pick the site they'll descend to. */}
+      <div className="control">
+        <div className="control-head">
+          <span className="control-label">Site</span>
+        </div>
+        <div className="view-toggle site-toggle" role="group" aria-label="Surface site">
+          <button
+            type="button"
+            className={`view-btn ${activeSite === "lunar" ? "is-active" : ""}`}
+            aria-pressed={activeSite === "lunar"}
+            onClick={() => onActiveSiteChange("lunar")}
+          >
+            Lunar Base
+          </button>
+          <button
+            type="button"
+            className={`view-btn ${activeSite === "shackleton" ? "is-active" : ""}`}
+            aria-pressed={activeSite === "shackleton"}
+            onClick={() => onActiveSiteChange("shackleton")}
+          >
+            Shackleton
+          </button>
+        </div>
+        <p className="control-caption">
+          lunar base · shackleton south pole — darker, raking light
         </p>
       </div>
 
