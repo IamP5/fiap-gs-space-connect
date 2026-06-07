@@ -282,3 +282,41 @@ nodes. This use does not imply NASA endorsement.
 
 Original download (Draco-compressed source; conditioned, not committed as-is):
 `https://raw.githubusercontent.com/nasa/NASA-3D-Resources/master/3D%20Models/Regolith%20Advanced%20Surface%20Systems%20Operations%20Robot%20%28RASSOR%29/Regolith%20Advanced%20Surface%20Systems%20Operations%20Robot%20%28RASSOR%29.glb`
+
+## Scale props — Base Station + Astronaut (NASA-PD)
+
+Decorative, snapshot-independent **Scenery** scale props rendered by
+`web/src/components/LaunchScenery.tsx` (Issue #89, rescoped) — a small **Base
+Station** filler structure and an EVA **Astronaut** placed at the near edge of
+the worksite complex to give the scene human scale. They are NOT snapshot-driven
+Assets; each carries a mandatory primitive fallback (box / capsule sized to the
+model bbox, ADR-0004) and the loaded tree is raycast-suppressed so it is never
+pickable. Both are US-government public-domain works from NASA's 3D Resources
+repository (`master` branch). Credited as `NASA / <author>` as a courtesy; this
+project is **not** affiliated with or endorsed by NASA, and **no NASA insignia
+or flag is displayed** (see the insignia-strip note below). Each conditioned
+`.glb` is self-hosted in `models/` and verified as real glTF (`head -c 4` prints
+`glTF`). Downloaded: 2026-06-07.
+
+| File | Source asset | Author | Source URL | License | Conditioning |
+|------|--------------|--------|-----------|---------|--------------|
+| `models/base-station.glb` | NASA 3D Resources → `3D Models/Base Station/Base Station.glb` | NASA / Ames | https://github.com/nasa/NASA-3D-Resources/tree/master/3D%20Models/Base%20Station | Public Domain (NASA-PD) | external texture ref (`BASE_UV.JPG`, not distributed in the repo) stripped → material uses its grey baseColorFactor; then `gltf-transform optimize --compress draco` (21.7 KB → 1.8 KB) |
+| `models/astronaut.glb` | NASA 3D Resources → `3D Models/Astronaut/Astronaut.glb` | NASA | https://github.com/nasa/NASA-3D-Resources/tree/master/3D%20Models/Astronaut | Public Domain (NASA-PD) | **insignia/flag decals stripped** (two US flags + the NASA "meatball" painted out of the suit baseColor texture with ImageMagick); re-packed + `gltf-transform optimize --compress draco --texture-compress webp` (763 KB → 59 KB) |
+
+Source repository (the `.glb` files above are fetched verbatim from branch
+`master`, then conditioned offline as noted): `https://github.com/nasa/NASA-3D-Resources`.
+
+Original downloads (raw `master`; conditioned, not committed as-is):
+
+- `https://raw.githubusercontent.com/nasa/NASA-3D-Resources/master/3D%20Models/Base%20Station/Base%20Station.glb`
+- `https://raw.githubusercontent.com/nasa/NASA-3D-Resources/master/3D%20Models/Astronaut/Astronaut.glb`
+
+**Insignia-strip note (required by §7 of the space-view-realism study):** the
+NASA insignia/meatball/worm and the US flag are **not** public domain and must
+not be shipped. The raw Astronaut suit texture carried two US-flag patches and a
+NASA meatball; all three were painted over with the neutral suit colour before
+re-packing, so the shipped `.glb` displays no insignia or flag. The Base Station
+carried no insignia (its only decal was an undistributed external diffuse map,
+which was stripped). The Astronaut's remaining grey patches are mechanical EVA
+suit hardware (chest controls / valves), not insignia. NASA's image and media
+usage guidelines: https://www.nasa.gov/nasa-brand-center/images-and-media/.
