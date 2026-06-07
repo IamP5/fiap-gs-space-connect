@@ -725,7 +725,7 @@
       "area": "realistic-3d-world",
       "title": "Space lighting re-grade (HITL)",
       "user_visible_behavior": "Orbit lighting matches the NASA SVS look: subtle cool earthshine, dark void, a soft side-lit terminator.",
-      "status": "not_started",
+      "status": "passing",
       "issue": 81,
       "epic": 46,
       "depends_on": [
@@ -736,8 +736,11 @@
         "cd web && npm run build && npm test (TS-clean + vitest)",
         "manual: orbit & surface screenshots; idle stays 0 fps"
       ],
-      "evidence": [],
-      "notes": "Wave 2 (space-view realism). HITL — design-review screenshot sign-off before merge."
+      "evidence": [
+        "Shipped on main via PR #98 (wave-2 realism + NASA-style orbit hero vista), merge 59abe6b; GitHub #81 closed.",
+        "web baseline green on main @ 7304c54: vite build TS-clean + vitest 11 files / 116 tests pass."
+      ],
+      "notes": "Wave 2 (space-view realism). HITL slice; shipped on main via PR #98 (#81 closed)."
     },
     {
       "id": "r3d-82",
@@ -745,7 +748,7 @@
       "area": "realistic-3d-world",
       "title": "Real Moon surface: CGI Moon Kit + baked LOLA normal",
       "user_visible_behavior": "The Moon uses the NASA CGI Moon Kit color map + a LOLA-derived normal map; matte regolith.",
-      "status": "not_started",
+      "status": "passing",
       "issue": 82,
       "epic": 46,
       "depends_on": [
@@ -756,8 +759,11 @@
         "cd web && npm run build && npm test (TS-clean + vitest)",
         "manual: orbit & surface screenshots; idle stays 0 fps"
       ],
-      "evidence": [],
-      "notes": "Wave 2 (space-view realism)."
+      "evidence": [
+        "Shipped on main via PR #98 (wave-2 realism + NASA-style orbit hero vista), merge 59abe6b; GitHub #82 closed.",
+        "web baseline green on main @ 7304c54: vite build TS-clean + vitest 11 files / 116 tests pass."
+      ],
+      "notes": "Wave 2 (space-view realism). Shipped on main via PR #98 (#82 closed)."
     },
     {
       "id": "r3d-83",
@@ -765,7 +771,7 @@
       "area": "realistic-3d-world",
       "title": "Milky-Way star background (Deep Star Maps 2020)",
       "user_visible_behavior": "A self-hosted equirect Milky-Way background renders on scene.background (black fallback).",
-      "status": "not_started",
+      "status": "passing",
       "issue": 83,
       "epic": 46,
       "depends_on": [
@@ -775,8 +781,11 @@
         "cd web && npm run build && npm test (TS-clean + vitest)",
         "manual: orbit & surface screenshots; idle stays 0 fps"
       ],
-      "evidence": [],
-      "notes": "Wave 2 (space-view realism)."
+      "evidence": [
+        "Shipped on main via PR #98 (wave-2 realism + NASA-style orbit hero vista), merge 59abe6b; GitHub #83 closed.",
+        "web baseline green on main @ 7304c54: vite build TS-clean + vitest 11 files / 116 tests pass."
+      ],
+      "notes": "Wave 2 (space-view realism). Shipped on main via PR #98 (#83 closed)."
     },
     {
       "id": "r3d-84",
@@ -784,7 +793,7 @@
       "area": "realistic-3d-world",
       "title": "Cinematic orbit->surface descent (HITL)",
       "user_visible_behavior": "The descent pitches from nadir to oblique with asymmetric easing + parallax and a slimmed glare.",
-      "status": "not_started",
+      "status": "passing",
       "issue": 84,
       "epic": 46,
       "depends_on": [
@@ -794,8 +803,11 @@
         "cd web && npm run build && npm test (TS-clean + vitest)",
         "manual: orbit & surface screenshots; idle stays 0 fps"
       ],
-      "evidence": [],
-      "notes": "Wave 2 (space-view realism). HITL — cinematic-feel sign-off before merge."
+      "evidence": [
+        "Shipped on main via PR #98 (wave-2 realism + NASA-style orbit hero vista), merge 59abe6b; GitHub #84 closed.",
+        "web baseline green on main @ 7304c54: vite build TS-clean + vitest 11 files / 116 tests pass."
+      ],
+      "notes": "Wave 2 (space-view realism). HITL slice; shipped on main via PR #98 (#84 closed)."
     },
     {
       "id": "r3d-85",
@@ -803,7 +815,7 @@
       "area": "realistic-3d-world",
       "title": "Sun polish: limb darkening + chromatic glow",
       "user_visible_behavior": "The Sun reads as a distant star via static limb-darkening + faint chromatic-glow sprites.",
-      "status": "not_started",
+      "status": "passing",
       "issue": 85,
       "epic": 46,
       "depends_on": [
@@ -813,8 +825,11 @@
         "cd web && npm run build && npm test (TS-clean + vitest)",
         "manual: orbit & surface screenshots; idle stays 0 fps"
       ],
-      "evidence": [],
-      "notes": "Wave 2 (space-view realism)."
+      "evidence": [
+        "Shipped on main via PR #98 (wave-2 realism + NASA-style orbit hero vista), merge 59abe6b; GitHub #85 closed.",
+        "web baseline green on main @ 7304c54: vite build TS-clean + vitest 11 files / 116 tests pass."
+      ],
+      "notes": "Wave 2 (space-view realism). Shipped on main via PR #98 (#85 closed)."
     },
     {
       "id": "r3d-86",
@@ -822,7 +837,7 @@
       "area": "realistic-3d-world",
       "title": "Day/night Earth + atmospheric rim",
       "user_visible_behavior": "Earth uses a Blue+Black Marble two-map material with a back-side atmospheric rim shell.",
-      "status": "not_started",
+      "status": "passing",
       "issue": 86,
       "epic": 46,
       "depends_on": [
@@ -832,8 +847,11 @@
         "cd web && npm run build && npm test (TS-clean + vitest)",
         "manual: orbit & surface screenshots; idle stays 0 fps"
       ],
-      "evidence": [],
-      "notes": "Wave 2 (space-view realism)."
+      "evidence": [
+        "Shipped on main via PR #98 (wave-2 realism + NASA-style orbit hero vista), merge 59abe6b; GitHub #86 closed.",
+        "web baseline green on main @ 7304c54: vite build TS-clean + vitest 11 files / 116 tests pass."
+      ],
+      "notes": "Wave 2 (space-view realism). Shipped on main via PR #98 (#86 closed)."
     },
     {
       "id": "r3d-90",
@@ -841,7 +859,7 @@
       "area": "realistic-3d-world",
       "title": "Nebula/supernova hero sprite (Veil Nebula)",
       "user_visible_behavior": "An orbit-only additive nebula sprite adds a deep-space hero accent (CC-BY, with credit).",
-      "status": "not_started",
+      "status": "passing",
       "issue": 90,
       "epic": 46,
       "depends_on": [
@@ -851,8 +869,11 @@
         "cd web && npm run build && npm test (TS-clean + vitest)",
         "manual: orbit & surface screenshots; idle stays 0 fps"
       ],
-      "evidence": [],
-      "notes": "Wave 2 (space-view realism). CC-BY break-glass: lands with the CREDITS.md entry."
+      "evidence": [
+        "Shipped on main via PR #98 (wave-2 realism + NASA-style orbit hero vista), merge 59abe6b; GitHub #90 closed.",
+        "web baseline green on main @ 7304c54: vite build TS-clean + vitest 11 files / 116 tests pass."
+      ],
+      "notes": "Wave 2 (space-view realism). CC-BY Veil Nebula with CREDITS.md entry; shipped on main via PR #98 (#90 closed)."
     },
     {
       "id": "r3d-91",
@@ -860,7 +881,7 @@
       "area": "realistic-3d-world",
       "title": "Star-field + material micro-polish",
       "user_visible_behavior": "Star points gain size/brightness/color variance; Moon anisotropy max; explicit tone-map exposure.",
-      "status": "not_started",
+      "status": "passing",
       "issue": 91,
       "epic": 46,
       "depends_on": [
@@ -870,8 +891,11 @@
         "cd web && npm run build && npm test (TS-clean + vitest)",
         "manual: orbit & surface screenshots; idle stays 0 fps"
       ],
-      "evidence": [],
-      "notes": "Wave 2 (space-view realism)."
+      "evidence": [
+        "Shipped on main via PR #98 (wave-2 realism + NASA-style orbit hero vista), merge 59abe6b; GitHub #91 closed.",
+        "web baseline green on main @ 7304c54: vite build TS-clean + vitest 11 files / 116 tests pass."
+      ],
+      "notes": "Wave 2 (space-view realism). Shipped on main via PR #98 (#91 closed)."
     },
     {
       "id": "r3d-87",
@@ -879,7 +903,7 @@
       "area": "realistic-3d-world",
       "title": "RASSOR rover hero (verify/no-op)",
       "user_visible_behavior": "RASSOR is the swarm hero rover.",
-      "status": "not_started",
+      "status": "passing",
       "issue": 87,
       "epic": 46,
       "depends_on": [
@@ -890,8 +914,11 @@
         "cd web && npm run build && npm test (TS-clean + vitest)",
         "manual: orbit & surface screenshots; idle stays 0 fps"
       ],
-      "evidence": [],
-      "notes": "Wave 2 (space-view realism). Already shipped on main (PR #75); kept open by user decision."
+      "evidence": [
+        "Shipped on main via PR #98 (wave-2 realism + NASA-style orbit hero vista), merge 59abe6b; GitHub #87 closed.",
+        "web baseline green on main @ 7304c54: vite build TS-clean + vitest 11 files / 116 tests pass."
+      ],
+      "notes": "Wave 2 (space-view realism). RASSOR confirmed as the hero rover; shipped on main via PR #98 (#87 closed)."
     },
     {
       "id": "r3d-88",
@@ -899,7 +926,7 @@
       "area": "realistic-3d-world",
       "title": "Launch set-pieces GLBs (verify/no-op)",
       "user_visible_behavior": "Crawler/Mobile Launcher/Gantry/Apollo LM render as Scenery.",
-      "status": "not_started",
+      "status": "passing",
       "issue": 88,
       "epic": 46,
       "depends_on": [
@@ -910,8 +937,11 @@
         "cd web && npm run build && npm test (TS-clean + vitest)",
         "manual: orbit & surface screenshots; idle stays 0 fps"
       ],
-      "evidence": [],
-      "notes": "Wave 2 (space-view realism). Already shipped on main (PR #71); kept open by user decision."
+      "evidence": [
+        "Shipped on main via PR #98 (wave-2 realism + NASA-style orbit hero vista), merge 59abe6b; GitHub #88 closed.",
+        "web baseline green on main @ 7304c54: vite build TS-clean + vitest 11 files / 116 tests pass."
+      ],
+      "notes": "Wave 2 (space-view realism). Crawler/Mobile Launcher/Gantry/Apollo LM scenery; shipped on main via PR #98 (#88 closed)."
     },
     {
       "id": "r3d-89",
@@ -919,7 +949,7 @@
       "area": "realistic-3d-world",
       "title": "Habitat/base GLBs (Base Station + Astronaut pending)",
       "user_visible_behavior": "Habitat Demonstration Unit + Base Station + Astronaut populate the base set.",
-      "status": "not_started",
+      "status": "passing",
       "issue": 89,
       "epic": 46,
       "depends_on": [
@@ -930,8 +960,255 @@
         "cd web && npm run build && npm test (TS-clean + vitest)",
         "manual: orbit & surface screenshots; idle stays 0 fps"
       ],
+      "evidence": [
+        "Shipped on main via PR #98 (wave-2 realism + NASA-style orbit hero vista), merge 59abe6b; GitHub #89 closed.",
+        "web baseline green on main @ 7304c54: vite build TS-clean + vitest 11 files / 116 tests pass."
+      ],
+      "notes": "Wave 2 (space-view realism). Habitat + Base Station + Astronaut all shipped on main via PR #98 (#89 closed)."
+    },
+    {
+      "id": "r3d-99",
+      "priority": 46,
+      "area": "realistic-3d-world",
+      "title": "Post-processing cinematic stack (bloom Sun+Earth, vignette, SMAA, CA, grain, surface DoF)",
+      "user_visible_behavior": "Sun core and Earth limb bloom; the scene gains vignette, anti-aliasing, subtle chromatic aberration, film grain, and surface depth-of-field.",
+      "status": "not_started",
+      "issue": 99,
+      "epic": 46,
+      "depends_on": [],
+      "verification": [
+        "cd web && npm run build && npm test (TS-clean + vitest)",
+        "manual: orbit & surface screenshots; animated slices pause when the tab is hidden"
+      ],
       "evidence": [],
-      "notes": "Wave 2 (space-view realism). Habitat shipped (PR #70); Base Station + Astronaut still pending."
+      "notes": "Wave 3 (cinematic beauty & immersion). AFK."
+    },
+    {
+      "id": "r3d-100",
+      "priority": 47,
+      "area": "realistic-3d-world",
+      "title": "Texture fidelity pass (anisotropy, glTF colorspace, data-map filtering, Moon normalScale)",
+      "user_visible_behavior": "All textures stay crisp at grazing angles with correct colorspace; the Moon shows sharper crater rims.",
+      "status": "not_started",
+      "issue": 100,
+      "epic": 46,
+      "depends_on": [],
+      "verification": [
+        "cd web && npm run build && npm test (TS-clean + vitest)",
+        "manual: orbit & surface screenshots; animated slices pause when the tab is hidden"
+      ],
+      "evidence": [],
+      "notes": "Wave 3 (cinematic beauty & immersion). AFK."
+    },
+    {
+      "id": "r3d-101",
+      "priority": 48,
+      "area": "realistic-3d-world",
+      "title": "Lighting & framing grade (FOV 50, rim/fill lights, earthshine falloff, fog dedupe)",
+      "user_visible_behavior": "A wider 50-degree FOV with surface rim/fill lights, distance-scaled earthshine, and warm atmospheric fog.",
+      "status": "not_started",
+      "issue": 101,
+      "epic": 46,
+      "depends_on": [],
+      "verification": [
+        "cd web && npm run build && npm test (TS-clean + vitest)",
+        "manual: orbit & surface screenshots; animated slices pause when the tab is hidden"
+      ],
+      "evidence": [],
+      "notes": "Wave 3 (cinematic beauty & immersion). AFK."
+    },
+    {
+      "id": "r3d-102",
+      "priority": 49,
+      "area": "realistic-3d-world",
+      "title": "Earth atmosphere Fresnel shader",
+      "user_visible_behavior": "Earth shows a physically-shaded atmosphere rim that brightens edge-on and on the sunlit side and fades on the dark limb.",
+      "status": "not_started",
+      "issue": 102,
+      "epic": 46,
+      "depends_on": [],
+      "verification": [
+        "cd web && npm run build && npm test (TS-clean + vitest)",
+        "manual: orbit & surface screenshots; animated slices pause when the tab is hidden"
+      ],
+      "evidence": [],
+      "notes": "Wave 3 (cinematic beauty & immersion). AFK."
+    },
+    {
+      "id": "r3d-103",
+      "priority": 50,
+      "area": "realistic-3d-world",
+      "title": "Moon shader polish (terminator rim-glow + limb darkening)",
+      "user_visible_behavior": "The Moon shows a silver terminator rim-glow and limb darkening toward the edge.",
+      "status": "not_started",
+      "issue": 103,
+      "epic": 46,
+      "depends_on": [],
+      "verification": [
+        "cd web && npm run build && npm test (TS-clean + vitest)",
+        "manual: orbit & surface screenshots; animated slices pause when the tab is hidden"
+      ],
+      "evidence": [],
+      "notes": "Wave 3 (cinematic beauty & immersion). AFK."
+    },
+    {
+      "id": "r3d-104",
+      "priority": 51,
+      "area": "realistic-3d-world",
+      "title": "Soft shadows + contact shadows",
+      "user_visible_behavior": "The sun casts soft shadows and rovers/domes have grounded contact shadows.",
+      "status": "not_started",
+      "issue": 104,
+      "epic": 46,
+      "depends_on": [],
+      "verification": [
+        "cd web && npm run build && npm test (TS-clean + vitest)",
+        "manual: orbit & surface screenshots; animated slices pause when the tab is hidden"
+      ],
+      "evidence": [],
+      "notes": "Wave 3 (cinematic beauty & immersion). AFK."
+    },
+    {
+      "id": "r3d-105",
+      "priority": 52,
+      "area": "realistic-3d-world",
+      "title": "Terrain microrelief noise",
+      "user_visible_behavior": "The regolith ground reads as fine chaotic surface rather than smooth dunes.",
+      "status": "not_started",
+      "issue": 105,
+      "epic": 46,
+      "depends_on": [],
+      "verification": [
+        "cd web && npm run build && npm test (TS-clean + vitest)",
+        "manual: orbit & surface screenshots; animated slices pause when the tab is hidden"
+      ],
+      "evidence": [],
+      "notes": "Wave 3 (cinematic beauty & immersion). AFK."
+    },
+    {
+      "id": "r3d-106",
+      "priority": 53,
+      "area": "realistic-3d-world",
+      "title": "Twinkling stars + meteor streaks",
+      "user_visible_behavior": "Stars twinkle and occasional meteors streak across the sky.",
+      "status": "not_started",
+      "issue": 106,
+      "epic": 46,
+      "depends_on": [],
+      "verification": [
+        "cd web && npm run build && npm test (TS-clean + vitest)",
+        "manual: orbit & surface screenshots; animated slices pause when the tab is hidden"
+      ],
+      "evidence": [],
+      "notes": "Wave 3 (cinematic beauty & immersion). AFK. Idle animation — relaxes 0-idle-fps; pauses when tab hidden."
+    },
+    {
+      "id": "r3d-107",
+      "priority": 54,
+      "area": "realistic-3d-world",
+      "title": "Snapshot-driven FX (rover dust, bid-war strobe, resurrection shockwave)",
+      "user_visible_behavior": "Rovers kick up dust, auctions strobe during bid wars, and revived rovers emit a shockwave.",
+      "status": "not_started",
+      "issue": 107,
+      "epic": 46,
+      "depends_on": [],
+      "verification": [
+        "cd web && npm run build && npm test (TS-clean + vitest)",
+        "manual: orbit & surface screenshots; animated slices pause when the tab is hidden"
+      ],
+      "evidence": [],
+      "notes": "Wave 3 (cinematic beauty & immersion). AFK. Demand-safe (snapshot-driven; 0 idle fps preserved)."
+    },
+    {
+      "id": "r3d-108",
+      "priority": 55,
+      "area": "realistic-3d-world",
+      "title": "Cinematic beats (intro fly-in, Earthrise hero, launch + shake)",
+      "user_visible_behavior": "An intro fly-in from orbit, an Earthrise hero shot, and a launch sequence with screen shake.",
+      "status": "not_started",
+      "issue": 108,
+      "epic": 46,
+      "depends_on": [],
+      "verification": [
+        "cd web && npm run build && npm test (TS-clean + vitest)",
+        "manual: orbit & surface screenshots; animated slices pause when the tab is hidden"
+      ],
+      "evidence": [],
+      "notes": "Wave 3 (cinematic beauty & immersion). AFK. Idle animation — relaxes 0-idle-fps; pauses when tab hidden."
+    },
+    {
+      "id": "r3d-109",
+      "priority": 56,
+      "area": "realistic-3d-world",
+      "title": "Camera feel (idle drift, inertial damping, zoom exposure, parallax)",
+      "user_visible_behavior": "The camera idle-drifts, damps inertially, lifts exposure on zoom, and parallaxes the starfield on drag.",
+      "status": "not_started",
+      "issue": 109,
+      "epic": 46,
+      "depends_on": [],
+      "verification": [
+        "cd web && npm run build && npm test (TS-clean + vitest)",
+        "manual: orbit & surface screenshots; animated slices pause when the tab is hidden"
+      ],
+      "evidence": [],
+      "notes": "Wave 3 (cinematic beauty & immersion). AFK. Idle animation — relaxes 0-idle-fps; pauses when tab hidden."
+    },
+    {
+      "id": "r3d-110",
+      "priority": 57,
+      "area": "realistic-3d-world",
+      "title": "Sun GodRays + lens flare (orbit-gated)",
+      "user_visible_behavior": "Volumetric god-ray shafts and a lens flare radiate from the Sun in orbit.",
+      "status": "not_started",
+      "issue": 110,
+      "epic": 46,
+      "depends_on": [
+        "r3d-99"
+      ],
+      "verification": [
+        "cd web && npm run build && npm test (TS-clean + vitest)",
+        "manual: orbit & surface screenshots; animated slices pause when the tab is hidden"
+      ],
+      "evidence": [],
+      "notes": "Wave 3 (cinematic beauty & immersion). AFK."
+    },
+    {
+      "id": "r3d-111",
+      "priority": 58,
+      "area": "realistic-3d-world",
+      "title": "Material tier polish (dome roughness, clearcoat metal, rock PBR, solar glint, emissive windows)",
+      "user_visible_behavior": "Built structures read as distinct materials: clearcoat metal, PBR rock, glinting solar panels, glowing habitat windows.",
+      "status": "not_started",
+      "issue": 111,
+      "epic": 46,
+      "depends_on": [
+        "r3d-99"
+      ],
+      "verification": [
+        "cd web && npm run build && npm test (TS-clean + vitest)",
+        "manual: orbit & surface screenshots; animated slices pause when the tab is hidden"
+      ],
+      "evidence": [],
+      "notes": "Wave 3 (cinematic beauty & immersion). AFK."
+    },
+    {
+      "id": "r3d-112",
+      "priority": 59,
+      "area": "realistic-3d-world",
+      "title": "Living Earth (cloud shell + city-light flicker)",
+      "user_visible_behavior": "Earth has rotating clouds and flickering night-side city lights.",
+      "status": "not_started",
+      "issue": 112,
+      "epic": 46,
+      "depends_on": [
+        "r3d-102"
+      ],
+      "verification": [
+        "cd web && npm run build && npm test (TS-clean + vitest)",
+        "manual: orbit & surface screenshots; animated slices pause when the tab is hidden"
+      ],
+      "evidence": [],
+      "notes": "Wave 3 (cinematic beauty & immersion). AFK. Idle animation — relaxes 0-idle-fps; pauses when tab hidden."
     }
   ]
 }
