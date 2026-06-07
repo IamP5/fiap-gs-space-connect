@@ -1108,7 +1108,7 @@
       "area": "realistic-3d-world",
       "title": "Snapshot-driven FX (rover dust, bid-war strobe, resurrection shockwave)",
       "user_visible_behavior": "Rovers kick up dust, auctions strobe during bid wars, and revived rovers emit a shockwave.",
-      "status": "not_started",
+      "status": "passing",
       "issue": 107,
       "epic": 46,
       "depends_on": [],
@@ -1116,7 +1116,10 @@
         "cd web && npm run build && npm test (TS-clean + vitest)",
         "manual: orbit & surface screenshots; animated slices pause when the tab is hidden"
       ],
-      "evidence": [],
+      "evidence": [
+        "commit bd1e783 — rover dust (drei <Instances> puff on position delta), bid-war halo strobe + selective-bloom intensity spike on contention, resurrection body emissive flash alongside the existing expanding ring; new pure helpers activeBidders/bidWarStrobe unit-tested",
+        "lint + build (tsc -b && vite build, TS-clean) + test all green: 124 tests pass (incl. 9 new choreography tests)"
+      ],
       "notes": "Wave 3 (cinematic beauty & immersion). AFK. Demand-safe (snapshot-driven; 0 idle fps preserved)."
     },
     {
