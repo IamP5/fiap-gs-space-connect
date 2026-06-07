@@ -226,6 +226,7 @@ never a displacementMap**). The Earth now uses NASA **Blue Marble: Next Generati
 | `textures/moon_normal_4096.jpg` | Baked OFFLINE from the CGI Moon Kit LOLA elevation `ldem_16_uint.tif` (16-bit LDEM heightfield, 5760×2880 → 4096×2048 → Sobel-gradient OpenGL normal map) | NASA's Scientific Visualization Studio (derived) | https://svs.gsfc.nasa.gov/vis/a000000/a004700/a004720/ldem_16_uint.tif | Public Domain (NASA-PD) |
 | `textures/earth_day_2048.jpg` | NASA Blue Marble: Next Generation (Dec 2004 topo+bathy), resized 5400×2700 → 2048×1024 | NASA's Goddard Space Flight Center (Blue Marble: Next Generation) | https://eoimages.gsfc.nasa.gov/images/imagerecords/73000/73909/world.topo.bathy.200412.3x5400x2700.jpg | Public Domain (NASA-PD) |
 | `textures/earth_night_2048.jpg` | NASA Black Marble (2016 night lights), resized 13500×6750 → 2048×1024 | NASA's Earth Observatory (Black Marble) | https://assets.science.nasa.gov/content/dam/science/esd/eo/images/imagerecords/144000/144898/BlackMarble_2016_3km.jpg | Public Domain (NASA-PD) |
+| `textures/earth_clouds_2048.jpg` | NASA Blue Marble cloud composite (MODIS), `cloud_combined_2048.tif` → grayscale JPG 2048×1024 | NASA's Goddard Space Flight Center (Blue Marble: Next Generation, clouds) | https://eoimages.gsfc.nasa.gov/images/imagerecords/57000/57747/cloud_combined_2048.tif | Public Domain (NASA-PD) |
 
 The Earth colour maps were downscaled (ImageMagick `magick … -resize`) to 2K for
 bundle size; the Moon colour map is the 8K LROC mosaic downscaled to 4K and

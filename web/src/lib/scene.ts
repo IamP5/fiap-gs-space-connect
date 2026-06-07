@@ -39,6 +39,24 @@ export const MOON_POSITION: [number, number, number] = [0, 60, -520];
 // light). The sun reads WHITE (sunlight in vacuum has no atmosphere to redden it)
 // — see SunBody's white emissive.
 export const SUN_POSITION: [number, number, number] = [2300, 1265, -6490];
+
+// ORBIT-ONLY sun direction (Wave 4 "living orbit"). The surface worksite sits on the
+// Moon's camera-facing near side and is lit by SUN_POSITION above; the ORBIT vista,
+// by contrast, wants the NASA SVS #14992 look — a near-DARK Moon far side with a thin
+// sunlit crescent. Those two needs conflict on a single sun (back-lighting the orbit
+// Moon would plunge the worksite into lunar night), so the orbit view DECOUPLES its
+// sun here. Orbit and surface are never co-visible, so this is invisible seam-wise.
+// Aimed so the sub-solar point faces AWAY from the orbit camera (camera berths at
+// MOON + ~[264,85,26]): Moon→Sun·Moon→Camera ≈ −0.31 → a crescent on the lower-left
+// limb, with the flare itself ~69° off-axis (off-frame, like the reference). Earth
+// (off to the camera-left) then reads as a clean day/night terminator. Kept far
+// (|pos| ≈ 6.8k, inside the 8000 far-plane) with sun.y > 0 so it still grazes high.
+// TUNED BY EYE against SVS #14992 — see docs/02-realistic-3d-world/space-view-realism.md.
+// Pushed further BEHIND the Moon (from the orbit camera at MOON+[265,145,-512]):
+// Moon→Sun·Moon→Camera ≈ −0.70 → only ~15% of the near face is sunlit, so the Moon
+// reads as a dramatic dark disc with a thin warm crescent on the lower-left limb
+// (the flare sits just off that limb, ~off-frame), exactly the reference phase.
+export const ORBIT_SUN_POSITION: [number, number, number] = [-4200, -600, -5000];
 // Modeled radius — small, so the far Sun (|pos| ≈ 7k, near the 8000 far-plane)
 // reads as a brilliant DISTANT disc (~1.3° across) rather than a near wall of
 // light. Its presence comes from the additive glow + radiating light-rays around

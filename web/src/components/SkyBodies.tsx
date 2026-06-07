@@ -37,7 +37,7 @@
 
 import { useEffect, useMemo, useRef, useState } from "react";
 import { Detailed } from "@react-three/drei";
-import { useThree } from "@react-three/fiber";
+import { useFrame, useThree } from "@react-three/fiber";
 import * as THREE from "three";
 
 import type { ThreeEvent } from "@react-three/fiber";
@@ -48,6 +48,7 @@ import {
   EARTH_RADIUS,
   MOON_POSITION,
   MOON_RADIUS,
+  ORBIT_SUN_POSITION,
   SUN_POSITION,
   SUN_RADIUS,
 } from "../lib/scene";
@@ -62,6 +63,7 @@ const MOON_COLOR = "/assets/textures/moon_color_4096.jpg";
 const MOON_NORMAL = "/assets/textures/moon_normal_4096.jpg";
 const EARTH_DAY = "/assets/textures/earth_day_2048.jpg";
 const EARTH_NIGHT = "/assets/textures/earth_night_2048.jpg";
+const EARTH_CLOUDS = "/assets/textures/earth_clouds_2048.jpg";
 const SUN_COLOR = "/assets/textures/sun_color_1024.jpg";
 const NEBULA_VEIL = "/assets/textures/nebula_veil_1024.jpg";
 
@@ -142,14 +144,192 @@ const ATMOSPHERE_FRAGMENT = /* glsl */ `
   }
 `;
 
+// --- Living Earth surface shader (Wave 4) -----------------------------------
+// A custom day/night ShaderMaterial that replaces the old "day map brighter than
+// the night emissive" trick with a REAL terminator, masked city lights, a warm
+// sunset scatter band, and a moving OCEAN SUN-GLINT (the "sun waves reflecting in
+// Earth" the brief asks for) — the SVS #14992 read. Self-determined from a single
+// world-space sun-direction uniform (decoupled from the scene lights), so it is
+// stable as the Earth body SPINS (the world normal + UV rotate together while the
+// sun stays put → the terminator sweeps the continents).
+//
+// Frame math: everything is WORLD space. The vertex shader builds the world normal
+// (`mat3(modelMatrix) * normal`, so it tracks the mesh's rotation) and a world view
+// dir (`cameraPosition − worldPos`, so the glint tracks the orbiting camera). The
+// ACES tone-map + sRGB output chunks are appended so Earth sits in the SAME pipeline
+// as the rest of the scene; input maps are linearized in-shader (raw ShaderMaterial
+// texels are undecoded). ADR-0004: uniforms default to 1×1 solid textures, so a
+// failed map load still renders a clean lit marble.
+const EARTH_VERTEX = /* glsl */ `
+  varying vec3 vWorldNormal;
+  varying vec3 vViewDir;
+  varying vec2 vUv;
+  void main() {
+    vUv = uv;
+    vWorldNormal = normalize(mat3(modelMatrix) * normal);
+    vec3 worldPos = (modelMatrix * vec4(position, 1.0)).xyz;
+    vViewDir = normalize(cameraPosition - worldPos);
+    gl_Position = projectionMatrix * modelViewMatrix * vec4(position, 1.0);
+  }
+`;
+
+const EARTH_FRAGMENT = /* glsl */ `
+  uniform sampler2D uDayMap;     // Blue Marble (sRGB texels — linearized below)
+  uniform sampler2D uNightMap;   // Black Marble city lights
+  uniform vec3 uSunDir;          // world-space Earth→Sun (normalized, view-conditional)
+  uniform vec3 uNightColor;      // warm-gold city-light tint
+  uniform vec3 uTermColor;       // soft warm sunset/sunrise band
+  uniform vec3 uGlintColor;      // specular sun-glint colour
+  uniform float uTime;           // seconds — drives glint shimmer + city flicker
+  uniform float uTermWidth;      // half-width of the soft day/night terminator
+  uniform float uGlintShininess; // specular exponent (tight highlight)
+  uniform float uGlintStrength;  // glint brightness
+  uniform float uAmbient;        // faint day-side floor so the disc is never pure black
+  varying vec3 vWorldNormal;
+  varying vec3 vViewDir;
+  varying vec2 vUv;
+
+  vec3 toLinear(vec3 c) { return pow(c, vec3(2.2)); }
+
+  void main() {
+    vec3 N = normalize(vWorldNormal);
+    vec3 V = normalize(vViewDir);
+    vec3 L = normalize(uSunDir);
+    float ndl = dot(N, L);
+
+    vec3 day = toLinear(texture2D(uDayMap, vUv).rgb);
+    vec3 night = toLinear(texture2D(uNightMap, vUv).rgb);
+
+    // Soft terminator (Earth's atmosphere softens it — unlike the crisp Moon edge).
+    float dayF = smoothstep(-uTermWidth, uTermWidth, ndl);
+
+    // Day diffuse with a faint ambient floor.
+    float diff = max(ndl, 0.0);
+    vec3 lit = day * (uAmbient + (1.0 - uAmbient) * diff);
+
+    // City lights — NIGHT side only (masked by 1−dayF so they never bleed onto the
+    // lit hemisphere), with a gentle per-pixel flicker. A LIMB FADE (by view angle)
+    // kills the bright orange vertical smear that foreshortened equirect city-light
+    // bands produce at the grazing night limb — cities only read on the face.
+    float NdotV = max(dot(N, V), 0.0);
+    float limbFade = smoothstep(0.0, 0.32, NdotV);
+    float flicker = 0.9 + 0.1 * sin(uTime * 2.3 + vUv.x * 90.0) * sin(uTime * 1.7 + vUv.y * 70.0);
+    vec3 city = night * uNightColor * (1.0 - dayF) * flicker * limbFade;
+
+    // Soft warm sunset band straddling the terminator (low-sun forward scatter). A
+    // smooth, gentle warmth — NOT a saturated stripe. The earlier bold version
+    // foreshortened into a bright orange streak where the terminator curved to the
+    // limb, so it's faded out toward the grazing limb (termFade by view angle) and
+    // kept low-strength; squaring the band softens the falloff to a clean gradient.
+    float band = smoothstep(uTermWidth, 0.0, abs(ndl));
+    band *= band;
+    float termFade = smoothstep(0.0, 0.35, NdotV);
+    vec3 termGlow = uTermColor * band * dayF * termFade * 0.1;
+
+    // Ocean sun-glint — the "sun waves". Ocean mask from the day map (blue-dominant,
+    // low land), Blinn-Phong highlight at the sub-solar point, shimmered over time.
+    float ocean = smoothstep(0.015, 0.10, day.b - max(day.r, day.g));
+    vec3 H = normalize(L + V);
+    float shimmer = 1.0 + 0.07 * sin(uTime * 3.1 + vUv.x * 160.0)
+                        + 0.07 * sin(uTime * 2.3 + vUv.y * 120.0);
+    float spec = pow(max(dot(N, H), 0.0), uGlintShininess);
+    vec3 glint = uGlintColor * spec * ocean * dayF * uGlintStrength * shimmer;
+
+    // Fade the whole surface shader at the EXTREME grazing limb — foreshortened
+    // equirect texels alias into a bright vertical streak there. The atmosphere rim
+    // shell carries the limb glow, so fading the surface a few degrees in is invisible.
+    float surfFade = smoothstep(0.0, 0.06, NdotV);
+    vec3 color = (mix(city, lit, dayF) + termGlow + glint) * surfFade;
+    gl_FragColor = vec4(color, 1.0);
+
+    #include <tonemapping_fragment>
+    #include <colorspace_fragment>
+  }
+`;
+
+// --- Cloud shell shader (Wave 4, #112) --------------------------------------
+// A thin transparent shell over Earth: white cloud where the density map is bright,
+// lit by the same sun, fading to nothing on the night side. Rotates INDEPENDENTLY of
+// the Earth body for parallax life. ADR-0004: a failed cloud-map load leaves the
+// default black (density 0) texture → alpha 0 → the shell renders nothing.
+const CLOUD_FRAGMENT = /* glsl */ `
+  uniform sampler2D uCloudMap;   // grayscale cloud density (NASA Blue Marble clouds)
+  uniform vec3 uSunDir;
+  uniform float uAmbient;
+  uniform float uOpacity;
+  varying vec3 vWorldNormal;
+  varying vec3 vViewDir;
+  varying vec2 vUv;
+  void main() {
+    float density = texture2D(uCloudMap, vUv).r;
+    vec3 N = normalize(vWorldNormal);
+    float ndl = dot(N, normalize(uSunDir));
+    float dayF = smoothstep(-0.1, 0.2, ndl);
+    vec3 col = vec3(uAmbient + max(ndl, 0.0));   // white cloud, sun-lit
+    float alpha = density * dayF * uOpacity;     // gone on the night side
+    gl_FragColor = vec4(col, alpha);
+    #include <tonemapping_fragment>
+    #include <colorspace_fragment>
+  }
+`;
+
+// A 1×1 solid-colour fallback texture (ADR-0004) for the Earth shader uniforms, so
+// `texture2D` is always valid even before/without a real map.
+function makeSolidTexture(r: number, g: number, b: number): THREE.DataTexture {
+  const tex = new THREE.DataTexture(new Uint8Array([r, g, b, 255]), 1, 1, THREE.RGBAFormat);
+  tex.needsUpdate = true;
+  return tex;
+}
+
+// Imperatively load a texture into a shader UNIFORM (the ShaderMaterial analogue of
+// loadTexture's material-slot loader). Raw texels (NoColorSpace) — the Earth/cloud
+// shaders linearize in-GLSL. A failed load leaves the uniform's solid fallback.
+function loadUniformTexture(
+  url: string,
+  uniform: THREE.IUniform,
+  invalidate: () => void,
+  anisotropy: number,
+): () => void {
+  let disposed = false;
+  let texture: THREE.Texture | null = null;
+  new THREE.TextureLoader().load(
+    url,
+    (t) => {
+      if (disposed) {
+        t.dispose();
+        return;
+      }
+      t.colorSpace = THREE.NoColorSpace;
+      t.anisotropy = anisotropy;
+      t.wrapS = THREE.RepeatWrapping; // equirectangular maps wrap horizontally
+      t.wrapT = THREE.ClampToEdgeWrapping;
+      // Mipmaps ON (default) with max anisotropy minify the equirect cleanly at the
+      // grazing limb; the surface limb-fade in EARTH_FRAGMENT handles the residual
+      // foreshortening streak.
+      texture = t;
+      uniform.value = t;
+      invalidate();
+    },
+    undefined,
+    () => {
+      // Missing/failed ⇒ keep the solid fallback already in the uniform (ADR-0004).
+    },
+  );
+  return () => {
+    disposed = true;
+    texture?.dispose();
+  };
+}
+
 // --- Earth (both views) -----------------------------------------------------
 // A distant marble hung high in the black sky to give the sense of deep space.
 // SIZED PROPORTIONALLY to the Moon (EARTH_RADIUS = MOON_RADIUS × 3.67, the real
 // diameter ratio) and hung beyond the Moon's upper-right limb so the orbit vista
 // matches the NASA reference: the Moon is the close hero (~38°) and Earth the
-// smaller-but-farther marble (~13°). Shown in BOTH views. Self-illuminated so it glows on its own
-// with no per-frame work. EARTH_RADIUS + EARTH_POSITION live in lib/scene so
-// Scene3D's earthshine light can share Earth's position.
+// smaller-but-farther marble (~13°). Shown in BOTH views. A LIVING body now —
+// it spins under a drifting cloud shell, oceans glinting at the sub-solar point.
+// EARTH_RADIUS + EARTH_POSITION live in lib/scene so Scene3D's earthshine light
+// can share Earth's position.
 
 // Imperatively load a texture and apply it to a material slot, demand-safely.
 // Returns a cleanup that detaches + disposes. A failed load is swallowed (the
@@ -242,7 +422,9 @@ function patchMoonLimbShader(material: THREE.MeshStandardMaterial) {
           "  float darken = mix( 1.0, 0.62, rim );",
           "  gl_FragColor.rgb *= mix( vec3( 1.0 ), uWarmTint, rim * 0.5 ) * darken;",
           "  // Terminator rim-glow: a faint cool silver halo at the grazing edge.",
-          "  gl_FragColor.rgb += uRimColor * ( rim * rim ) * 0.14;",
+          "  // Wave 4: dimmed 0.14→0.05 — on the now near-black dark side the brighter",
+          "  // halo ringed the whole disc like a (false) atmosphere; the Moon is airless.",
+          "  gl_FragColor.rgb += uRimColor * ( rim * rim ) * 0.05;",
           "}",
           "#include <tonemapping_fragment>",
         ].join("\n"),
@@ -292,8 +474,12 @@ function MoonGlobe({ visible }: { visible: boolean }) {
     // orbit-close distance; the far (L1) material stays softer (~0.6) so distant
     // frames don't over-shade near the terminator. (Baked from the LOLA LDEM-16
     // tier and delivered at 4096×2048 — 4× the prior linear detail.)
-    matNear.normalScale.set(0.9, 0.9);
-    matFar.normalScale.set(0.6, 0.6);
+    // Pushed a touch (0.9→1.05 / 0.6→0.72) for Wave 4: with the decoupled orbit sun
+    // now back/side-lighting the Moon (dark-side crescent — SVS #14992), the
+    // surviving sunlit limb is a RAKING light, so stronger crater-rim relief reads as
+    // dramatic terminator detail rather than over-shading.
+    matNear.normalScale.set(1.05, 1.05);
+    matFar.normalScale.set(0.72, 0.72);
     // Terminator rim-glow + limb darkening (#103). Patched onto BOTH LOD materials
     // (the far/L1 is MATCHED to the near/L1) so the limb reads identically across
     // the LOD switch — no pop at MOON_LOD_SWITCH. Static shader: 0 idle fps.
@@ -348,72 +534,120 @@ function MoonGlobe({ visible }: { visible: boolean }) {
   );
 }
 
-// Earth, shown in BOTH views (space-view-realism.md §2). A two-map day/night
-// marble + a cheap atmospheric rim, far away. No LOD, no normal map.
+// Earth, shown in BOTH views (space-view-realism.md §2; Wave 4 living-Earth). A
+// LIVING day/night marble: the custom EARTH_FRAGMENT shader (real terminator, masked
+// city lights, warm scatter band, ocean sun-glint) on a slowly-spinning body, under
+// a drifting CLOUD shell, wrapped in the #102 atmospheric rim. Shown in both views.
 //
-// Day/night material: the Blue Marble day colour map lights the sun-facing
-// hemisphere; the Black Marble city-lights map is wired as a WARM-GOLD emissive
-// that only shows on the DARK side. We get the dark-side-only behaviour for free
-// from the lighting: the emissiveMap is added uniformly, but the day map on the
-// LIT side is far brighter than the gold lights, so the city glow only reads where
-// the sun does not — the standard cheap day/night trick (no custom shader, no
-// useFrame). emissiveIntensity is kept low (~0.6) so the lights stay a whisper.
+// `uSunDir` is VIEW-CONDITIONAL: it points to the decoupled ORBIT_SUN in orbit (the
+// dark-side crescent composition) and to SUN_POSITION on the surface. `visible`
+// stays a prop for symmetry with MoonGlobe; SkyBodies always mounts Earth visible.
 //
-// The flat `color` deep-ocean-blue is the ADR-0004 fallback if the day map fails —
-// still a visible blue disc. (`visible` stays a prop for symmetry with MoonGlobe,
-// but SkyBodies always mounts Earth visible.)
-function EarthBody({ visible }: { visible: boolean }) {
+// Spin rates (rad/s) — slow + cinematic, not dizzying; clouds drift a touch faster
+// than the surface so they shear over the continents.
+const EARTH_SPIN = 0.03;
+const CLOUD_SPIN = 0.042;
+
+// Earth's ORBIT sun DIRECTION is decoupled from the Moon's dramatic dark-side sun
+// (ORBIT_SUN_POSITION). The Moon's sun sits far behind it for a thin crescent; if
+// Earth shared it, Earth would also be a razor-thin crescent — but the brief wants
+// Earth to clearly show a day side AND a night side (and the ocean sun-glint needs
+// the day side facing us). Earth and the Moon are separate, far-apart decorative
+// bodies, so an independent sun angle for Earth's shader reads fine. Tuned ~⟂ to the
+// orbit view so Earth shows a near-half terminator with the day side toward the Moon.
+const EARTH_ORBIT_SUN_DIR = new THREE.Vector3(0.45, 0.12, -0.88).normalize();
+
+function EarthBody({ visible, viewMode }: { visible: boolean; viewMode: ViewMode }) {
   const invalidate = useThree((s) => s.invalidate);
   const gl = useThree((s) => s.gl);
-  // Earth's atmospheric rim shell glows in the celestial bloom pass (#99).
+  // Spinning bodies (earth surface + cloud shell) + the static rim shell.
+  const earthRef = useRef<THREE.Mesh>(null);
+  const cloudRef = useRef<THREE.Mesh>(null);
   const rimRef = useRef<THREE.Mesh>(null);
+  const tRef = useRef(0);
 
-  const { geometry, material, rimGeometry, rimMaterial } = useMemo(() => {
-    const geometry = new THREE.SphereGeometry(EARTH_RADIUS, 48, 48);
-    const material = new THREE.MeshStandardMaterial({
-      color: "#2a4a8c",
-      roughness: 0.9,
-      metalness: 0,
-      // Warm-gold city lights (#FFC061), kept dim so they read as a whisper on the
-      // night side only. emissive is the tint multiplied onto the night emissiveMap;
-      // with no map it stays effectively off (gold × black ≈ nothing) so a failed
-      // night-map load leaves a clean lit/unlit marble (ADR-0004).
-      emissive: "#FFC061",
-      emissiveIntensity: 0.6,
-      // fog:false — Earth is a distant body well beyond the surface horizon fog;
-      // without this it would be tinted to black in surface view and vanish.
-      fog: false,
-    });
-
-    // Atmospheric rim — a back-side additive shell (radius ×1.03) carrying the
-    // Fresnel × sun-angle atmosphere ShaderMaterial (#102, replacing #86's flat
-    // MeshBasicMaterial). BackSide so we see the FAR wall of the shell as a halo
-    // around the disc; AdditiveBlending + depthWrite:false so it reads as a thin
-    // glow of light, never an opaque shell.
-    const rimGeometry = new THREE.SphereGeometry(EARTH_RADIUS * 1.03, 48, 48);
-
-    // Earth→Sun direction in Earth-LOCAL space. The shell is a child of the Earth
-    // group (no rotation), so object space == Earth-local: this vector is the same
-    // frame the vertex shader works in. Set ONCE here — the rim never animates, so
-    // the demand loop stays at 0 idle fps.
-    const sunDir = new THREE.Vector3(
+  // World-space Earth→Sun direction for the CURRENT view (orbit vs surface). The
+  // Earth group is unrotated, so this world vector also serves the rim shell's
+  // object-space shader (object axes == world axes there).
+  const sunWorldDir = useMemo(() => {
+    // Orbit: Earth's own tuned sun angle (decoupled from the Moon's dark-side sun).
+    if (viewMode === "orbit") return EARTH_ORBIT_SUN_DIR.clone();
+    // Surface: lit by the real worksite sun.
+    return new THREE.Vector3(
       SUN_POSITION[0] - EARTH_POSITION[0],
       SUN_POSITION[1] - EARTH_POSITION[1],
       SUN_POSITION[2] - EARTH_POSITION[2],
     ).normalize();
+  }, [viewMode]);
 
+  const {
+    geometry,
+    material,
+    cloudGeometry,
+    cloudMaterial,
+    rimGeometry,
+    rimMaterial,
+    fallbacks,
+  } = useMemo(() => {
+    const geometry = new THREE.SphereGeometry(EARTH_RADIUS, 64, 64);
+
+    // ADR-0004 fallbacks: a deep-ocean-blue day map + black night/cloud maps, so the
+    // shaders render a clean lit marble (and no clouds) even if a load fails.
+    const dayFallback = makeSolidTexture(42, 74, 140); // #2a4a8c
+    const nightFallback = makeSolidTexture(0, 0, 0);
+    const cloudFallback = makeSolidTexture(0, 0, 0);
+
+    const material = new THREE.ShaderMaterial({
+      vertexShader: EARTH_VERTEX,
+      fragmentShader: EARTH_FRAGMENT,
+      uniforms: {
+        uDayMap: { value: dayFallback },
+        uNightMap: { value: nightFallback },
+        uSunDir: { value: new THREE.Vector3(1, 0, 0) },
+        // Warm-gold city lights (boosted past 1 so they read as emissive at night).
+        uNightColor: { value: new THREE.Color("#ffcb78").multiplyScalar(1.5) },
+        uTermColor: { value: new THREE.Color("#edb185") }, // soft warm amber (desaturated)
+        uGlintColor: { value: new THREE.Color("#fff4e0").multiplyScalar(1.2) },
+        uTime: { value: 0 },
+        uTermWidth: { value: 0.12 }, // soft terminator half-width
+        uGlintShininess: { value: 60.0 }, // tight sub-solar highlight
+        uGlintStrength: { value: 0.7 },
+        uAmbient: { value: 0.03 },
+      },
+      fog: false,
+    });
+
+    // Cloud shell — a thin transparent sphere just above the surface. Reuses the
+    // Earth vertex shader (world normal + uv); the CLOUD_FRAGMENT lights it by the
+    // sun and fades it out on the night side.
+    const cloudGeometry = new THREE.SphereGeometry(EARTH_RADIUS * 1.012, 64, 64);
+    const cloudMaterial = new THREE.ShaderMaterial({
+      vertexShader: EARTH_VERTEX,
+      fragmentShader: CLOUD_FRAGMENT,
+      uniforms: {
+        uCloudMap: { value: cloudFallback },
+        uSunDir: { value: new THREE.Vector3(1, 0, 0) },
+        uAmbient: { value: 0.04 },
+        uOpacity: { value: 0.9 },
+      },
+      transparent: true,
+      depthWrite: false,
+      fog: false,
+    });
+
+    // Atmospheric rim — back-side additive shell (#102), unchanged shader. Kept as a
+    // non-spinning child so the limb glow stays symmetric while the surface turns.
+    const rimGeometry = new THREE.SphereGeometry(EARTH_RADIUS * 1.03, 48, 48);
     const rimMaterial = new THREE.ShaderMaterial({
       vertexShader: ATMOSPHERE_VERTEX,
       fragmentShader: ATMOSPHERE_FRAGMENT,
       uniforms: {
-        uSunDir: { value: sunDir },
-        // Rayleigh blue body (the sky-blue limb) + a warm Mie gold for the
-        // terminator band (low-sun forward scatter — the sunrise rim).
+        uSunDir: { value: new THREE.Vector3(1, 0, 0) },
         uRayleigh: { value: new THREE.Color("#4a86d6") },
         uMie: { value: new THREE.Color("#ffd6a0") },
         uIntensity: { value: 0.9 },
-        uPower: { value: 4.0 }, // pow(1 - dot(N, viewDir), 4) per the spec
-        uNightFloor: { value: 0.08 }, // faint earthshine rim on the dark limb
+        uPower: { value: 4.0 },
+        uNightFloor: { value: 0.08 },
       },
       side: THREE.BackSide,
       blending: THREE.AdditiveBlending,
@@ -422,50 +656,78 @@ function EarthBody({ visible }: { visible: boolean }) {
       fog: false,
       toneMapped: false,
     });
-    return { geometry, material, rimGeometry, rimMaterial };
+    return {
+      geometry,
+      material,
+      cloudGeometry,
+      cloudMaterial,
+      rimGeometry,
+      rimMaterial,
+      fallbacks: [dayFallback, nightFallback, cloudFallback],
+    };
   }, []);
 
+  // Load the real maps into the shader uniforms (ADR-0004: a failed load leaves the
+  // solid fallback already in the uniform). Max anisotropy keeps the terminator +
+  // coastlines crisp at the grazing limb.
   useEffect(() => {
-    // Day map → diffuse (SRGB); night city-lights → emissive map (SRGB colour data).
-    // A failed load on either channel leaves the flat fallback for that channel.
-    // Earth now reads at ~1/3 the Moon's apparent size in orbit (it sits just off
-    // the Moon's limb), so its maps get MAX anisotropy too — the day/night
-    // terminator + coastlines stay crisp at the grazing limb angle.
     const aniso = gl.capabilities.getMaxAnisotropy();
     const cleanups = [
-      loadTexture(EARTH_DAY, material, "map", THREE.SRGBColorSpace, invalidate, aniso),
-      loadTexture(EARTH_NIGHT, material, "emissiveMap", THREE.SRGBColorSpace, invalidate, aniso),
+      loadUniformTexture(EARTH_DAY, material.uniforms.uDayMap, invalidate, aniso),
+      loadUniformTexture(EARTH_NIGHT, material.uniforms.uNightMap, invalidate, aniso),
+      loadUniformTexture(EARTH_CLOUDS, cloudMaterial.uniforms.uCloudMap, invalidate, aniso),
     ];
     return () => cleanups.forEach((c) => c());
-  }, [material, invalidate, gl]);
+  }, [material, cloudMaterial, invalidate, gl]);
+
+  // Point every shader's sun uniform at the current view's sun (orbit vs surface).
+  useEffect(() => {
+    material.uniforms.uSunDir.value.copy(sunWorldDir);
+    cloudMaterial.uniforms.uSunDir.value.copy(sunWorldDir);
+    rimMaterial.uniforms.uSunDir.value.copy(sunWorldDir);
+    invalidate();
+  }, [sunWorldDir, material, cloudMaterial, rimMaterial, invalidate]);
 
   useEffect(
     () => () => {
       geometry.dispose();
       material.dispose();
+      cloudGeometry.dispose();
+      cloudMaterial.dispose();
       rimGeometry.dispose();
       rimMaterial.dispose();
+      fallbacks.forEach((t) => t.dispose());
     },
-    [geometry, material, rimGeometry, rimMaterial],
+    [geometry, material, cloudGeometry, cloudMaterial, rimGeometry, rimMaterial, fallbacks],
   );
 
-  useEffect(() => {
-    invalidate();
-  }, [visible, invalidate]);
-
   // Enable the celestial-bloom layer on Earth's rim shell so its cool-blue limb
-  // glows softly in the cinematic bloom pass (#99). Layer-gated, so the glow is
-  // confined to the rim — never the whole scene (ADR-0004). Runs after the mesh
-  // mounts (and whenever visibility flips it back in).
+  // glows softly in the cinematic bloom pass (#99). Layer-gated (ADR-0004).
   useEffect(() => {
     rimRef.current?.layers.enable(CELESTIAL_BLOOM_LAYER);
   }, [visible]);
+
+  // The living loop (frameloop="always"): spin the Earth + clouds and advance the
+  // shader clock that drives the ocean-glint shimmer, city flicker, and a faint
+  // atmosphere "breathe". Early-out while the tab is hidden (battery).
+  useFrame((_, dt) => {
+    if (typeof document !== "undefined" && document.hidden) return;
+    if (!earthRef.current) return;
+    const t = (tRef.current += dt);
+    earthRef.current.rotation.y += dt * EARTH_SPIN;
+    if (cloudRef.current) cloudRef.current.rotation.y += dt * CLOUD_SPIN;
+    material.uniforms.uTime.value = t;
+    rimMaterial.uniforms.uIntensity.value = 0.9 + 0.08 * Math.sin(t * 0.6);
+  });
 
   if (!visible) return null;
 
   return (
     <group position={EARTH_POSITION} raycast={() => null}>
-      <mesh geometry={geometry} material={material} raycast={() => null} />
+      {/* Living day/night surface — spins. */}
+      <mesh ref={earthRef} geometry={geometry} material={material} raycast={() => null} />
+      {/* Drifting cloud shell — spins a touch faster. */}
+      <mesh ref={cloudRef} geometry={cloudGeometry} material={cloudMaterial} raycast={() => null} />
       {/* Atmospheric rim shell (cool-blue limb glow) — on CELESTIAL_BLOOM_LAYER. */}
       <mesh ref={rimRef} geometry={rimGeometry} material={rimMaterial} raycast={() => null} />
     </group>
@@ -601,7 +863,7 @@ function makeTintGlowTexture(r: number, g: number, b: number): THREE.Texture | n
   return tex;
 }
 
-function SunBody() {
+function SunBody({ position }: { position: [number, number, number] }) {
   const invalidate = useThree((s) => s.invalidate);
   // The Sun core mesh glows in the celestial bloom pass (#99).
   const coreRef = useRef<THREE.Mesh>(null);
@@ -671,7 +933,7 @@ function SunBody() {
   }, []);
 
   return (
-    <group position={SUN_POSITION} raycast={() => null}>
+    <group position={position} raycast={() => null}>
       {/* Rays — the radiating shine waves (largest, faintest). */}
       {raysTex && (
         <sprite scale={[SUN_RADIUS * 13, SUN_RADIUS * 13, 1]} raycast={() => null}>
@@ -1014,12 +1276,15 @@ export function SkyBodies({
   onBaseClick?: () => void;
 }) {
   const inOrbit = viewMode === "orbit";
+  // DECOUPLED sun (Wave 4): the visible flare follows the same swing as the key
+  // directionalLight in Scene3D — orbit reads the dark-side crescent Moon (the flare
+  // sits ~69° off-axis, off-frame), surface keeps the worksite's lit-from-above sun.
   return (
     <>
-      <SunBody />
+      <SunBody position={inOrbit ? ORBIT_SUN_POSITION : SUN_POSITION} />
       <MoonGlobe visible={inOrbit} />
       <NebulaHero visible={inOrbit} />
-      <EarthBody visible />
+      <EarthBody visible viewMode={viewMode} />
       {inOrbit && onBaseClick ? <LunarBaseMarker onSelect={onBaseClick} /> : null}
     </>
   );

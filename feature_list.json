@@ -1218,20 +1218,23 @@
       "id": "r3d-112",
       "priority": 59,
       "area": "realistic-3d-world",
-      "title": "Living Earth (cloud shell + city-light flicker)",
-      "user_visible_behavior": "Earth has rotating clouds and flickering night-side city lights.",
-      "status": "not_started",
+      "title": "Living Earth + ultra-realistic orbit (SVS 14992 look)",
+      "user_visible_behavior": "Orbit vista matches NASA SVS #14992: a near-dark crescent Moon, an Earth with a real day/night terminator (sunlit day side + city-lit night), a shimmering ocean sun-glint, drifting clouds, and a slowly rotating Earth — against the warm Milky-Way band.",
+      "status": "passing",
       "issue": 112,
       "epic": 46,
       "depends_on": [
         "r3d-102"
       ],
       "verification": [
-        "cd web && npm run build && npm test (TS-clean + vitest)",
-        "manual: orbit & surface screenshots; animated slices pause when the tab is hidden"
+        "cd web && npm run build && npm test (TS-clean + 150 vitest pass)",
+        "manual: orbit screenshots compared to SVS #14992 (dark-side Moon + Earth day/night + glint); surface worksite stays lit (sun decoupled)"
       ],
-      "evidence": [],
-      "notes": "Wave 3 (cinematic beauty & immersion). AFK. Idle animation — relaxes 0-idle-fps; pauses when tab hidden."
+      "evidence": [
+        "cd web && npm run build (tsc -b clean) && npx vitest run (150 passed)",
+        "chrome-devtools MCP: orbit + surface screenshots verified on wave4/living-orbit"
+      ],
+      "notes": "Wave 4 'living orbit'. Generalised #112: frameloop='always' (ADR-0004 demand-loop budget dropped — see AGENTS.md/ADR-0004 amendment); custom Earth day/night+ocean-glint ShaderMaterial; drifting NASA-PD cloud shell; decoupled ORBIT_SUN_POSITION for the dark-side Moon (surface keeps SUN_POSITION); orbit IBL dimmed (EnvironmentGrade) so the Moon's far side reads dark."
     }
   ]
 }

@@ -80,8 +80,9 @@ const STAR_BG_YAW_DEG = 180; // swing galactic centre into the orbit view
 const STAR_BG_ROLL_DEG = 28; // diagonal tilt of the band
 // scene.backgroundIntensity (three r0.169): scales the band/star map brightness.
 // Kept below 1 so the galaxy reads as a faint deep-space backdrop, not a bright
-// wash — the Moon/Earth stay the focus.
-const STAR_BG_INTENSITY = 0.8;
+// wash — the Moon/Earth stay the focus. Wave 4: nudged 0.8→0.9 so the warm galactic
+// dust band reads a touch richer behind the dark-side crescent Moon (SVS #14992).
+const STAR_BG_INTENSITY = 0.9;
 
 // The Milky-Way band carries most of the sky detail, so the hand-rolled points
 // shell is a sparse near-field of foreground stars layered ON TOP of the band
