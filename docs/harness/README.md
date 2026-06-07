@@ -47,6 +47,7 @@ session's output; [`QUALITY.md`](./QUALITY.md) tracks codebase health over time.
 - [`session-handoff.md`](./session-handoff.md) — compact handoff between sessions (overwrite each time).
 - [`evaluator-rubric.md`](./evaluator-rubric.md) — score a session's output before accepting it.
 - [`QUALITY.md`](./QUALITY.md) — per-module health grades, refreshed periodically.
+- [`issue-tracking.md`](./issue-tracking.md) — label tiers (epic/feature/task/bug/refactor + area), the PR→issue closing convention, and the `issue-sync` Action safety net.
 
 > **Keep the harness small enough that agents actually follow it.** As the models improve,
 > delete harness rules that have become unnecessary overhead — harness debt is technical debt.
