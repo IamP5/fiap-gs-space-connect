@@ -999,6 +999,34 @@ const GROUND_VISUAL = 700;
 // too large/small.
 const REGOLITH_REPEAT = Math.round(GROUND_VISUAL * 0.3);
 
+// Deterministic 2D value noise (#105): a cheap integer-lattice hash plus
+// bilinear interpolation with a smoothstep fade. No asset, no RNG state — the
+// same (x, y) always returns the same value, so the terrain stays a pure
+// function of its geometry (built once, never per-frame). Used for a
+// high-frequency micro-relief octave on top of the smooth sine swells so the
+// close-up surface reads as chaotic regolith rather than rolling dunes.
+function hashLattice(ix: number, iy: number): number {
+  const h = Math.sin(ix * 127.1 + iy * 311.7) * 43758.5453;
+  return h - Math.floor(h); // [0, 1)
+}
+
+function valueNoise2(x: number, y: number): number {
+  const ix = Math.floor(x);
+  const iy = Math.floor(y);
+  const fx = x - ix;
+  const fy = y - iy;
+  // Smoothstep fade → C1-continuous, no faceting between lattice cells.
+  const ux = fx * fx * (3 - 2 * fx);
+  const uy = fy * fy * (3 - 2 * fy);
+  const a = hashLattice(ix, iy);
+  const b = hashLattice(ix + 1, iy);
+  const c = hashLattice(ix, iy + 1);
+  const d = hashLattice(ix + 1, iy + 1);
+  const top = a + (b - a) * ux;
+  const bottom = c + (d - c) * ux;
+  return top + (bottom - top) * uy; // [0, 1)
+}
+
 // Low-poly lunar ground: a single displaced plane primitive (ADR-0004 allows a
 // "simple ground plane / displaced primitive"). Static — built once, not driven
 // by the snapshot. Subtle deterministic vertex displacement gives a regolith
@@ -1022,7 +1050,18 @@ function LunarTerrain() {
       const fine = Math.sin(x * 0.6) * Math.cos(y * 0.55) * 0.18 + Math.sin(x * 1.7 + y) * 0.05;
       const swellAmp = THREE.MathUtils.smoothstep(Math.hypot(x, y), 30, 200) * 4.0;
       const swell = Math.sin(x * 0.018 + 1.3) * Math.cos(y * 0.021) * swellAmp;
-      pos.setZ(i, fine + swell);
+      // High-frequency micro-relief octave (#105): two value-noise layers near the
+      // mesh's Nyquist limit (~7.3 units/vertex) break the smooth sine dunes into
+      // chaotic, irregular bumps so the close-up surface reads as fine regolith.
+      // Centered to ±1 so it adds no net rise — rovers/tasks at y=0 stay grounded.
+      // Slightly attenuated right under the worksite (<6 units) to keep that floor
+      // readable, then full strength outward across the visible plain.
+      const microMask = 0.55 + 0.45 * THREE.MathUtils.smoothstep(Math.hypot(x, y), 4, 12);
+      const micro =
+        ((valueNoise2(x * 0.31, y * 0.31) - 0.5) * 0.16 +
+          (valueNoise2(x * 0.73 + 19.3, y * 0.73 - 7.1) - 0.5) * 0.07) *
+        microMask;
+      pos.setZ(i, fine + swell + micro);
     }
     g.computeVertexNormals();
     // aoMap reads from uv2; PlaneGeometry's uv works directly as the second set.
