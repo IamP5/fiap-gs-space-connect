@@ -21,9 +21,6 @@ import { TaskLedger } from "./components/TaskLedger";
 import { KillPanel } from "./components/KillPanel";
 import { ControlsPanel } from "./components/ControlsPanel";
 import { EarthPanel } from "./components/EarthPanel";
-import { PartitionPanel } from "./components/PartitionPanel";
-import { EncorePanel } from "./components/EncorePanel";
-import { LabPanel } from "./components/LabPanel";
 import { BlueprintPalette } from "./components/BlueprintPalette";
 import { WorldCanvas } from "./components/WorldCanvas";
 // Type-only — erased at build time, so referencing the camera view-mode type
@@ -285,20 +282,6 @@ export default function App() {
         {/* The DELAYED Earth view, bottom-right — it lags the live TaskLedger
             (top-left) as latency climbs, proving "Earth never knew" (issue 09). */}
         <EarthPanel earth={earth} snapshotAt={snapshot?.at ?? null} />
-
-        {/* Right-edge "lab" dock — explicitly opt-in, collapsible affordances that
-            never auto-play and must never pre-empt the headline heal (ADR-0003).
-            The PartitionPanel replays the proven CRDT merge as a local-state
-            narrative; the EncorePanel triggers the real container kill (issue 11).
-            Both stay OUT of the 10 Hz snapshot re-render path (memoized). */}
-        <div className="encore-column">
-          {/* The in-app LIVE lab (bh-07a): pick a Task, watch the real
-              Generator↔Evaluator loop think. Off the headline — its stream is a
-              separate channel that never touches the snapshot re-render. */}
-          <LabPanel />
-          <PartitionPanel />
-          <EncorePanel send={send} />
-        </div>
 
         {/* Both renderers honor the SAME {snapshot, selected, onPick} contract,
             so the toggle swaps them with no other change. The 2D WorldCanvas is
