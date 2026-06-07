@@ -1219,14 +1219,16 @@ const SURFACE_HIGH_POSE: Pose = {
 // offset is set so the camera→Moon line is ~72° OFF the Moon→Sun line (#81): the
 // sun rakes ACROSS the globe (3/4 side-light) instead of from behind it, so the
 // orbit preset frames a visible soft side-lit terminator — the single biggest
-// realism win. |offset| ≈ 418, inside the orbit distance band (220–640), at a
-// ~72° polar angle (inside the preset's [45°, 81.8°] clamps). Target = globe
-// center. Do NOT change SUN_POSITION/MOON_POSITION (lib/scene.ts) — only the pose.
+// realism win. |offset| ≈ 280 (pulled in from 418 so the Moon fills the frame as
+// a hero — subtends ~37° vs ~25°), kept on the SAME approach axis so the ~72°
+// terminator is preserved; inside the orbit distance band (220–640) at a ~72°
+// polar angle (inside the preset's [45°, 81.8°] clamps). Target = globe center.
+// Do NOT change SUN_POSITION/MOON_POSITION (lib/scene.ts) — only the pose.
 const ORBIT_POSE: Pose = {
   position: new THREE.Vector3(
-    MOON_POSITION[0] + 396,
-    MOON_POSITION[1] + 128,
-    MOON_POSITION[2] + 39,
+    MOON_POSITION[0] + 264,
+    MOON_POSITION[1] + 85,
+    MOON_POSITION[2] + 26,
   ),
   target: new THREE.Vector3(...MOON_POSITION),
 };
@@ -1489,20 +1491,25 @@ function SceneContents({
              black sky from above) standing in for sunlight bouncing off the bright
              lunar surface, plus a tiny ambient floor so nothing is pure black
              (ADR-0004 readability). */}
-      {/* Ambient floor — lowered (0.17 → 0.12) so the void reads near-black while
-          nothing is fully crushed (ADR-0004 readability). Cool near-black tint. */}
-      <ambientLight color="#0e1014" intensity={0.12} />
-      {/* Hemisphere regolith bounce — darker (0.35 → 0.25) with a warm sky / near-
-          black ground so shadow fill is a whisper, not a wash (NASA SVS re-grade). */}
-      <hemisphereLight args={["#ffe9cc", "#1a1814", 0.25]} />
-      {/* SUN — the key light, hard slightly-warm white (#FFF6EC), kept at ~1.9 so
+      {/* Ambient floor — VIEW-CONDITIONAL. In orbit the Moon is airless and has
+          essentially NO fill but faint earthshine, so the void + shadow side must
+          go near-black for crater relief and a dramatic terminator to read (the
+          SVS look) → 0.04. On the surface a touch more (0.12) keeps the worksite's
+          shadow side legible. Cool near-black tint. */}
+      <ambientLight color="#0e1014" intensity={onSurface ? 0.12 : 0.04} />
+      {/* Hemisphere regolith bounce — VIEW-CONDITIONAL for the same reason: a
+          whisper on the surface (0.25, regolith bounce under the worksite), all but
+          OFF in orbit (0.05) so the Moon's shadow side isn't washed flat. */}
+      <hemisphereLight args={["#ffe9cc", "#1a1814", onSurface ? 0.25 : 0.05]} />
+      {/* SUN — the key light, near-white (#FFFAF4) so the lit Moon reads as neutral
+          grey, not warm-brown (ACES + a warm sun was muddying it); kept at ~1.9 so
           it stays the bloom driver and the lit limb is bright but not blown out. */}
-      <directionalLight ref={lightRef} position={SUN_POSITION} color="#fff6ec" intensity={1.9} />
-      {/* Earthshine — a cool DESATURATED whisper (pale steel-blue #A8BFDA) at
-          ~0.13× the sun, from Earth's actual position. NASA earthshine is a faint
-          wash on the night-side terminator, NOT a blue glow — so it's dim + cool,
-          just enough that craters are barely readable on the shadowed limb. */}
-      <directionalLight position={EARTH_POSITION} color="#a8bfda" intensity={0.25} />
+      <directionalLight ref={lightRef} position={SUN_POSITION} color="#fffaf4" intensity={1.9} />
+      {/* Earthshine — a cool DESATURATED whisper (pale steel-blue #A8BFDA), from
+          Earth's actual position. NASA earthshine is a faint wash on the night-side
+          terminator, NOT a blue glow — dimmest in orbit (0.16) so the shadow side
+          stays near-black; a bit more on the surface (0.25) for shadow legibility. */}
+      <directionalLight position={EARTH_POSITION} color="#a8bfda" intensity={onSurface ? 0.25 : 0.16} />
 
       {/* Surface-only horizon fog: dissolves the far ground edge into the black
           sky for a clean horizon + sense of vastness. The worksite (within ~30
