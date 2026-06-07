@@ -178,7 +178,6 @@ const EARTH_FRAGMENT = /* glsl */ `
   uniform sampler2D uNightMap;   // Black Marble city lights
   uniform vec3 uSunDir;          // world-space Earth→Sun (normalized, view-conditional)
   uniform vec3 uNightColor;      // warm-gold city-light tint
-  uniform vec3 uTermColor;       // soft warm sunset/sunrise band
   uniform vec3 uGlintColor;      // specular sun-glint colour
   uniform float uTime;           // seconds — drives glint shimmer + city flicker
   uniform float uTermWidth;      // half-width of the soft day/night terminator
@@ -226,18 +225,6 @@ const EARTH_FRAGMENT = /* glsl */ `
     float flicker = 0.94 + 0.06 * sin(uTime * 1.6 + vUv.x * 22.0) * sin(uTime * 1.1 + vUv.y * 18.0);
     vec3 city = night * uNightColor * (1.0 - dayF) * flicker * limbFade;
 
-    // Soft warm sunset band straddling the terminator (low-sun forward scatter). A
-    // smooth, gentle warmth — NOT a saturated stripe. Wave 4.1: the band used to be
-    // SQUARED (band *= band), which peaked it into the hard vertical "double-image"
-    // divider the user saw. Now it spreads over a band ~1.7× the terminator width with
-    // a single smoothstep (no squaring) and half the strength, so the warm scatter is
-    // a wide, barely-there gradient that melts day into night. Faded out toward the
-    // grazing limb (termFade) where foreshortened equirect texels would streak it.
-    float bandW = uTermWidth * 1.7;
-    float band = smoothstep(bandW, 0.0, abs(ndl));
-    float termFade = smoothstep(0.0, 0.35, NdotV);
-    vec3 termGlow = uTermColor * band * dayF * termFade * 0.05;
-
     // Ocean sun-glint — the "sun waves". Ocean mask from the day map (blue-dominant,
     // low land), Blinn-Phong highlight at the sub-solar point, shimmered over time.
     float ocean = smoothstep(0.015, 0.10, day.b - max(day.r, day.g));
@@ -260,7 +247,7 @@ const EARTH_FRAGMENT = /* glsl */ `
     // equirect texels alias into a bright vertical streak there. The atmosphere rim
     // shell carries the limb glow, so fading the surface a few degrees in is invisible.
     float surfFade = smoothstep(0.0, 0.06, NdotV);
-    vec3 color = (mix(darkSide, lit, dayF) + termGlow + glint) * surfFade;
+    vec3 color = (mix(darkSide, lit, dayF) + glint) * surfFade;
     gl_FragColor = vec4(color, 1.0);
 
     #include <tonemapping_fragment>
@@ -635,14 +622,13 @@ function EarthBody({ visible, viewMode }: { visible: boolean; viewMode: ViewMode
         uSunDir: { value: new THREE.Vector3(1, 0, 0) },
         // Warm-gold city lights (boosted past 1 so they read as emissive at night).
         uNightColor: { value: new THREE.Color("#ffcb78").multiplyScalar(1.5) },
-        uTermColor: { value: new THREE.Color("#edb185") }, // soft warm amber (desaturated)
         uGlintColor: { value: new THREE.Color("#fff4e0").multiplyScalar(1.2) },
         uTime: { value: 0 },
         // Wide, soft terminator (Wave 4.1) — Earth's thick atmosphere scatters the
         // day/night boundary into a gentle gradient, not the crisp Moon edge. The
         // old 0.12 read as a hard line; widened again 0.24→0.45 so the day/night
         // hand-off is a broad, smooth dusk band like the NASA reference.
-        uTermWidth: { value: 0.15 }, // soft terminator half-width
+        uTermWidth: { value: 0 }, // soft terminator half-width
         // Broader sub-solar highlight (60→30): a tight specular speckled at the small
         // marble size; a softer, wider glint reads cleanly as "sun on the oceans".
         uGlintShininess: { value: 30.0 },
