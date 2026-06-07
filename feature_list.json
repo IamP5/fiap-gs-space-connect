@@ -1185,7 +1185,7 @@
       "area": "realistic-3d-world",
       "title": "Sun GodRays + lens flare (orbit-gated)",
       "user_visible_behavior": "Volumetric god-ray shafts and a lens flare radiate from the Sun in orbit.",
-      "status": "not_started",
+      "status": "passing",
       "issue": 110,
       "epic": 46,
       "depends_on": [
@@ -1195,8 +1195,13 @@
         "cd web && npm run build && npm test (TS-clean + vitest)",
         "manual: orbit & surface screenshots; animated slices pause when the tab is hidden"
       ],
-      "evidence": [],
-      "notes": "Wave 3 (cinematic beauty & immersion). AFK."
+      "evidence": [
+        "Implemented on branch wave3/godrays-material-polish: <GodRays> pass after both bloom passes in CinematicFX, fed a shared sunRef surfaced from SkyBodies/SunBody (core disc); orbit-gated, null-safe. Plus a procedural anamorphic streak sprite on the Sun (orbit-gated).",
+        "cd web: npm run build TS-clean (vite ok), npm run lint clean, vitest 13 files / 156 tests pass.",
+        "chrome-devtools (VITE_MOCK): default orbit keeps the Wave-4 dark-crescent hero (GodRays correctly dormant, Sun off-frame); orbiting toward the Sun reveals the disc starburst + anamorphic streak + god-ray glow with the Moon limb occluding (.screenshots/r3d-110-godrays-orbit.png). No console errors (the glBlitFramebuffer warning is the pre-existing EffectComposer depth-stencil quirk).",
+        "Perf pass (GPU-bound regression fix): GodRays is now frustum-culled — a per-frame NDC projection of the Sun toggles the effect resolution.scale between 0.5 (on-screen) and 0.05 (off-screen) on transition only (no shader recompile), so the default off-frame orbit pose pays ~nothing; samples trimmed 80->60 (lib default). Surface unaffected (orbit-only). Verified no console errors + rays preserved when the Sun is in frame (.screenshots/r3d-110-godrays-optimized.png)."
+      ],
+      "notes": "Wave 3 (cinematic beauty & immersion). AFK. Operator signed off → merged to main 2026-06-07 (branch wave3/godrays-material-polish, commits 96221e0 + perf 737a6cd). Orbit Sun is decoupled off-frame (Wave 4), so the effect reveals on orbit-toward-sun, not the default pose; GodRays is frustum-culled (orbit-only) so the off-frame pose costs ~nothing."
     },
     {
       "id": "r3d-111",
@@ -1204,7 +1209,7 @@
       "area": "realistic-3d-world",
       "title": "Material tier polish (dome roughness, clearcoat metal, rock PBR, solar glint, emissive windows)",
       "user_visible_behavior": "Built structures read as distinct materials: clearcoat metal, PBR rock, glinting solar panels, glowing habitat windows.",
-      "status": "not_started",
+      "status": "passing",
       "issue": 111,
       "epic": 46,
       "depends_on": [
@@ -1214,8 +1219,12 @@
         "cd web && npm run build && npm test (TS-clean + vitest)",
         "manual: orbit & surface screenshots; animated slices pause when the tab is hidden"
       ],
-      "evidence": [],
-      "notes": "Wave 3 (cinematic beauty & immersion). AFK."
+      "evidence": [
+        "Implemented on branch wave3/godrays-material-polish: per-tier dome roughness in TaskBlock (cap 0.75 / walls 0.88 / foundation 0.95); new polishGltfMaterials() in lib/textureFidelity.ts (clearcoat on metalness>0.3 via MeshPhysicalMaterial upgrade, URL-keyed solar anisotropy, *window* emissive on the celestial bloom layer) run once on the cached glTF source in loadGLTF + loadScenery; DecorRocks gains the vendored Poly Haven rock nor_gl + rough maps (512, CC0) with max anisotropy.",
+        "cd web: npm run build TS-clean, npm run lint clean, vitest 13 files / 156 tests pass.",
+        "chrome-devtools (VITE_MOCK): surface shows the boulders with real PBR microrelief (was flat grey) and the metal generator/hangar render with clearcoat sheen; no console errors (.screenshots/r3d-111-surface-materials.png). Fallbacks preserved (per-channel swallowed texture catch; primitive box on glTF failure)."
+      ],
+      "notes": "Wave 3 (cinematic beauty & immersion). AFK. Operator signed off → merged to main 2026-06-07 (branch wave3/godrays-material-polish, commit 96221e0). Emissive windows + solar glint are wired but latent on the current vendored asset set (no *window* submeshes; solar-panel.glb not in the default mock scene) — correct ADR-0004 no-op until such assets are placed."
     },
     {
       "id": "r3d-112",

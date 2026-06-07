@@ -913,10 +913,67 @@ function makeTintGlowTexture(r: number, g: number, b: number): THREE.Texture | n
   return tex;
 }
 
-function SunBody({ position }: { position: [number, number, number] }) {
+// Anamorphic lens-flare streak (#110): a wide, thin HORIZONTAL light bar — the
+// cool-white blue-tinged streak a cinema anamorphic lens throws across a bright
+// point source. Drawn on a wide canvas: a hot thin core line tapering to nothing
+// at the ends, with a faint vertical bleed so it isn't a hairline. Additive +
+// toneMapped:false on the sprite, so it only ever brightens and stays bright.
+// Static (no per-frame work); it shows only where the Sun sits on-screen and is
+// occluded by the Moon's depth like the rest of the flare stack.
+function makeAnamorphicStreakTexture(): THREE.Texture | null {
+  if (typeof document === "undefined") return null;
+  const w = 1024;
+  const h = 128;
+  const cv = document.createElement("canvas");
+  cv.width = w;
+  cv.height = h;
+  const ctx = cv.getContext("2d");
+  if (!ctx) return null;
+  const cx = w / 2;
+  const cy = h / 2;
+  // Horizontal taper: bright at centre, fading to transparent at both ends.
+  const lg = ctx.createLinearGradient(0, 0, w, 0);
+  lg.addColorStop(0, "rgba(150,185,255,0)");
+  lg.addColorStop(0.5, "rgba(210,226,255,0.9)");
+  lg.addColorStop(1, "rgba(150,185,255,0)");
+  // Vertical falloff: a thin core line with a soft bleed above/below.
+  for (let y = 0; y < h; y++) {
+    const d = Math.abs(y - cy) / cy; // 0 at the core line → 1 at the edges
+    const v = Math.pow(1 - d, 6); // tight core, fast falloff
+    if (v <= 0.001) continue;
+    ctx.globalAlpha = v;
+    ctx.fillStyle = lg;
+    ctx.fillRect(0, y, w, 1);
+  }
+  ctx.globalAlpha = 1;
+  // A small hot round core where the streak crosses the disc centre.
+  const core = ctx.createRadialGradient(cx, cy, 0, cx, cy, h * 0.6);
+  core.addColorStop(0, "rgba(255,255,255,0.85)");
+  core.addColorStop(1, "rgba(255,255,255,0)");
+  ctx.fillStyle = core;
+  ctx.fillRect(cx - h, 0, h * 2, h);
+  const tex = new THREE.CanvasTexture(cv);
+  tex.colorSpace = THREE.SRGBColorSpace;
+  return tex;
+}
+
+function SunBody({
+  position,
+  coreRef: externalCoreRef,
+  showStreak,
+}: {
+  position: [number, number, number];
+  // Shared ref to the core disc mesh, so the post-FX GodRays pass (#110) can use
+  // the Sun as its light source. Optional — falls back to a local ref.
+  coreRef?: React.RefObject<THREE.Mesh>;
+  // Orbit-gates the anamorphic lens-flare streak (#110): the Sun is the orbit hero.
+  showStreak?: boolean;
+}) {
   const invalidate = useThree((s) => s.invalidate);
-  // The Sun core mesh glows in the celestial bloom pass (#99).
-  const coreRef = useRef<THREE.Mesh>(null);
+  // The Sun core mesh glows in the celestial bloom pass (#99) and is the GodRays
+  // light source (#110). Use the shared ref when given, else a local one.
+  const localCoreRef = useRef<THREE.Mesh>(null);
+  const coreRef = externalCoreRef ?? localCoreRef;
 
   const { geometry, material } = useMemo(() => {
     const geometry = new THREE.SphereGeometry(SUN_RADIUS, 48, 48);
@@ -937,11 +994,13 @@ function SunBody({ position }: { position: [number, number, number] }) {
   // Procedural flare textures (glow + rays + limb darkening + warm/cool chromatic
   // glows), built once and disposed on unmount. All static CanvasTextures (no
   // external asset, no useFrame).
-  const { glowTex, raysTex, limbTex, warmTex, coolTex } = useMemo(
+  const { glowTex, raysTex, limbTex, warmTex, coolTex, streakTex } = useMemo(
     () => ({
       glowTex: makeGlowTexture(),
       raysTex: makeRaysTexture(),
       limbTex: makeLimbTexture(),
+      // Anamorphic lens-flare streak (#110).
+      streakTex: makeAnamorphicStreakTexture(),
       // Warm #fff0d8 and a near-neutral cool tint for the offset chromatic glow.
       // The cool half is kept only FAINTLY blue (Wave 4.1): when the warm core is
       // occluded behind the Moon's limb in orbit, a saturated blue sprite poked out
@@ -959,8 +1018,9 @@ function SunBody({ position }: { position: [number, number, number] }) {
       limbTex?.dispose();
       warmTex?.dispose();
       coolTex?.dispose();
+      streakTex?.dispose();
     },
-    [glowTex, raysTex, limbTex, warmTex, coolTex],
+    [glowTex, raysTex, limbTex, warmTex, coolTex, streakTex],
   );
 
   useEffect(() => {
@@ -984,10 +1044,26 @@ function SunBody({ position }: { position: [number, number, number] }) {
   // brighten on their own, so they stay off this layer.
   useEffect(() => {
     coreRef.current?.layers.enable(CELESTIAL_BLOOM_LAYER);
-  }, []);
+  }, [coreRef]);
 
   return (
     <group position={position} raycast={() => null}>
+      {/* Anamorphic lens-flare streak (#110) — a wide horizontal light bar across
+          the disc. Orbit-gated (the Sun is the orbit hero); naturally visible only
+          where the Sun sits on-screen and not occluded by the Moon. */}
+      {showStreak && streakTex && (
+        <sprite scale={[SUN_RADIUS * 26, SUN_RADIUS * 2.6, 1]} raycast={() => null}>
+          <spriteMaterial
+            map={streakTex}
+            blending={THREE.AdditiveBlending}
+            transparent
+            depthWrite={false}
+            toneMapped={false}
+            opacity={0.85}
+            fog={false}
+          />
+        </sprite>
+      )}
       {/* Rays — the radiating shine waves (largest, faintest). */}
       {raysTex && (
         <sprite scale={[SUN_RADIUS * 13, SUN_RADIUS * 13, 1]} raycast={() => null}>
@@ -1325,9 +1401,12 @@ function NebulaHero({ visible }: { visible: boolean }) {
 export function SkyBodies({
   viewMode,
   onBaseClick,
+  sunRef,
 }: {
   viewMode: ViewMode;
   onBaseClick?: () => void;
+  // Shared ref to the Sun core disc, surfaced for the post-FX GodRays pass (#110).
+  sunRef?: React.RefObject<THREE.Mesh>;
 }) {
   const inOrbit = viewMode === "orbit";
   // DECOUPLED sun (Wave 4): the visible flare follows the same swing as the key
@@ -1335,7 +1414,11 @@ export function SkyBodies({
   // sits ~69° off-axis, off-frame), surface keeps the worksite's lit-from-above sun.
   return (
     <>
-      <SunBody position={inOrbit ? ORBIT_SUN_POSITION : SUN_POSITION} />
+      <SunBody
+        position={inOrbit ? ORBIT_SUN_POSITION : SUN_POSITION}
+        coreRef={sunRef}
+        showStreak={inOrbit}
+      />
       <MoonGlobe visible={inOrbit} />
       <NebulaHero visible={inOrbit} />
       <EarthBody visible viewMode={viewMode} />

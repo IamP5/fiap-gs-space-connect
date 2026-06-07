@@ -49,9 +49,14 @@ These require the self-hosted Draco decoder under `web/public/draco/` to load
 | File | Source asset | Authors | Source URL | License |
 |------|--------------|---------|-----------|---------|
 | `textures/rock_boulder_dry_diff_512.jpg` | "Rock Boulder Dry" — 1K diffuse, **resized to 512×512** | Dimitrios Savva (photography), Rico Cilliers (processing) | https://polyhaven.com/a/rock_boulder_dry | CC0 1.0 |
+| `textures/rock_boulder_dry_nor_gl_512.jpg` | "Rock Boulder Dry" — 1K OpenGL normal, **resized to 512×512** | Dimitrios Savva (photography), Rico Cilliers (processing) | https://polyhaven.com/a/rock_boulder_dry | CC0 1.0 |
+| `textures/rock_boulder_dry_rough_512.jpg` | "Rock Boulder Dry" — 1K roughness, **resized to 512×512** | Dimitrios Savva (photography), Rico Cilliers (processing) | https://polyhaven.com/a/rock_boulder_dry | CC0 1.0 |
 
-Original 1K download (resized down to 512 for bundle size; otherwise unmodified):
+Original 1K downloads (resized down to 512 for bundle size; otherwise unmodified) —
+the normal + roughness maps back the DecorRocks boulder PBR (#111):
 `https://dl.polyhaven.org/file/ph-assets/Textures/jpg/1k/rock_boulder_dry/rock_boulder_dry_diff_1k.jpg`
+`https://dl.polyhaven.org/file/ph-assets/Textures/jpg/1k/rock_boulder_dry/rock_boulder_dry_nor_gl_1k.jpg`
+`https://dl.polyhaven.org/file/ph-assets/Textures/jpg/1k/rock_boulder_dry/rock_boulder_dry_rough_1k.jpg`
 
 Poly Haven publishes all of its assets under CC0 1.0
 (https://polyhaven.com/license); the asset's authors are confirmed via the Poly
