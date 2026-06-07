@@ -63,14 +63,17 @@ import { batteryPercent } from "../lib/format";
 import { suppressRaycast } from "../lib/suppressRaycast";
 import { applyGltfTextureFidelity, polishGltfMaterials } from "../lib/textureFidelity";
 import {
+  DEFAULT_SITE_FRAME,
   EARTH_POSITION,
   GROUND_SPAN,
   MOON_POSITION,
   ORBIT_SUN_POSITION,
+  REAL_METERS,
+  SCENE_UNITS_PER_METER,
   SUN_POSITION,
   type SceneMap,
   isBuilt,
-  sceneMap,
+  siteMap,
   tierHeight,
   tierOf,
 } from "../lib/scene";
@@ -320,10 +323,22 @@ function roverHaloColor(r: RoverView): string {
 // scripts/condition-asset.mjs (recentered, fit-to-unit). A missing file just
 // keeps the primitive fallback below.
 const ROVER_MODEL_REF = "/assets/models/rassor_rover.glb";
-// Target world size for the model's LARGEST bbox dimension. Matches the visible
-// footprint of the primitive fallback (~1 unit), so the realistic body and the
-// fallback read at the same scale under the same hit-proxy/halos.
+// The native (authored) size the rover body, primitive fallback, hit-proxy, and
+// halos were all laid out at — the model's LARGEST bbox dim fits to this, and the
+// primitive box/mast/wheels + hit sphere + halo rings are all proportioned around
+// it. We DON'T retune those constants individually; instead the whole rover group
+// is scaled by ROVER_SCALE below so its real size is literal (Epic 04 P0) while
+// the body still exactly fills its hit-proxy (ADR-0004 no-missed-click).
 const ROVER_MODEL_FIT = 1.15;
+const ROVER_BASE_SIZE = ROVER_MODEL_FIT;
+
+// The LITERAL scene size of a rover (2.5 m real → 0.3 scene units), from the one
+// fixed real-meters→scene-units scale. Both the visible body AND the invisible
+// hit-proxy sphere derive from this (the whole rover group is scaled by
+// ROVER_SCALE), so a click can never miss the rover the user sees — the proxy and
+// the body scale together (Epic 04 P0; ADR-0004).
+const ROVER_SCENE_SIZE = REAL_METERS.rover * SCENE_UNITS_PER_METER;
+const ROVER_SCALE = ROVER_SCENE_SIZE / ROVER_BASE_SIZE;
 
 // fitAndSeatRover normalizes a loaded model in place (mirrors LaunchScenery's
 // fitAndSeat): scale its largest dimension to `fit`, recenter on x/z, and seat
@@ -886,10 +901,16 @@ function Rover3D({ rover, map, geo, selected, beats, onPick }: Rover3DProps) {
         : SIGNAL_DOWN;
 
   return (
-    <group position={[p.x, p.y, p.z]}>
+    // The group is PLACED by map.at (world position) and SCALED to the rover's
+    // literal real-world size (Epic 04 P0): every child — the hit-proxy, the body,
+    // the halos/rings, dust, battery — scales together by ROVER_SCALE, so the
+    // proxy still exactly covers the visible body (ADR-0004 no-missed-click) and
+    // the affordances stay proportional to the (now real-sized) rover.
+    <group position={[p.x, p.y, p.z]} scale={ROVER_SCALE}>
       {/* Invisible, generous hit-proxy. Larger than the visible body so clicks
-          reliably land; shares this group's transform (= map.at), so the raycast
-          hit and the rendered rover are positioned by the exact same math. */}
+          reliably land; shares this group's transform (= map.at · ROVER_SCALE), so
+          the raycast hit and the rendered rover are positioned + sized by the exact
+          same math. */}
       <mesh
         geometry={geo.hit}
         position={[0, 0.45, 0]}
@@ -1883,17 +1904,19 @@ const VIEW_PRESETS: Record<
   }
 > = {
   surface: {
-    // FOV widened 42→50 (#101) makes the worksite subtend more of the frame, so
-    // the surface distance band is pulled IN by ~tan(21°)/tan(25°) ≈ 0.82 (10→8,
-    // 40→33) to hold the rehearsed framing — the dome/rovers fill the same screen
-    // area at the wider lens.
-    minDistance: 8,
-    maxDistance: 33,
+    // Pulled IN for the LITERAL real-meters scale (Epic 04 P0): the worksite now
+    // renders at its true ~5-unit footprint (was an autoscaled ~20-unit slab), so
+    // the orbit distance band drops (8→5, 33→24) and the target sits on the small
+    // worksite cluster (centred near the mock dome) rather than a point 4 units up
+    // in the air — otherwise CameraFeel/OrbitControls clamp the camera far away
+    // from the now-small worksite and it never frames. Tune on screen.
+    minDistance: 3,
+    maxDistance: 22,
     minPolarAngle: Math.PI / 6,
     // Allow a flatter, more horizon-facing look (up to ~80° from vertical) so the
     // plain + sky + distant Earth read; still clamped short of dipping under it.
     maxPolarAngle: Math.PI / 2.25,
-    target: [0, 4, 0],
+    target: [2.5, 0.5, -2],
   },
   orbit: {
     // The space vista: the camera ORBITS THE MOON GLOBE itself (target = the
@@ -1919,10 +1942,13 @@ type Pose = { position: THREE.Vector3; target: THREE.Vector3 };
 // Surface: the rehearsed worksite framing (matches the Canvas `camera` default).
 // A lower pitch that looks OUT toward the horizon so the regolith plain recedes
 // into the fog and the sky (with a distant Earth) reads above it — "standing on
-// the Moon," not staring straight down at a platform.
+// the Moon," not staring straight down at a platform. Pulled in (Epic 04 P0): the
+// worksite now renders at its LITERAL real size (a ~2–3 unit dome cluster, not
+// the old autoscaled ~20-unit slab), so the camera berths close to read the
+// rovers + rising dome, with the literally-sized launch complex towering behind.
 const SURFACE_POSE: Pose = {
-  position: new THREE.Vector3(0, 11, 30),
-  target: new THREE.Vector3(0, 4, 0),
+  position: new THREE.Vector3(2.5, 5, 6),
+  target: new THREE.Vector3(2.5, 0.5, -2),
 };
 // A high vantage straight over the worksite — the start/end of the descent half,
 // so the surface "drops in" from above rather than cutting in flat.
@@ -2391,18 +2417,15 @@ function SceneContents({
     if (beats.current.length > 0 || before > 0) invalidate();
   });
 
-  // The world→scene map (and the task lookup) only change when a new snapshot
-  // arrives, so memoize them on snapshot identity rather than rebuilding every
-  // render — cheap, but it keeps the snapshot pass allocation-light.
+  // The world→scene map is now FIXED (Epic 04 P0): a single real-meters scale +
+  // the default site frame, independent of the snapshot, so the framing never
+  // jitters as the swarm moves and every object renders at its true relative
+  // size. Memoized once (empty deps). The full per-site SITE_FRAMES table is a
+  // later slice — P0 uses the single DEFAULT_SITE_FRAME. The task lookup still
+  // tracks the snapshot.
   const map = useMemo(
-    () =>
-      snapshot
-        ? sceneMap(
-            snapshot.rovers.map((r) => r.pos),
-            snapshot.tasks.map((t) => t.pos),
-          )
-        : null,
-    [snapshot],
+    () => siteMap(DEFAULT_SITE_FRAME),
+    [],
   );
   const taskById = useMemo(
     () => (snapshot ? new Map(snapshot.tasks.map((t) => [t.id, t])) : null),
@@ -3003,7 +3026,7 @@ export function Scene3D({
         // its gl note + the logdepthbuf_* chunks in SkyBodies.tsx).
         // fov widened 42→50 (#101) for a more immersive, cinematic field — the
         // surface distance band (VIEW_PRESETS) is pulled in to hold framing.
-        camera={{ position: [0, 11, 30], fov: 50, near: 0.1, far: 8000 }}
+        camera={{ position: [2.5, 5, 6], fov: 50, near: 0.1, far: 8000 }}
         // While placing, a click on empty space confirms the drop; otherwise it
         // deselects a rover (the existing behaviour).
         onPointerMissed={() => (placing ? onPlaceConfirm?.() : onPick(null))}

@@ -9,9 +9,10 @@
 // see types/wire.ts). We map that 2D worksite onto the ground plane of a 3D
 // scene: world X → scene x, world Y → scene -z (so +Y world reads as "into the
 // screen / away from camera", the natural top-down→isometric reading). World
-// units are scaled uniformly so the whole worksite fits a fixed ground span,
-// regardless of how spread out the rovers/tasks are — nothing here invents world
-// state; it only positions authoritative snapshot points in the scene.
+// units are scaled by a FIXED real-meters→scene-units factor (Epic 04 P0), so
+// every object reads at its true relative size and the framing is stable across
+// snapshots — nothing here invents world state; it only positions authoritative
+// snapshot points in the scene.
 
 import type { TaskView, Vec2 } from "../types/wire";
 
@@ -20,6 +21,63 @@ import type { TaskView, Vec2 } from "../types/wire";
 // span with a margin, so the camera framing is stable across snapshots.
 export const GROUND_SPAN = 20;
 export const GROUND_MARGIN = 2.5; // scene units of padding around the worksite
+
+// ---- real-world scale (Epic 04 P0) -----------------------------------------
+//
+// The single fixed world→scene scale: 1 real meter = SCENE_UNITS_PER_METER scene
+// units (so 1 scene unit ≈ 8.3 m). This REPLACES the old per-snapshot autoscale
+// (sceneMap fit-the-bbox-into-GROUND_SPAN), which silently rescaled the whole
+// worksite as the swarm spread/moved — making sizes meaningless and the framing
+// jitter. With a fixed scale every object is drawn at its true relative size and
+// the camera composition is stable across snapshots. Tune on screen.
+export const SCENE_UNITS_PER_METER = 0.12;
+
+// Real-world sizes (meters) of every scene object — the single source of truth
+// for believable relative scale. A scene size is REAL_METERS[k] *
+// SCENE_UNITS_PER_METER, so e.g. the mobile launcher (120 m · 0.12 = 14.4 u)
+// towers ~60:1 over an astronaut (2 m · 0.12 = 0.24 u) — real proportions, not
+// hand-tuned guesses.
+export const REAL_METERS = {
+  rover: 2.5,
+  astronaut: 2.0,
+  habitat: 6.0,
+  baseStation: 4.0,
+  crawler: 40,
+  mobileLauncher: 120,
+  gantry: 90,
+  lander: 7.0,
+  solarPanel: 10,
+  commsMast: 12,
+  commsDish: 6,
+  radome: 5,
+} as const;
+
+// A per-site framing transform. The fixed scale is uniform across sites; each
+// site recenters its worksite (cx,cy in world coords) onto the scene origin and
+// rotates it (rot, radians) so the hero composition is art-directed per site.
+// `worksiteUnitsToMeters` converts the (abstract) worksite units into meters —
+// the single remaining free knob for a site's overall footprint (start 1.0).
+export type SiteFrame = {
+  cx: number;
+  cy: number;
+  rot: number;
+  worksiteUnitsToMeters: number;
+};
+
+// The default (single-site) frame for P0: worksite origin at the scene origin, no
+// rotation. The dome ring radii (24/46) are ABSTRACT worksite units, not meters
+// (see SiteFrame.worksiteUnitsToMeters), so we read them as ~2.5 m each — a ~45 m
+// construction site — which renders the worksite at a readable ~5–6 scene-unit
+// footprint while the literally-sized launch complex (120 m launcher → 14.4 u)
+// still towers believably over it. This is the single free framing knob (tune on
+// screen). The full per-site SITE_FRAMES table is a later slice — P0 only needs
+// siteMap to exist and take a frame.
+export const DEFAULT_SITE_FRAME: SiteFrame = {
+  cx: 0,
+  cy: 0,
+  rot: 0,
+  worksiteUnitsToMeters: 2.5,
+};
 
 // The Moon globe's berth + radius (orbit-view hero). Lives here, not in the
 // SkyBodies component, so BOTH the renderer (SkyBodies) and the camera framing
@@ -104,8 +162,10 @@ export type Bounds = { minX: number; minY: number; maxX: number; maxY: number };
 export type ScenePoint = { x: number; y: number; z: number };
 
 // Bounding box over all worksite points. A zero-size span (single point /
-// colinear worksite) is nudged out by 1 world unit so the fit never divides by
+// colinear worksite) is nudged out by 1 world unit so a consumer never divides by
 // zero — identical guard to hitTest.computeBounds, kept local to avoid coupling.
+// NB (Epic 04 P0): this NO LONGER drives the scene scale (the scale is now fixed);
+// it is retained, exported, for tests and any bbox consumer.
 export function computeBounds(points: Vec2[]): Bounds {
   if (points.length === 0) return { minX: 0, minY: 0, maxX: 1, maxY: 1 };
   let minX = Infinity,
@@ -131,8 +191,9 @@ export function computeBounds(points: Vec2[]): Bounds {
 
 // A world→scene mapper. `at(pos, height)` projects a world Vec2 onto the ground
 // plane (height = y, the elevation above the ground, default 0). `scale` is the
-// uniform world→scene factor, exposed so callers can size meshes consistently
-// (e.g. a rover's hit-proxy in scene units).
+// fixed world→scene factor (SCENE_UNITS_PER_METER · worksiteUnitsToMeters),
+// exposed so callers can size worksite-relative meshes consistently (e.g. the
+// placement-ghost footprint in scene units).
 export type SceneMap = {
   scale: number;
   at: (pos: Vec2, height?: number) => ScenePoint;
@@ -143,33 +204,36 @@ export type SceneMap = {
   invert: (x: number, z: number) => Vec2;
 };
 
-// Build the world→scene mapper from ALL worksite points (rovers + tasks), so the
-// framing is shared and stable. Uniform scale fits the worksite bounding box
-// inside (GROUND_SPAN - 2*GROUND_MARGIN); the box is centered on the origin.
-// World X maps to scene +x; world Y maps to scene -z (so +Y heads away from a
-// camera placed on the +z side). This is the single source of truth used for
-// BOTH rendering and the raycast hit-proxy — they can never disagree.
-export function sceneMap(rovers: Vec2[], tasks: Vec2[]): SceneMap {
-  const b = computeBounds([...rovers, ...tasks]);
-  const spanX = b.maxX - b.minX;
-  const spanY = b.maxY - b.minY;
-  const usable = GROUND_SPAN - GROUND_MARGIN * 2;
-  const scale = Math.min(usable / spanX, usable / spanY);
-
-  const cx = (b.minX + b.maxX) / 2;
-  const cy = (b.minY + b.maxY) / 2;
-
+// Build the world→scene mapper from a per-site framing transform. The scale is
+// FIXED (SCENE_UNITS_PER_METER · worksiteUnitsToMeters), NOT fit-to-bbox — so
+// every object renders at its true relative size and the framing never jitters as
+// the swarm moves (Epic 04 P0). The frame recenters the site's worksite onto the
+// scene origin (cx,cy) and rotates it (rot). World X maps to scene +x, world Y to
+// scene -z (so +Y heads away from a camera on the +z side). This is the single
+// source of truth used for BOTH rendering and the raycast hit-proxy — they can
+// never disagree, and `at`/`invert` stay exact inverses (drag-to-place + the
+// hit-proxy depend on it).
+export function siteMap(site: SiteFrame): SceneMap {
+  const s = SCENE_UNITS_PER_METER * site.worksiteUnitsToMeters;
+  const { cx, cy, rot } = site;
+  const cos = Math.cos(rot),
+    sin = Math.sin(rot);
   return {
-    scale,
-    at: (pos: Vec2, height = 0): ScenePoint => ({
-      x: (pos.X - cx) * scale,
-      y: height,
-      z: -(pos.Y - cy) * scale,
-    }),
-    invert: (x: number, z: number): Vec2 => ({
-      X: x / scale + cx,
-      Y: -z / scale + cy,
-    }),
+    scale: s,
+    at: (p: Vec2, height = 0): ScenePoint => {
+      const dx = p.X - cx,
+        dy = p.Y - cy;
+      const rx = dx * cos - dy * sin,
+        ry = dx * sin + dy * cos;
+      return { x: rx * s, y: height, z: -ry * s };
+    },
+    invert: (x: number, z: number): Vec2 => {
+      const rx = x / s,
+        ry = -z / s;
+      const dx = rx * cos + ry * sin,
+        dy = -rx * sin + ry * cos;
+      return { X: dx + cx, Y: dy + cy };
+    },
   };
 }
 
