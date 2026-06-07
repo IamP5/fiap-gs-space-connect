@@ -27,6 +27,7 @@ import { Instance, Instances } from "@react-three/drei";
 import { useThree } from "@react-three/fiber";
 import * as THREE from "three";
 import { GROUND_SPAN } from "../lib/scene";
+import { applyMaxAnisotropy } from "../lib/textureFidelity";
 
 // Self-hosted CC0 boulder diffuse (Poly Haven "Rock Boulder Dry", 512). Already
 // vendored + credited in public/assets/CREDITS.md — no new asset introduced.
@@ -67,6 +68,7 @@ function mulberry32(seed: number) {
 
 export function DecorRocks() {
   const invalidate = useThree((s) => s.invalidate);
+  const gl = useThree((s) => s.gl);
   const [colorMap, setColorMap] = useState<THREE.Texture | null>(null);
 
   // One low-poly rock geometry for the whole field, created ONCE. Icosahedron
@@ -113,6 +115,9 @@ export function DecorRocks() {
           return;
         }
         tex.colorSpace = THREE.SRGBColorSpace;
+        // Max anisotropy (#100): the rock field sprawls to the terrain edge, so
+        // far rocks are seen at a grazing angle — sharpen them like the terrain.
+        applyMaxAnisotropy(tex, gl.capabilities.getMaxAnisotropy());
         loaded = tex;
         setColorMap(tex);
         invalidate(); // wake the demand loop once so the new skin shows
@@ -126,7 +131,7 @@ export function DecorRocks() {
       disposed = true;
       loaded?.dispose();
     };
-  }, [invalidate]);
+  }, [invalidate, gl]);
 
   // Dispose the geometry we own on unmount (the material is disposed by r3f).
   useEffect(() => () => geometry.dispose(), [geometry]);

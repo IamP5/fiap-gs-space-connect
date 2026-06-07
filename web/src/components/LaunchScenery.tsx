@@ -26,6 +26,7 @@ import { MeshoptDecoder } from "three/examples/jsm/libs/meshopt_decoder.module.j
 // if they don't. We pre-bucket by that signature so it never fails (see below).
 import { mergeGeometries } from "three/examples/jsm/utils/BufferGeometryUtils.js";
 import { suppressRaycast } from "../lib/suppressRaycast";
+import { applyGltfTextureFidelity } from "../lib/textureFidelity";
 
 // Self-contained loader + cache (mirrors Scene3D's loadGLTF): N references to the
 // same .glb parse it ONCE, and the parsed scene is cloned per placement so
@@ -342,6 +343,7 @@ function sliceGroup(
 function SceneryPiece({ piece }: { piece: SetPiece }) {
   const [scene, setScene] = useState<THREE.Group | null>(null);
   const invalidate = useThree((s) => s.invalidate);
+  const gl = useThree((s) => s.gl);
 
   // The merged geometries we BUILD are new owned GPU buffers (unlike the shared
   // cached source geometry), so we must dispose them on unmount to avoid a leak.
@@ -389,6 +391,10 @@ function SceneryPiece({ piece }: { piece: SetPiece }) {
         // predictable size, centered on x/z and seated on y=0, so the wrapping
         // group's position drops it onto the ground at a sensible scale.
         fitAndSeat(obj, piece.fit);
+        // Texture fidelity sweep (#100): max anisotropy + per-channel colourSpace
+        // + crisp data-map mip filtering. Runs BEFORE mergeSetPiece, which buckets
+        // by material identity and reuses these same (now-corrected) materials.
+        applyGltfTextureFidelity(obj, gl.capabilities.getMaxAnisotropy());
         // Collapse the normalized child-mesh tree into one merged mesh per
         // material (#58b): same silhouette/placement/materials, far fewer draw
         // calls. The merged group expects the SAME wrapping group below, since
@@ -404,7 +410,7 @@ function SceneryPiece({ piece }: { piece: SetPiece }) {
     return () => {
       disposed = true;
     };
-  }, [piece.modelRef, piece.fit, invalidate]);
+  }, [piece.modelRef, piece.fit, invalidate, gl]);
 
   if (!scene) {
     // Box fallback: parked at the set-piece position, raised by half its height

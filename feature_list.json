@@ -992,7 +992,7 @@
       "area": "realistic-3d-world",
       "title": "Texture fidelity pass (anisotropy, glTF colorspace, data-map filtering, Moon normalScale)",
       "user_visible_behavior": "All textures stay crisp at grazing angles with correct colorspace; the Moon shows sharper crater rims.",
-      "status": "not_started",
+      "status": "passing",
       "issue": 100,
       "epic": 46,
       "depends_on": [],
@@ -1000,7 +1000,10 @@
         "cd web && npm run build && npm test (TS-clean + vitest)",
         "manual: orbit & surface screenshots; animated slices pause when the tab is hidden"
       ],
-      "evidence": [],
+      "evidence": [
+        "Built on branch worktree-agent-a8c45e933c9cfadd0 (commit feat(web): texture fidelity pass (#100)) — shared lib/textureFidelity.ts (applyMaxAnisotropy + applyGltfTextureFidelity) wired into DecorRocks, Scene3D SpecModel/RoverBody, LaunchScenery SceneryPiece; glTF maps get colorSpace by channel (color->SRGB, normal/rough/metal/ao->NoColorSpace) + max anisotropy + LinearMipmapNearestFilter on data maps; Moon near normalScale 0.9->1.1 (far unchanged).",
+        "cd web && npm run lint + npm run build (tsc-clean) + npm test GREEN — 122 tests pass (12 files), incl. new textureFidelity.test.ts (6). Static slice; 0 idle fps + primitive fallbacks preserved."
+      ],
       "notes": "Wave 3 (cinematic beauty & immersion). AFK."
     },
     {

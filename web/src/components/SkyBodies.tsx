@@ -499,15 +499,15 @@ function MoonGlobe({ visible }: { visible: boolean }) {
     });
     // Normal-map strength. With the orbit fill light crushed (Scene3D), crater
     // relief now has to come from the normal map under the raking sun — so the
-    // near (L0) material is pushed to ~0.9 for strong crater-rim definition at
-    // orbit-close distance; the far (L1) material stays softer (~0.6) so distant
-    // frames don't over-shade near the terminator. (Baked from the LOLA LDEM-16
-    // tier and delivered at 4096×2048 — 4× the prior linear detail.)
-    // Pushed a touch (0.9→1.05 / 0.6→0.72) for Wave 4: with the decoupled orbit sun
-    // now back/side-lighting the Moon (dark-side crescent — SVS #14992), the
-    // surviving sunlit limb is a RAKING light, so stronger crater-rim relief reads as
-    // dramatic terminator detail rather than over-shading.
-    matNear.normalScale.set(1.05, 1.05);
+    // near (L0) material is pushed to ~1.1 for sharper crater-rim definition at
+    // orbit-close distance (#100, was 0.9 → Wave 4 1.05 → #100 1.1); the far (L1)
+    // material stays softer so distant frames don't over-shade near the terminator.
+    // (Baked from the LOLA LDEM-16 tier, delivered at 4096×2048 — 4× the prior linear
+    // detail.) Wave 4 raised the far value 0.6→0.72: with the decoupled orbit sun now
+    // back/side-lighting the Moon (dark-side crescent — SVS #14992), the surviving
+    // sunlit limb is a RAKING light, so stronger crater-rim relief reads as dramatic
+    // terminator detail rather than over-shading — kept here over #100's older 0.6.
+    matNear.normalScale.set(1.1, 1.1);
     matFar.normalScale.set(0.72, 0.72);
     // Terminator rim-glow + limb darkening (#103). Patched onto BOTH LOD materials
     // (the far/L1 is MATCHED to the near/L1) so the limb reads identically across
