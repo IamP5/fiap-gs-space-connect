@@ -12,6 +12,11 @@ the three invariants that make the renderer trustworthy.
   research & integration guide: asset tables (with licenses + verified URLs), the
   R3F v8 compatibility matrix, integration architecture, the ADR-0004 amendment,
   and a v8-annotated techniques cheat-sheet.
+- [`space-view-realism.md`](./space-view-realism.md) — NASA SVS reference study
+  (CGI Moon Kit 4720, near/far-side phases 14992, descent flythrough 4444):
+  lighting re-grade, earthshine, Moon/Earth material, orbit→surface descent
+  choreography, Milky-Way background + nebula hero, and a tiered implementation
+  plan. Follow-on focused on the **space/orbit view** look-and-feel.
 - [`issues/`](./issues/) — the implementation plan as one markdown file per issue
   (epic [#46](./issues/46-epic-realistic-lunar-3d-world.md) + child slices
   [#47](./issues/47-amend-adr-0004-scope-guard.md)–[#61](./issues/61-live-mode-asset-placement.md)),

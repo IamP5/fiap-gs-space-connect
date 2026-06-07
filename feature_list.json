@@ -1,13 +1,14 @@
 {
   "project": "SwarmBuild",
-  "last_updated": "2026-06-06",
-  "description": "Machine-readable source of truth for feature status. The scheduler picks the lowest-priority feature that is not 'passing'; the verifier gates the transition to 'passing'. See docs/harness/README.md.",
+  "last_updated": "2026-06-07",
+  "description": "Machine-readable source of truth for feature status. The scheduler picks the lowest-priority feature that is not 'passing'; the verifier gates the transition to 'passing'. Each feature that maps to the GitHub tracker carries `issue` (GitHub #) and `epic` (GitHub #); merging its PR closes the issue (the issue-sync Action) and the same PR flips the feature to 'passing' with evidence. See docs/harness/issue-tracking.md + docs/harness/README.md.",
   "rules": {
     "single_active_feature": true,
     "passing_requires_evidence": true,
     "do_not_skip_verification": true,
     "do_not_edit_status_to_hide_unfinished_work": true,
-    "respect_depends_on_order": true
+    "respect_depends_on_order": true,
+    "cross_reference_github_issue": "every tracker-mapped feature carries `issue` + `epic`; feature.status and the GitHub issue state must agree (passing <-> closed)"
   },
   "status_legend": {
     "not_started": "Work has not begun.",
@@ -34,7 +35,10 @@
         "make check (backend suite green)",
         "./deploy/smoke.sh reaches a connected gateway and the stack runs end-to-end"
       ],
-      "evidence": ["make check green @ fedd919 (vet ok, golangci-lint 0 issues, go test -race ./... all ok, go1.25.5)", "./deploy/smoke.sh PASS — stack healthy, runs end-to-end"],
+      "evidence": [
+        "make check green @ fedd919 (vet ok, golangci-lint 0 issues, go test -race ./... all ok, go1.25.5)",
+        "./deploy/smoke.sh PASS — stack healthy, runs end-to-end"
+      ],
       "notes": "Built and merged. E2E path is asserted by deploy/smoke.sh."
     },
     {
@@ -44,9 +48,15 @@
       "title": "Rovers move & drain battery; cost function",
       "user_visible_behavior": "Rovers move toward awarded tasks, drain battery, and bid using a distance/battery/capability/load cost function.",
       "status": "passing",
-      "depends_on": ["mvp-01"],
-      "verification": ["go test -race ./internal/agent/... ./internal/core/allocation/..."],
-      "evidence": ["make check green @ fedd919 (internal/agent, internal/core/allocation tests ok)"],
+      "depends_on": [
+        "mvp-01"
+      ],
+      "verification": [
+        "go test -race ./internal/agent/... ./internal/core/allocation/..."
+      ],
+      "evidence": [
+        "make check green @ fedd919 (internal/agent, internal/core/allocation tests ok)"
+      ],
       "notes": ""
     },
     {
@@ -56,9 +66,17 @@
       "title": "Self-heal core — heartbeat, expiry, re-auction",
       "user_visible_behavior": "A silent rover's lease expires exactly once and its task returns to UNCLAIMED for re-auction, with no supervisory logic and no Earth intervention.",
       "status": "passing",
-      "depends_on": ["mvp-02"],
-      "verification": ["go test -race ./internal/core/lease/... ./internal/coordinator/...", "smoke.sh asserts 'msg=expiry task=wall-1 ... returned to UNCLAIMED'"],
-      "evidence": ["make check green @ fedd919 (internal/core/lease, internal/coordinator tests ok)", "./deploy/smoke.sh PASS — 'msg=expiry task=wall-1 ... returned to UNCLAIMED' then dome-cap complete"],
+      "depends_on": [
+        "mvp-02"
+      ],
+      "verification": [
+        "go test -race ./internal/core/lease/... ./internal/coordinator/...",
+        "smoke.sh asserts 'msg=expiry task=wall-1 ... returned to UNCLAIMED'"
+      ],
+      "evidence": [
+        "make check green @ fedd919 (internal/core/lease, internal/coordinator tests ok)",
+        "./deploy/smoke.sh PASS — 'msg=expiry task=wall-1 ... returned to UNCLAIMED' then dome-cap complete"
+      ],
       "notes": "The entire product pitch. Self-heal = expiry + re-auction."
     },
     {
@@ -68,9 +86,15 @@
       "title": "Kill control — live headline",
       "user_visible_behavior": "An operator kills a rover mid-task from the dashboard and the worksite reorganises live.",
       "status": "passing",
-      "depends_on": ["mvp-03"],
-      "verification": ["go test -race ./internal/killer/... ./internal/agent/..."],
-      "evidence": ["make check green @ fedd919 (internal/killer, internal/agent tests ok); KILL modelled as recoverable in-place outage (4a990fa, 3c18a39)"],
+      "depends_on": [
+        "mvp-03"
+      ],
+      "verification": [
+        "go test -race ./internal/killer/... ./internal/agent/..."
+      ],
+      "evidence": [
+        "make check green @ fedd919 (internal/killer, internal/agent tests ok); KILL modelled as recoverable in-place outage (4a990fa, 3c18a39)"
+      ],
       "notes": ""
     },
     {
@@ -80,9 +104,17 @@
       "title": "Habitat dome blueprint + 5-6 rover swarm",
       "user_visible_behavior": "A dome blueprint decomposes into foundation/wall/cap tasks with dependencies; a 5-6 rover swarm builds it and the dome closes (dome-cap DONE).",
       "status": "passing",
-      "depends_on": ["mvp-04"],
-      "verification": ["go test -race ./internal/core/planner/... ./internal/core/world/...", "smoke.sh asserts 'msg=complete task=dome-cap'"],
-      "evidence": ["make check green @ fedd919 (internal/core/planner, internal/core/world tests ok)", "./deploy/smoke.sh PASS — 'msg=complete task=dome-cap' (dome closed)"],
+      "depends_on": [
+        "mvp-04"
+      ],
+      "verification": [
+        "go test -race ./internal/core/planner/... ./internal/core/world/...",
+        "smoke.sh asserts 'msg=complete task=dome-cap'"
+      ],
+      "evidence": [
+        "make check green @ fedd919 (internal/core/planner, internal/core/world tests ok)",
+        "./deploy/smoke.sh PASS — 'msg=complete task=dome-cap' (dome closed)"
+      ],
       "notes": ""
     },
     {
@@ -92,9 +124,16 @@
       "title": "Choreography / demo-pacing",
       "user_visible_behavior": "The demo paces self-heal beats (lease draining, re-auction, replacement driving over) so an evaluator can see them; every beat derives from a real worksite event.",
       "status": "passing",
-      "depends_on": ["mvp-05"],
-      "verification": ["go test -race ./internal/demo/...", "manual: run make demo and watch the beats land in order"],
-      "evidence": ["make check green @ fedd919 (internal/demo tests ok)"],
+      "depends_on": [
+        "mvp-05"
+      ],
+      "verification": [
+        "go test -race ./internal/demo/...",
+        "manual: run make demo and watch the beats land in order"
+      ],
+      "evidence": [
+        "make check green @ fedd919 (internal/demo tests ok)"
+      ],
       "notes": "HITL/visual slice — backend logic unit-tested; pacing confirmed manually in the dashboard."
     },
     {
@@ -104,9 +143,16 @@
       "title": "react-three-fiber 3D scene",
       "user_visible_behavior": "The dashboard renders the worksite in 3D as a pure re-render of the server snapshot (ADR-0004).",
       "status": "passing",
-      "depends_on": ["mvp-06"],
-      "verification": ["cd web && npm run build && npm test", "manual: 3D scene renders and re-renders cleanly on snapshot updates"],
-      "evidence": ["WEB=1 ./init.sh green @ fedd919 (vite build TS-clean, vitest 7 files / 60 tests pass); 3D renderer code-split into a lazy chunk (c980b64); demand-driven re-render-free scene (cdf8246)"],
+      "depends_on": [
+        "mvp-06"
+      ],
+      "verification": [
+        "cd web && npm run build && npm test",
+        "manual: 3D scene renders and re-renders cleanly on snapshot updates"
+      ],
+      "evidence": [
+        "WEB=1 ./init.sh green @ fedd919 (vite build TS-clean, vitest 7 files / 60 tests pass); 3D renderer code-split into a lazy chunk (c980b64); demand-driven re-render-free scene (cdf8246)"
+      ],
       "notes": "HITL/visual slice. Re-run web baseline (WEB=1 ./init.sh) when touching web/."
     },
     {
@@ -116,9 +162,15 @@
       "title": "Failure-probability slider",
       "user_visible_behavior": "A slider sets per-rover failure probability so the swarm self-heals under sustained, random failure.",
       "status": "passing",
-      "depends_on": ["mvp-03"],
-      "verification": ["go test -race ./internal/... ; manual: drive the slider and observe sustained self-heal"],
-      "evidence": ["failure + latency sliders and Earth telemetry panel (d5e5d87); make check green @ fedd919"],
+      "depends_on": [
+        "mvp-03"
+      ],
+      "verification": [
+        "go test -race ./internal/... ; manual: drive the slider and observe sustained self-heal"
+      ],
+      "evidence": [
+        "failure + latency sliders and Earth telemetry panel (d5e5d87); make check green @ fedd919"
+      ],
       "notes": ""
     },
     {
@@ -128,9 +180,15 @@
       "title": "Latency slider + Earth-uplink shim",
       "user_visible_behavior": "A slider injects Earth-link latency, showing tactical decisions never wait for Earth.",
       "status": "passing",
-      "depends_on": ["mvp-03"],
-      "verification": ["go test -race ./internal/... ; manual: raise latency and confirm the tactical loop is unaffected"],
-      "evidence": ["failure + latency sliders and Earth telemetry panel (d5e5d87); make check green @ fedd919"],
+      "depends_on": [
+        "mvp-03"
+      ],
+      "verification": [
+        "go test -race ./internal/... ; manual: raise latency and confirm the tactical loop is unaffected"
+      ],
+      "evidence": [
+        "failure + latency sliders and Earth telemetry panel (d5e5d87); make check green @ fedd919"
+      ],
       "notes": ""
     },
     {
@@ -140,9 +198,15 @@
       "title": "CRDT partition narrative (stretch)",
       "user_visible_behavior": "A partition splits the swarm; rovers keep working their local World Model slice and reconcile conflict-free when the link returns.",
       "status": "passing",
-      "depends_on": ["mvp-05"],
-      "verification": ["go test -race ./internal/... ; manual: trigger a partition in the lab and watch reconciliation"],
-      "evidence": ["container encore + CRDT partition narrative (7303ca6); partition lab redesign (12d2fad)"],
+      "depends_on": [
+        "mvp-05"
+      ],
+      "verification": [
+        "go test -race ./internal/... ; manual: trigger a partition in the lab and watch reconciliation"
+      ],
+      "evidence": [
+        "container encore + CRDT partition narrative (7303ca6); partition lab redesign (12d2fad)"
+      ],
       "notes": "Stretch. CRDT is a tested module on the side of the single-writer live path (ADR-0003)."
     },
     {
@@ -152,12 +216,17 @@
       "title": "Container encore (stretch)",
       "user_visible_behavior": "A rover runs as a genuinely separate system (pod-per-rover); a real kubectl delete kills it and the swarm heals over the bus.",
       "status": "passing",
-      "depends_on": ["mvp-05"],
-      "verification": ["manual: pod-per-rover k8s mode, kubectl-delete a rover, observe heal; ./deploy/smoke.sh for the compose path"],
-      "evidence": ["pod-per-rover Kubernetes mode with real kubectl-delete kills (e3cc5e3); in-dashboard reload + auto port-forward (ca0ff34)"],
+      "depends_on": [
+        "mvp-05"
+      ],
+      "verification": [
+        "manual: pod-per-rover k8s mode, kubectl-delete a rover, observe heal; ./deploy/smoke.sh for the compose path"
+      ],
+      "evidence": [
+        "pod-per-rover Kubernetes mode with real kubectl-delete kills (e3cc5e3); in-dashboard reload + auto port-forward (ca0ff34)"
+      ],
       "notes": "Stretch (ADR-0001 encore)."
     },
-
     {
       "id": "bh-01",
       "priority": 12,
@@ -165,7 +234,9 @@
       "title": "Build-spec seam + renderer interpreter + fallback (no LLM)",
       "user_visible_behavior": "A Build spec (declarative build operations) is carried in the Task snapshot and the renderer interprets it into geometry; a deterministic fallback spec exists so the scene renders with no LLM in the loop.",
       "status": "passing",
-      "depends_on": ["mvp-07"],
+      "depends_on": [
+        "mvp-07"
+      ],
       "verification": [
         "go test -race ./... (new build-spec module green)",
         "cd web && npm run build && npm test (renderer interprets a spec, falls back when none)",
@@ -185,8 +256,12 @@
       "title": "Streamed, durable, resumable build ops (no LLM)",
       "user_visible_behavior": "Build ops stream into the snapshot and are durable + resumable across a rover outage (ADR-0007), still with no LLM.",
       "status": "passing",
-      "depends_on": ["bh-01"],
-      "verification": ["go test -race ./... ; ./deploy/smoke.sh still passes; manual: interrupt mid-build and confirm resume from durable ops"],
+      "depends_on": [
+        "bh-01"
+      ],
+      "verification": [
+        "go test -race ./... ; ./deploy/smoke.sh still passes; manual: interrupt mid-build and confirm resume from durable ops"
+      ],
       "evidence": [
         "Rover streams ops on build.op.<task> (SubjBuildOp, BuildOpMsg); coordinator validates+appends on the single-writer, mirrors spec to NATS KV, ops ride the snapshot",
         "resume-on-kill: accumulated spec survives lease expiry; replacement resumes appending; kill-mid-build op-set convergence integration test stable across 5× race runs",
@@ -201,9 +276,22 @@
       "title": "Model seam + one provider; bake one spec",
       "user_visible_behavior": "Behind the Model seam, one LLM provider generates a single Build spec offline ('bake'); swapping the provider is a config change, not a harness change.",
       "status": "passing",
-      "depends_on": ["bh-02"],
-      "verification": ["go test -race ./... (model seam unit-tested with a fake provider; validate-and-repair + fallback-on-exhaustion)", "go test -race ./... includes an import-graph architecture test asserting internal/harness/model is NOT in the import closure of the hot-path packages (allocation/auction, lease/heartbeat, expiry, tick) — ADR-0005", "manual: bake one spec and render it; confirm no API key reaches the browser"],
-      "evidence": ["internal/harness/model: Model interface + openai-go/v3 adapter (provider/base_url/model/key config); FakeModel contract test proves validate-and-repair (re-ask once) and fallback-on-exhaustion (model_test.go, no network)", "internal/harness/archtest: import-graph test asserts internal/harness/model NOT in the closure of allocation/lease/world/planner/coordinator — `go list -deps`, skips if go absent (ADR-0005)", "cmd/bake + internal/harness/bake: live gpt-4o-2024-08-06 bake produced 6-op foundation-1 spec → internal/harness/cache/specs/dome_foundation-1_3ae7e393_gpt-4o-2024-08-06.json (committed, declarative data, no key)", "headline replay: demo Rovers carry BlueprintID; embedded go:embed cache → deterministic replay (cache_test + coordinator/replay_test: hit replays baked spec, forced miss falls back to primitive, Task still DONE)", "smoke (Docker): self-heal fired + dome closed; live WS snapshot foundation-1 carried the exact baked spec, status DONE", "make check green: vet + golangci-lint (0 issues) + go test -race -shuffle=on ./...; go mod tidy clean; .env gitignored (only .env.example committed)"],
+      "depends_on": [
+        "bh-02"
+      ],
+      "verification": [
+        "go test -race ./... (model seam unit-tested with a fake provider; validate-and-repair + fallback-on-exhaustion)",
+        "go test -race ./... includes an import-graph architecture test asserting internal/harness/model is NOT in the import closure of the hot-path packages (allocation/auction, lease/heartbeat, expiry, tick) — ADR-0005",
+        "manual: bake one spec and render it; confirm no API key reaches the browser"
+      ],
+      "evidence": [
+        "internal/harness/model: Model interface + openai-go/v3 adapter (provider/base_url/model/key config); FakeModel contract test proves validate-and-repair (re-ask once) and fallback-on-exhaustion (model_test.go, no network)",
+        "internal/harness/archtest: import-graph test asserts internal/harness/model NOT in the closure of allocation/lease/world/planner/coordinator — `go list -deps`, skips if go absent (ADR-0005)",
+        "cmd/bake + internal/harness/bake: live gpt-4o-2024-08-06 bake produced 6-op foundation-1 spec → internal/harness/cache/specs/dome_foundation-1_3ae7e393_gpt-4o-2024-08-06.json (committed, declarative data, no key)",
+        "headline replay: demo Rovers carry BlueprintID; embedded go:embed cache → deterministic replay (cache_test + coordinator/replay_test: hit replays baked spec, forced miss falls back to primitive, Task still DONE)",
+        "smoke (Docker): self-heal fired + dome closed; live WS snapshot foundation-1 carried the exact baked spec, status DONE",
+        "make check green: vet + golangci-lint (0 issues) + go test -race -shuffle=on ./...; go mod tidy clean; .env gitignored (only .env.example committed)"
+      ],
       "notes": "HITL. The vendor SDK lives behind a single narrow interface (Model seam). The import-graph test mechanically enforces the hot-path invariant (promotes the TECHSPEC §8 grep). Done in bh-03 worktree."
     },
     {
@@ -213,8 +301,14 @@
       "title": "Generator <-> Evaluator loop + layered verdict (hard gate + soft rubric) + trace; bake all",
       "user_visible_behavior": "A Build harness runs a generate->evaluate loop until a contract's 'done' is met, baking specs for all tasks. The Evaluator emits a hard gate (envelope/collision/done — boolean, blocking) plus a soft rubric (done-coverage/coherence, 0-2 + evidence); each bake writes a trace sidecar.",
       "status": "passing",
-      "depends_on": ["bh-03"],
-      "verification": ["go test -race ./... (generator/evaluator loop; hard gate rejects out-of-envelope/collision/unmet-done with a unit test on each)", "go test -race ./... (a hard-gate-passing but low-scoring spec is cached with quality_flag:low, not withheld; the <spec-key>.trace.json round-trips)", "manual: bake-all produces a coherent dome; operator review lists fell-back UNION quality_flag:low Tasks"],
+      "depends_on": [
+        "bh-03"
+      ],
+      "verification": [
+        "go test -race ./... (generator/evaluator loop; hard gate rejects out-of-envelope/collision/unmet-done with a unit test on each)",
+        "go test -race ./... (a hard-gate-passing but low-scoring spec is cached with quality_flag:low, not withheld; the <spec-key>.trace.json round-trips)",
+        "manual: bake-all produces a coherent dome; operator review lists fell-back UNION quality_flag:low Tasks"
+      ],
       "evidence": [
         "internal/harness/evaluator hard gate (envelope/collision/done — boolean, blocking, unit test on each failure mode) + soft rubric (done_coverage/coherence 0-2 + evidence); internal/harness/loop bounded refine (hard cap 3)",
         "hard-gate-pass + low-score cached quality_flag:low (not withheld); internal/harness/trace <spec-key>.trace.json round-trips",
@@ -230,8 +324,12 @@
       "title": "Drag-to-place + Architect contracts + palette",
       "user_visible_behavior": "An operator drags items from a palette; the Architect authors Build contracts (intent + 'done') per task, within a Build envelope.",
       "status": "passing",
-      "depends_on": ["bh-02"],
-      "verification": ["cd web && npm run build && npm test ; go test -race ./... ; manual: drag-to-place produces composable, non-overlapping geometry"],
+      "depends_on": [
+        "bh-02"
+      ],
+      "verification": [
+        "cd web && npm run build && npm test ; go test -race ./... ; manual: drag-to-place produces composable, non-overlapping geometry"
+      ],
       "evidence": [
         "internal/blueprint catalog (dome + solar array + comms mast) with Envelope + Architect Contract DATA; placeBlueprint control cmd; coordinator validates bounds/terrain/no-overlap on the single-writer then injects the pre-baked DAG; Auction/Lease/World/Planner unchanged",
         "web BlueprintPalette + ghost preview (per-task envelopes) + drag-to-place; multiple concurrent placements; placement integration test (inject→auction→build, multi-placement, invalid rejected, reload-clears) under -race",
@@ -246,8 +344,13 @@
       "title": "Vision evaluator pass + provider-swap proof",
       "user_visible_behavior": "A vision-based evaluator judges rendered output (headless Chrome on the real Scene3D) and a second provider is swapped in to prove the Model seam holds.",
       "status": "passing",
-      "depends_on": ["bh-04"],
-      "verification": ["go test -race ./... ; manual: vision score populates the silhouette soft-rubric dimension (0-2 + evidence) and lands in the trace; a low score refines within budget but on exhaustion the spec still caches flagged quality_flag:low (never withheld — ADR-0008)", "manual: run the same bake under two providers (GPT-class, Gemini OpenAI-compat) via config only; specs still validate (validate-and-repair retained)"],
+      "depends_on": [
+        "bh-04"
+      ],
+      "verification": [
+        "go test -race ./... ; manual: vision score populates the silhouette soft-rubric dimension (0-2 + evidence) and lands in the trace; a low score refines within budget but on exhaustion the spec still caches flagged quality_flag:low (never withheld — ADR-0008)",
+        "manual: run the same bake under two providers (GPT-class, Gemini OpenAI-compat) via config only; specs still validate (validate-and-repair retained)"
+      ],
       "evidence": [
         "internal/harness/vision: bake-time headless-Chrome render of the REAL Scene3D → screenshot → gpt-4o vision score → silhouette soft-rubric dimension (0-2 + evidence) into the trace; bake/lab only (archtest TestHeadlinePathMakesZeroVisionCalls green)",
         "live: dome-cap iter0 silhouette 0 ('flat white dot') → refine → iter1 silhouette 2 ('clear dome shape') in the committed trace — the 'passes analytic, looks wrong → refine' lever end-to-end",
@@ -262,8 +365,12 @@
       "title": "Stretch — live lab mode, sub-agents (C), glTF + textures",
       "user_visible_behavior": "A live lab mode runs the deep generation loop with sub-agents and richer assets (glTF models + textures) without changing the seam.",
       "status": "passing",
-      "depends_on": ["bh-06"],
-      "verification": ["go test -race ./... ; cd web && npm run build && npm test ; manual: lab-mode generation renders custom models/textures"],
+      "depends_on": [
+        "bh-06"
+      ],
+      "verification": [
+        "go test -race ./... ; cd web && npm run build && npm test ; manual: lab-mode generation renders custom models/textures"
+      ],
       "evidence": [
         "Part A live lab mode: internal/harness/lab.Service runs the real Generator↔Evaluator on the Model seam; gateway /lab/generate SSE via an injected LabRunner interface (gateway imports neither model nor lab — archtest TestGatewayDoesNotImportModelOrLab); web LabPanel + agent console; off the hot path, headline replays cache unchanged",
         "Part B glTF: Scene3D renders shape:model via GLTFLoader + material.map via TextureLoader with primitive fallback on miss; CC0 assets (Kenney Space Kit CC0 1.0 + Poly Haven CC0 1.0) with provenance in web/public/assets/CREDITS.md",
@@ -278,7 +385,10 @@
       "title": "Live build mode — the Rover runs the harness in the world",
       "user_visible_behavior": "Dropping a Blueprint in 'live' mode makes the winning Rover run its LLM Build harness as it works: the structure rises and visibly self-corrects in the world step by step. Killing the Rover mid-build hands the half-built patch log to a replacement that continues live. The deterministic 'replay' dome stays the default and can stand beside a live one.",
       "status": "passing",
-      "depends_on": ["bh-05", "bh-07"],
+      "depends_on": [
+        "bh-05",
+        "bh-07"
+      ],
       "verification": [
         "go test -race ./... (rescoped archtest: harness/model absent from self-heal core; live-mode retry→die→resume + circuit-breaker integration test) ; cd web && npm run build && npm test (patch-op fold: place/move/delete) ; manual: place a live Blueprint, watch it self-correct, kill mid-build, confirm live resume"
       ],
@@ -289,6 +399,539 @@
         "live compose stack up end-to-end: coordinator logs assert 'msg=expiry task=wall-1 … returned to UNCLAIMED' (self-heal) then 'msg=complete task=dome-cap by=R1' (dome closed) — the two deploy/smoke.sh gates, verified directly in the running stack. (smoke.sh's host /healthz probe on 127.0.0.1:8080 is shadowed in this env by a stale kubectl port-forward from the kind cluster — environment collision, not a regression.)"
       ],
       "notes": "IMPLEMENTED + integrated on main (PR #12, 25ce08a). Live Build Mode: model wired into agent (live only); agent.Config.Mode{replay|live}; per-placement mode on placeBlueprint; per-refine-iteration streaming via append-only patch-op log (place/move/delete) the renderer folds; failure heals (retry→die→resume-live), primitive circuit breaker after ~3 builder deaths; archtest rescoped to the self-heal core (deliberate scoped break of ADR-0005's runtime rule, live path only). Design: ADR-0009 + issues/08-live-build-mode.md + TECHSPEC §4–§11 + CONTEXT.md. Follow-ups landed on top: panel+mast task types so solar-array/comms-mast build (af0aeca), live-capable rover pods for the per-placement toggle (ca33eef), live refine cap raised to 30 (abc5544)."
+    },
+    {
+      "id": "r3d-47",
+      "priority": 20,
+      "area": "realistic-3d-world",
+      "title": "Amend ADR-0004 to 'no unlicensed art' + scope guard",
+      "user_visible_behavior": "ADR-0004 permits licensed hand-made art while keeping the three renderer invariants; the scope guard reflects it.",
+      "status": "passing",
+      "issue": 47,
+      "epic": 46,
+      "depends_on": [],
+      "verification": [
+        "cd web && npm run build && npm test (TS-clean + vitest)",
+        "manual: orbit & surface screenshots; idle stays 0 fps"
+      ],
+      "evidence": [
+        "Landed on main in PR #64; GitHub #47 closed."
+      ],
+      "notes": "Wave 1 (realistic scene foundation). Shipped 2026-06-06/07."
+    },
+    {
+      "id": "r3d-48",
+      "priority": 21,
+      "area": "realistic-3d-world",
+      "title": "glTF child raycast fix (deterministic click-to-kill)",
+      "user_visible_behavior": "Loaded glTF child meshes don't steal raycasts, so click-to-kill keeps selecting the intended rover hit-proxy.",
+      "status": "passing",
+      "issue": 48,
+      "epic": 46,
+      "depends_on": [
+        "mvp-07"
+      ],
+      "verification": [
+        "cd web && npm run build && npm test (TS-clean + vitest)",
+        "manual: orbit & surface screenshots; idle stays 0 fps"
+      ],
+      "evidence": [
+        "Landed on main in PR #65; GitHub #48 closed."
+      ],
+      "notes": "Wave 1 (realistic scene foundation). Shipped 2026-06-06/07."
+    },
+    {
+      "id": "r3d-49",
+      "priority": 22,
+      "area": "realistic-3d-world",
+      "title": "Camera far-plane raise + orbit/surface view-mode toggle",
+      "user_visible_behavior": "The camera reaches the Moon globe; an operator toggles between orbit and surface views.",
+      "status": "passing",
+      "issue": 49,
+      "epic": 46,
+      "depends_on": [
+        "mvp-07"
+      ],
+      "verification": [
+        "cd web && npm run build && npm test (TS-clean + vitest)",
+        "manual: orbit & surface screenshots; idle stays 0 fps"
+      ],
+      "evidence": [
+        "Landed on main in PR #66; GitHub #49 closed."
+      ],
+      "notes": "Wave 1 (realistic scene foundation). Shipped 2026-06-06/07."
+    },
+    {
+      "id": "r3d-50",
+      "priority": 23,
+      "area": "realistic-3d-world",
+      "title": "<SpaceEnvironment>: starfield + self-hosted HDR IBL",
+      "user_visible_behavior": "A static starfield + self-hosted HDR image-based lighting backdrop renders behind the scene (black fallback).",
+      "status": "passing",
+      "issue": 50,
+      "epic": 46,
+      "depends_on": [
+        "r3d-47"
+      ],
+      "verification": [
+        "cd web && npm run build && npm test (TS-clean + vitest)",
+        "manual: orbit & surface screenshots; idle stays 0 fps"
+      ],
+      "evidence": [
+        "Landed on main in PR #68; GitHub #50 closed."
+      ],
+      "notes": "Wave 1 (realistic scene foundation). Shipped 2026-06-06/07."
+    },
+    {
+      "id": "r3d-51",
+      "priority": 24,
+      "area": "realistic-3d-world",
+      "title": "Sky bodies — Moon globe (orbit) + Earth (surface)",
+      "user_visible_behavior": "A decorative Moon globe shows in orbit and Earth in the surface sky; the worksite is not floating in space.",
+      "status": "passing",
+      "issue": 51,
+      "epic": 46,
+      "depends_on": [
+        "r3d-49",
+        "r3d-50"
+      ],
+      "verification": [
+        "cd web && npm run build && npm test (TS-clean + vitest)",
+        "manual: orbit & surface screenshots; idle stays 0 fps"
+      ],
+      "evidence": [
+        "Landed on main in PR #77; GitHub #51 closed."
+      ],
+      "notes": "Wave 1 (realistic scene foundation). Shipped 2026-06-06/07."
+    },
+    {
+      "id": "r3d-52",
+      "priority": 25,
+      "area": "realistic-3d-world",
+      "title": "Asset conditioning pipeline + vendored DRACO/meshopt",
+      "user_visible_behavior": "glTF assets are converted/normalized + DRACO/meshopt-compressed offline with self-hosted decoders (offline-safe).",
+      "status": "passing",
+      "issue": 52,
+      "epic": 46,
+      "depends_on": [
+        "r3d-48"
+      ],
+      "verification": [
+        "cd web && npm run build && npm test (TS-clean + vitest)",
+        "manual: orbit & surface screenshots; idle stays 0 fps"
+      ],
+      "evidence": [
+        "Landed on main in PR #69; GitHub #52 closed."
+      ],
+      "notes": "Wave 1 (realistic scene foundation). Shipped 2026-06-06/07."
+    },
+    {
+      "id": "r3d-53",
+      "priority": 26,
+      "area": "realistic-3d-world",
+      "title": "PBR SpecPrimitive (normal/rough/ao) + tiling regolith ground",
+      "user_visible_behavior": "Primitives carry PBR maps and the surface ground is a tiling regolith material.",
+      "status": "passing",
+      "issue": 53,
+      "epic": 46,
+      "depends_on": [
+        "r3d-47"
+      ],
+      "verification": [
+        "cd web && npm run build && npm test (TS-clean + vitest)",
+        "manual: orbit & surface screenshots; idle stays 0 fps"
+      ],
+      "evidence": [
+        "Landed on main in PR #72; GitHub #53 closed."
+      ],
+      "notes": "Wave 1 (realistic scene foundation). Shipped 2026-06-06/07."
+    },
+    {
+      "id": "r3d-54",
+      "priority": 27,
+      "area": "realistic-3d-world",
+      "title": "Realistic rover model (RASSOR render swap)",
+      "user_visible_behavior": "Rovers render as the NASA RASSOR glTF with a primitive fallback.",
+      "status": "passing",
+      "issue": 54,
+      "epic": 46,
+      "depends_on": [
+        "r3d-48",
+        "r3d-52"
+      ],
+      "verification": [
+        "cd web && npm run build && npm test (TS-clean + vitest)",
+        "manual: orbit & surface screenshots; idle stays 0 fps"
+      ],
+      "evidence": [
+        "Landed on main in PR #75; GitHub #54 closed."
+      ],
+      "notes": "Wave 1 (realistic scene foundation). Shipped 2026-06-06/07."
+    },
+    {
+      "id": "r3d-55",
+      "priority": 28,
+      "area": "realistic-3d-world",
+      "title": "Habitat/base Assets populate the Asset catalog",
+      "user_visible_behavior": "Habitat/base glTF Assets are available in the catalog for placement.",
+      "status": "passing",
+      "issue": 55,
+      "epic": 46,
+      "depends_on": [
+        "r3d-52",
+        "r3d-59"
+      ],
+      "verification": [
+        "cd web && npm run build && npm test (TS-clean + vitest)",
+        "manual: orbit & surface screenshots; idle stays 0 fps"
+      ],
+      "evidence": [
+        "Landed on main in PR #70; GitHub #55 closed."
+      ],
+      "notes": "Wave 1 (realistic scene foundation). Shipped 2026-06-06/07."
+    },
+    {
+      "id": "r3d-56",
+      "priority": 29,
+      "area": "realistic-3d-world",
+      "title": "Launch infrastructure set-pieces (NASA-PD Scenery)",
+      "user_visible_behavior": "Crawler + mobile launcher + Apollo LM render as non-diegetic Scenery.",
+      "status": "passing",
+      "issue": 56,
+      "epic": 46,
+      "depends_on": [
+        "r3d-48",
+        "r3d-52"
+      ],
+      "verification": [
+        "cd web && npm run build && npm test (TS-clean + vitest)",
+        "manual: orbit & surface screenshots; idle stays 0 fps"
+      ],
+      "evidence": [
+        "Landed on main in PR #71; GitHub #56 closed."
+      ],
+      "notes": "Wave 1 (realistic scene foundation). Shipped 2026-06-06/07."
+    },
+    {
+      "id": "r3d-57",
+      "priority": 30,
+      "area": "realistic-3d-world",
+      "title": "Construction prop Assets (catalog) + PBR on build ops",
+      "user_visible_behavior": "Construction-prop Assets exist in the catalog and build ops carry PBR skins.",
+      "status": "passing",
+      "issue": 57,
+      "epic": 46,
+      "depends_on": [
+        "r3d-53",
+        "r3d-59"
+      ],
+      "verification": [
+        "cd web && npm run build && npm test (TS-clean + vitest)",
+        "manual: orbit & surface screenshots; idle stays 0 fps"
+      ],
+      "evidence": [
+        "Landed on main in PR #76; GitHub #57 closed."
+      ],
+      "notes": "Wave 1 (realistic scene foundation). Shipped 2026-06-06/07."
+    },
+    {
+      "id": "r3d-58",
+      "priority": 31,
+      "area": "realistic-3d-world",
+      "title": "Instancing/merging for repeated props + static gantry",
+      "user_visible_behavior": "Repeated decoratives are instanced and static set-piece geometry is merged to bound draw calls.",
+      "status": "passing",
+      "issue": 58,
+      "epic": 46,
+      "depends_on": [
+        "r3d-57"
+      ],
+      "verification": [
+        "cd web && npm run build && npm test (TS-clean + vitest)",
+        "manual: orbit & surface screenshots; idle stays 0 fps"
+      ],
+      "evidence": [
+        "Landed on main in PR #78 + #79; GitHub #58 closed."
+      ],
+      "notes": "Wave 1 (realistic scene foundation). Shipped 2026-06-06/07."
+    },
+    {
+      "id": "r3d-59",
+      "priority": 32,
+      "area": "realistic-3d-world",
+      "title": "Asset catalog + catalog-key Build op (ADR-0010)",
+      "user_visible_behavior": "A closed Asset catalog is carried on the wire and a Build op places Assets by key.",
+      "status": "passing",
+      "issue": 59,
+      "epic": 46,
+      "depends_on": [
+        "bh-01"
+      ],
+      "verification": [
+        "cd web && npm run build && npm test (TS-clean + vitest)",
+        "manual: orbit & surface screenshots; idle stays 0 fps"
+      ],
+      "evidence": [
+        "Landed on main in PR #67; GitHub #59 closed."
+      ],
+      "notes": "Wave 1 (realistic scene foundation). Shipped 2026-06-06/07."
+    },
+    {
+      "id": "r3d-60",
+      "priority": 33,
+      "area": "realistic-3d-world",
+      "title": "Coordinator validates Asset keys before the fold",
+      "user_visible_behavior": "The coordinator rejects out-of-catalog Asset keys before the World Model fold.",
+      "status": "passing",
+      "issue": 60,
+      "epic": 46,
+      "depends_on": [
+        "r3d-59"
+      ],
+      "verification": [
+        "cd web && npm run build && npm test (TS-clean + vitest)",
+        "manual: orbit & surface screenshots; idle stays 0 fps"
+      ],
+      "evidence": [
+        "Landed on main in PR #73; GitHub #60 closed."
+      ],
+      "notes": "Wave 1 (realistic scene foundation). Shipped 2026-06-06/07."
+    },
+    {
+      "id": "r3d-61",
+      "priority": 34,
+      "area": "realistic-3d-world",
+      "title": "Live-mode Asset placement via catalog keys",
+      "user_visible_behavior": "Live and replay Build modes place curated Assets by validated catalog key.",
+      "status": "passing",
+      "issue": 61,
+      "epic": 46,
+      "depends_on": [
+        "r3d-59",
+        "bh-08"
+      ],
+      "verification": [
+        "cd web && npm run build && npm test (TS-clean + vitest)",
+        "manual: orbit & surface screenshots; idle stays 0 fps"
+      ],
+      "evidence": [
+        "Landed on main in PR #74; GitHub #61 closed."
+      ],
+      "notes": "Wave 1 (realistic scene foundation). Shipped 2026-06-06/07."
+    },
+    {
+      "id": "r3d-81",
+      "priority": 35,
+      "area": "realistic-3d-world",
+      "title": "Space lighting re-grade (HITL)",
+      "user_visible_behavior": "Orbit lighting matches the NASA SVS look: subtle cool earthshine, dark void, a soft side-lit terminator.",
+      "status": "not_started",
+      "issue": 81,
+      "epic": 46,
+      "depends_on": [
+        "r3d-50",
+        "r3d-51"
+      ],
+      "verification": [
+        "cd web && npm run build && npm test (TS-clean + vitest)",
+        "manual: orbit & surface screenshots; idle stays 0 fps"
+      ],
+      "evidence": [],
+      "notes": "Wave 2 (space-view realism). HITL — design-review screenshot sign-off before merge."
+    },
+    {
+      "id": "r3d-82",
+      "priority": 36,
+      "area": "realistic-3d-world",
+      "title": "Real Moon surface: CGI Moon Kit + baked LOLA normal",
+      "user_visible_behavior": "The Moon uses the NASA CGI Moon Kit color map + a LOLA-derived normal map; matte regolith.",
+      "status": "not_started",
+      "issue": 82,
+      "epic": 46,
+      "depends_on": [
+        "r3d-51",
+        "r3d-52"
+      ],
+      "verification": [
+        "cd web && npm run build && npm test (TS-clean + vitest)",
+        "manual: orbit & surface screenshots; idle stays 0 fps"
+      ],
+      "evidence": [],
+      "notes": "Wave 2 (space-view realism)."
+    },
+    {
+      "id": "r3d-83",
+      "priority": 37,
+      "area": "realistic-3d-world",
+      "title": "Milky-Way star background (Deep Star Maps 2020)",
+      "user_visible_behavior": "A self-hosted equirect Milky-Way background renders on scene.background (black fallback).",
+      "status": "not_started",
+      "issue": 83,
+      "epic": 46,
+      "depends_on": [
+        "r3d-50"
+      ],
+      "verification": [
+        "cd web && npm run build && npm test (TS-clean + vitest)",
+        "manual: orbit & surface screenshots; idle stays 0 fps"
+      ],
+      "evidence": [],
+      "notes": "Wave 2 (space-view realism)."
+    },
+    {
+      "id": "r3d-84",
+      "priority": 38,
+      "area": "realistic-3d-world",
+      "title": "Cinematic orbit->surface descent (HITL)",
+      "user_visible_behavior": "The descent pitches from nadir to oblique with asymmetric easing + parallax and a slimmed glare.",
+      "status": "not_started",
+      "issue": 84,
+      "epic": 46,
+      "depends_on": [
+        "r3d-49"
+      ],
+      "verification": [
+        "cd web && npm run build && npm test (TS-clean + vitest)",
+        "manual: orbit & surface screenshots; idle stays 0 fps"
+      ],
+      "evidence": [],
+      "notes": "Wave 2 (space-view realism). HITL — cinematic-feel sign-off before merge."
+    },
+    {
+      "id": "r3d-85",
+      "priority": 39,
+      "area": "realistic-3d-world",
+      "title": "Sun polish: limb darkening + chromatic glow",
+      "user_visible_behavior": "The Sun reads as a distant star via static limb-darkening + faint chromatic-glow sprites.",
+      "status": "not_started",
+      "issue": 85,
+      "epic": 46,
+      "depends_on": [
+        "r3d-51"
+      ],
+      "verification": [
+        "cd web && npm run build && npm test (TS-clean + vitest)",
+        "manual: orbit & surface screenshots; idle stays 0 fps"
+      ],
+      "evidence": [],
+      "notes": "Wave 2 (space-view realism)."
+    },
+    {
+      "id": "r3d-86",
+      "priority": 40,
+      "area": "realistic-3d-world",
+      "title": "Day/night Earth + atmospheric rim",
+      "user_visible_behavior": "Earth uses a Blue+Black Marble two-map material with a back-side atmospheric rim shell.",
+      "status": "not_started",
+      "issue": 86,
+      "epic": 46,
+      "depends_on": [
+        "r3d-51"
+      ],
+      "verification": [
+        "cd web && npm run build && npm test (TS-clean + vitest)",
+        "manual: orbit & surface screenshots; idle stays 0 fps"
+      ],
+      "evidence": [],
+      "notes": "Wave 2 (space-view realism)."
+    },
+    {
+      "id": "r3d-90",
+      "priority": 41,
+      "area": "realistic-3d-world",
+      "title": "Nebula/supernova hero sprite (Veil Nebula)",
+      "user_visible_behavior": "An orbit-only additive nebula sprite adds a deep-space hero accent (CC-BY, with credit).",
+      "status": "not_started",
+      "issue": 90,
+      "epic": 46,
+      "depends_on": [
+        "r3d-83"
+      ],
+      "verification": [
+        "cd web && npm run build && npm test (TS-clean + vitest)",
+        "manual: orbit & surface screenshots; idle stays 0 fps"
+      ],
+      "evidence": [],
+      "notes": "Wave 2 (space-view realism). CC-BY break-glass: lands with the CREDITS.md entry."
+    },
+    {
+      "id": "r3d-91",
+      "priority": 42,
+      "area": "realistic-3d-world",
+      "title": "Star-field + material micro-polish",
+      "user_visible_behavior": "Star points gain size/brightness/color variance; Moon anisotropy max; explicit tone-map exposure.",
+      "status": "not_started",
+      "issue": 91,
+      "epic": 46,
+      "depends_on": [
+        "r3d-83"
+      ],
+      "verification": [
+        "cd web && npm run build && npm test (TS-clean + vitest)",
+        "manual: orbit & surface screenshots; idle stays 0 fps"
+      ],
+      "evidence": [],
+      "notes": "Wave 2 (space-view realism)."
+    },
+    {
+      "id": "r3d-87",
+      "priority": 43,
+      "area": "realistic-3d-world",
+      "title": "RASSOR rover hero (verify/no-op)",
+      "user_visible_behavior": "RASSOR is the swarm hero rover.",
+      "status": "not_started",
+      "issue": 87,
+      "epic": 46,
+      "depends_on": [
+        "r3d-52",
+        "r3d-54"
+      ],
+      "verification": [
+        "cd web && npm run build && npm test (TS-clean + vitest)",
+        "manual: orbit & surface screenshots; idle stays 0 fps"
+      ],
+      "evidence": [],
+      "notes": "Wave 2 (space-view realism). Already shipped on main (PR #75); kept open by user decision."
+    },
+    {
+      "id": "r3d-88",
+      "priority": 44,
+      "area": "realistic-3d-world",
+      "title": "Launch set-pieces GLBs (verify/no-op)",
+      "user_visible_behavior": "Crawler/Mobile Launcher/Gantry/Apollo LM render as Scenery.",
+      "status": "not_started",
+      "issue": 88,
+      "epic": 46,
+      "depends_on": [
+        "r3d-52",
+        "r3d-56"
+      ],
+      "verification": [
+        "cd web && npm run build && npm test (TS-clean + vitest)",
+        "manual: orbit & surface screenshots; idle stays 0 fps"
+      ],
+      "evidence": [],
+      "notes": "Wave 2 (space-view realism). Already shipped on main (PR #71); kept open by user decision."
+    },
+    {
+      "id": "r3d-89",
+      "priority": 45,
+      "area": "realistic-3d-world",
+      "title": "Habitat/base GLBs (Base Station + Astronaut pending)",
+      "user_visible_behavior": "Habitat Demonstration Unit + Base Station + Astronaut populate the base set.",
+      "status": "not_started",
+      "issue": 89,
+      "epic": 46,
+      "depends_on": [
+        "r3d-52",
+        "r3d-55"
+      ],
+      "verification": [
+        "cd web && npm run build && npm test (TS-clean + vitest)",
+        "manual: orbit & surface screenshots; idle stays 0 fps"
+      ],
+      "evidence": [],
+      "notes": "Wave 2 (space-view realism). Habitat shipped (PR #70); Base Station + Astronaut still pending."
     }
   ]
 }
