@@ -1897,6 +1897,10 @@ type Scene3DProps = {
   // single-site path / tests keep working. SceneContents slices the snapshot to
   // this site and reads its per-site framing/lighting/tint/fog/pieces.
   activeSite?: SiteId;
+  // Lets an in-scene orbit site marker (Epic 04 P3) request the active site. A
+  // marker click calls BOTH this and onViewModeChange("surface"), descending to
+  // the clicked site. Optional (tests / single-site path omit it).
+  onActiveSiteChange?: (site: SiteId) => void;
 };
 
 // Per-mode OrbitControls clamps + target. Both presets are clamped (ADR-0004):
@@ -2372,6 +2376,7 @@ function SceneContents({
   viewMode = "surface",
   onViewModeChange,
   activeSite = "lunar",
+  onActiveSiteChange,
 }: Scene3DProps) {
   const lightRef = useRef<THREE.DirectionalLight>(null);
   // Shared ref to the Sun core disc — surfaced from SkyBodies so the GodRays
@@ -2379,8 +2384,16 @@ function SceneContents({
   const sunRef = useRef<THREE.Mesh>(null);
   const invalidate = useThree((s) => s.invalidate);
 
-  // Clicking the orbit-view lunar-base marker flips to surface view → the descent.
-  const onBaseClick = onViewModeChange ? () => onViewModeChange("surface") : undefined;
+  // Clicking an orbit-view site marker (Epic 04 P3) selects that site AND flips to
+  // surface view → the existing glare-masked descent lands on the clicked site.
+  // This is the PRIMARY entry into the surface now that orbit is the default view.
+  const onSelectSite =
+    onViewModeChange && onActiveSiteChange
+      ? (site: SiteId) => {
+          onActiveSiteChange(site);
+          onViewModeChange("surface");
+        }
+      : undefined;
 
   // Shared geometry buffers — one set per Canvas mount, disposed on unmount.
   const geo = useMemo(makeSceneGeo, []);
@@ -2478,7 +2491,7 @@ function SceneContents({
         {onSurface && <fog attach="fog" args={frame.fog} />}
         {onSurface && <LunarTerrain terrainTint={frame.terrainTint} />}
         <SpaceEnvironment />
-        <SkyBodies viewMode={viewMode} onBaseClick={onBaseClick} sunRef={sunRef} />
+        <SkyBodies viewMode={viewMode} onSelectSite={onSelectSite} sunRef={sunRef} />
       </>
     );
   }
@@ -2510,9 +2523,9 @@ function SceneContents({
 
       {/* Decorative sky bodies (issue #51) — snapshot-INDEPENDENT Scenery: the
           Moon globe (orbit-only hero) + a distant Earth (both views) + the Sun
-          (light emitter) + the clickable lunar-base marker (orbit-only). The
+          (light emitter) + the clickable site markers (orbit-only). The
           Moon's appear/vanish is hidden behind the descent glare. */}
-      <SkyBodies viewMode={viewMode} onBaseClick={onBaseClick} sunRef={sunRef} />
+      <SkyBodies viewMode={viewMode} onSelectSite={onSelectSite} sunRef={sunRef} />
 
       {/* The WORKSITE — only in surface view. In orbit it would float as a square
           in space ("moonbase lost in space"), so it is mounted only on the
@@ -2868,6 +2881,7 @@ export function Scene3D({
   viewMode = "surface",
   onViewModeChange,
   activeSite = "lunar",
+  onActiveSiteChange,
 }: Scene3DProps) {
   // `viewMode` (prop) is the DESIRED mode; `shown` is the mode currently RENDERED.
   // They differ only during the descent transition: `shown` flips at the glare
@@ -3125,6 +3139,7 @@ export function Scene3D({
           viewMode={shown}
           onViewModeChange={onViewModeChange}
           activeSite={activeSite}
+          onActiveSiteChange={onActiveSiteChange}
         />
         <RigBridge
           cameraRef={cameraRef}

@@ -327,6 +327,7 @@ export default function App() {
               viewMode={viewMode}
               onViewModeChange={setViewMode}
               activeSite={activeSite}
+              onActiveSiteChange={setActiveSite}
             />
           </Suspense>
         ) : null}

@@ -313,6 +313,60 @@ export const EARTH_RADIUS = Math.round(MOON_RADIUS * 3.67); // ≈ 330, proporti
 // a clean day/night marble just off the Moon's sunlit limb.
 export const EARTH_POSITION: [number, number, number] = [-3993, -460, -2427];
 
+// ---- lat/lon → globe point (Epic 04 P3, orbit site markers) ----------------
+//
+// Maps a real lunar latitude/longitude onto the orbit Moon globe — a sphere of
+// MOON_RADIUS centred at MOON_POSITION — returning the world-space surface point
+// AND the outward surface normal there (so a marker can be seated flat on the
+// globe, oriented to the local up). Kept three-free (plain vectors) so it stays
+// unit-testable in node and shares one source of truth with the renderer.
+//
+// Parameterisation: latitude φ measured from the equator (+90 = north pole, +y),
+// longitude λ around the equator. A GLOBAL longitude offset (MARKER_LON_OFFSET)
+// rotates the whole lat/lon grid about the polar (y) axis so the two site markers
+// can be swung onto the camera-facing AND sunlit near hemisphere of the orbit
+// globe (the #131 lit-hemisphere requirement) and aligned to the Moon texture
+// seam — tuned by eye in the visual E2E.
+//
+// At offset 0 the (lat 0, lon 0) point sits on +z (toward the orbit camera-ish
+// near face). The offset below was tuned so both sites read on the lit near face
+// under ORBIT_SUN_POSITION for the default orbit camera. (The Shackleton MARKER
+// is art-directed to a southern — not literal-pole — seat; see SkyBodies.tsx,
+// since the literal south pole is back-facing AND unlit on the orbit globe.)
+export const MARKER_LON_OFFSET = 108; // degrees, tuned by eye (see SkyBodies P3)
+
+// The outward surface normal at (lat, lon) — a unit vector. Exposed alongside the
+// point so the marker math (quaternion to the surface up) need not recompute it.
+export function latLonToGlobeNormal(
+  lat: number,
+  lon: number,
+  lonOffset = MARKER_LON_OFFSET,
+): [number, number, number] {
+  const DEG = Math.PI / 180;
+  const phi = lat * DEG; // from equator; +90 = north pole
+  const lambda = (lon + lonOffset) * DEG;
+  const cosPhi = Math.cos(phi);
+  // x/z on the equatorial circle, y up the polar axis. At lambda=0 → +z.
+  const nx = cosPhi * Math.sin(lambda);
+  const ny = Math.sin(phi);
+  const nz = cosPhi * Math.cos(lambda);
+  return [nx, ny, nz];
+}
+
+// The world-space surface point at (lat, lon) on the orbit Moon globe.
+export function latLonToGlobePoint(
+  lat: number,
+  lon: number,
+  lonOffset = MARKER_LON_OFFSET,
+): [number, number, number] {
+  const [nx, ny, nz] = latLonToGlobeNormal(lat, lon, lonOffset);
+  return [
+    MOON_POSITION[0] + nx * MOON_RADIUS,
+    MOON_POSITION[1] + ny * MOON_RADIUS,
+    MOON_POSITION[2] + nz * MOON_RADIUS,
+  ];
+}
+
 export type Bounds = { minX: number; minY: number; maxX: number; maxY: number };
 
 // A 3D point on/above the ground plane (y is "up").

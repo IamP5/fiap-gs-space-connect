@@ -36,7 +36,7 @@
 // unaffected.
 
 import { useEffect, useMemo, useRef, useState } from "react";
-import { Detailed } from "@react-three/drei";
+import { Detailed, Html } from "@react-three/drei";
 import { useFrame, useThree } from "@react-three/fiber";
 import * as THREE from "three";
 
@@ -53,12 +53,15 @@ import {
 import {
   EARTH_POSITION,
   EARTH_RADIUS,
+  latLonToGlobeNormal,
+  latLonToGlobePoint,
   MOON_POSITION,
   MOON_RADIUS,
   ORBIT_SUN_POSITION,
   SUN_POSITION,
   SUN_RADIUS,
 } from "../lib/scene";
+import type { SiteId } from "./Scene3D";
 
 // Self-hosted textures (see public/assets/CREDITS.md). Downscaled jpgs.
 //   • Moon  — NASA CGI Moon Kit (SVS 4720): LROC WAC colour mosaic + a normal map
@@ -1143,37 +1146,66 @@ function SunBody({
   );
 }
 
-// --- Lunar base marker (orbit view only) — the clickable "objective" ---------
-// A game-style location marker pinned to the Moon globe at the worksite's berth,
-// shown ONLY in orbit. Clicking it (its invisible hit-proxy) calls onSelect,
-// which flips the app to surface view → the existing glare-masked descent flies
-// the camera down to the base. This is an INTENTIONAL second pickable surface,
-// admissible because it exists only in orbit, where NO rover/worksite is rendered
-// — so it never competes with the rover hit-proxies that own click-to-kill on the
-// surface (#48). Demand-loop safe: no useFrame; hover just brightens/scales via
-// React state, waking exactly one frame.
+// --- Site markers (orbit view only) — the clickable "objectives" -------------
+// Game-style location markers pinned to the Moon globe at each site's real
+// lat/lon, shown ONLY in orbit. Clicking a marker (its invisible hit-proxy) calls
+// onSelect with that site's id, which sets BOTH the active site AND surface view
+// → the existing glare-masked descent flies the camera down to that base. These
+// are INTENTIONAL second pickable surfaces, admissible because they exist only in
+// orbit, where NO rover/worksite is rendered — so they never compete with the
+// rover hit-proxies that own click-to-kill on the surface (#48). No useFrame;
+// hover just brightens/scales via React state, waking exactly one frame.
 //
-// It is seated on the Moon's near face (the point of the globe pointing back at
-// the orbit camera) and oriented to the surface normal there, so the ring lies
-// flat on the globe and the beacon rises straight up off the surface.
-const MARKER_COLOR = "#38e1ff"; // brand telemetry cyan (matches selection/revive)
+// Each marker is seated on the globe at latLonToGlobePoint(lat, lon) and oriented
+// to the local surface normal there (latLonToGlobeNormal), so the ring lies flat
+// on the globe and the beacon rises straight up off the surface. The shared
+// global longitude offset (MARKER_LON_OFFSET in lib/scene.ts) swings both sites
+// onto the camera-facing AND sunlit near hemisphere of the orbit globe — carrying
+// the #131 lit-hemisphere lesson forward to BOTH markers (this slice supersedes
+// the single-marker #131 reseat).
 
-function LunarBaseMarker({ onSelect }: { onSelect: () => void }) {
+// Marker coordinates of the two sites (degrees). Lunar Base sits at its real
+// equatorial coords. Shackleton's REAL coords are the south pole (lat −89.9), but
+// the literal pole sits on the FAR, UNLIT bottom of the orbit globe (its normal is
+// −y; under ORBIT_SUN_POSITION + the up-and-right orbit camera it is both
+// back-facing and in shadow — Risk #6 in the plan). Rather than tilt the globe
+// (out of scope), the Shackleton MARKER is art-directed to a southern seat that
+// still reads as "low / south" yet stays on the visible AND lit near hemisphere —
+// honoring the #131 lit-hemisphere requirement for BOTH markers. (Set-piece /
+// marker positions are art-directed; only sizes are literal — see the plan.)
+const SITE_COORDS: Record<SiteId, { lat: number; lon: number }> = {
+  lunar: { lat: 0.7, lon: 23.5 },
+  shackleton: { lat: -35, lon: 20 },
+};
+
+// Per-site marker styling. Cyan = the live Lunar Base (brand telemetry cyan,
+// matches selection/revive); amber = Shackleton, still "in construction".
+const SITE_MARKERS: Record<
+  SiteId,
+  { color: string; label: string }
+> = {
+  lunar: { color: "#38e1ff", label: "Lunar Base" },
+  shackleton: { color: "#ffb347", label: "Shackleton — in construction" },
+};
+
+// One clickable site marker, seated + oriented by the caller (SiteMarkers). The
+// ring lies flat on the globe (oriented to the local surface normal) and the
+// beacon rises straight up off it; hover brightens/scales via React state.
+function SiteMarker({
+  position,
+  quaternion,
+  color,
+  label,
+  onSelect,
+}: {
+  position: [number, number, number];
+  quaternion: [number, number, number, number];
+  color: string;
+  label: string;
+  onSelect: () => void;
+}) {
   const invalidate = useThree((s) => s.invalidate);
   const [hover, setHover] = useState(false);
-
-  // Seat on the globe's near face + orient to the surface normal there. The orbit
-  // camera berths along +z/+y off the Moon (see ORBIT_POSE), so the near face
-  // normal points roughly that way; the marker is therefore camera-facing.
-  const { position, quaternion } = useMemo(() => {
-    const n = new THREE.Vector3(0, 80, 410).normalize(); // ≈ orbit camera dir off the Moon
-    const base = new THREE.Vector3(...MOON_POSITION).addScaledVector(n, MOON_RADIUS);
-    const q = new THREE.Quaternion().setFromUnitVectors(new THREE.Vector3(0, 1, 0), n);
-    return {
-      position: base.toArray() as [number, number, number],
-      quaternion: q.toArray() as [number, number, number, number],
-    };
-  }, []);
 
   useEffect(() => {
     invalidate();
@@ -1194,8 +1226,8 @@ function LunarBaseMarker({ onSelect }: { onSelect: () => void }) {
 
   return (
     <group position={position} quaternion={quaternion} scale={scale}>
-      {/* Invisible, generous hit-proxy — the SOLE pickable part. A click flips to
-          surface view, triggering the descent. */}
+      {/* Invisible, generous hit-proxy — the SOLE pickable part. A click sets the
+          site + surface view, triggering the descent. */}
       <mesh
         position={[0, 11, 0]}
         onClick={(e: ThreeEvent<MouseEvent>) => {
@@ -1213,8 +1245,8 @@ function LunarBaseMarker({ onSelect }: { onSelect: () => void }) {
       <mesh rotation={[-Math.PI / 2, 0, 0]} position={[0, 0.4, 0]} raycast={() => null}>
         <ringGeometry args={[7, 10, 40]} />
         <meshStandardMaterial
-          color={MARKER_COLOR}
-          emissive={MARKER_COLOR}
+          color={color}
+          emissive={color}
           emissiveIntensity={intensity}
           toneMapped={false}
           transparent
@@ -1227,8 +1259,8 @@ function LunarBaseMarker({ onSelect }: { onSelect: () => void }) {
       <mesh rotation={[-Math.PI / 2, 0, 0]} position={[0, 0.5, 0]} raycast={() => null}>
         <circleGeometry args={[6.2, 32]} />
         <meshStandardMaterial
-          color={MARKER_COLOR}
-          emissive={MARKER_COLOR}
+          color={color}
+          emissive={color}
           emissiveIntensity={intensity * 0.5}
           toneMapped={false}
           transparent
@@ -1244,7 +1276,7 @@ function LunarBaseMarker({ onSelect }: { onSelect: () => void }) {
       <mesh position={[0, 8, 0]} raycast={() => null}>
         <cylinderGeometry args={[0.4, 2.6, 16, 16, 1, true]} />
         <meshBasicMaterial
-          color={MARKER_COLOR}
+          color={color}
           transparent
           opacity={hover ? 0.32 : 0.18}
           side={THREE.DoubleSide}
@@ -1253,7 +1285,81 @@ function LunarBaseMarker({ onSelect }: { onSelect: () => void }) {
           toneMapped={false}
         />
       </mesh>
+
+      {/* Floating HTML label above the beacon — non-interactive (pointerEvents
+          none) so it never steals the marker's click; brightens on hover. */}
+      <Html
+        position={[0, 20, 0]}
+        center
+        distanceFactor={520}
+        zIndexRange={[20, 0]}
+        style={{ pointerEvents: "none", userSelect: "none" }}
+        raycast={() => null}
+      >
+        <div
+          style={{
+            whiteSpace: "nowrap",
+            fontFamily:
+              "ui-sans-serif, system-ui, -apple-system, Segoe UI, sans-serif",
+            fontSize: "16px",
+            fontWeight: 600,
+            letterSpacing: "0.02em",
+            color,
+            textShadow: "0 0 6px rgba(0,0,0,0.9), 0 1px 2px rgba(0,0,0,0.9)",
+            opacity: hover ? 1 : 0.85,
+          }}
+        >
+          {label}
+        </div>
+      </Html>
     </group>
+  );
+}
+
+// Build the seated position + surface-normal quaternion for a site's marker from
+// its real lat/lon (shared globe param in lib/scene.ts). Memo-keyed on the site.
+function useSiteMarkerSeat(site: SiteId) {
+  return useMemo(() => {
+    const { lat, lon } = SITE_COORDS[site];
+    const position = latLonToGlobePoint(lat, lon);
+    const n = new THREE.Vector3(...latLonToGlobeNormal(lat, lon));
+    const q = new THREE.Quaternion().setFromUnitVectors(
+      new THREE.Vector3(0, 1, 0),
+      n,
+    );
+    return {
+      position,
+      quaternion: q.toArray() as [number, number, number, number],
+    };
+  }, [site]);
+}
+
+// Renders both site markers on the orbit globe. `onSelectSite(siteId)` sets the
+// active site AND surface view (the descent) for the clicked site.
+function SiteMarkers({
+  onSelectSite,
+}: {
+  onSelectSite: (site: SiteId) => void;
+}) {
+  const lunarSeat = useSiteMarkerSeat("lunar");
+  const shackletonSeat = useSiteMarkerSeat("shackleton");
+  return (
+    <>
+      <SiteMarker
+        position={lunarSeat.position}
+        quaternion={lunarSeat.quaternion}
+        color={SITE_MARKERS.lunar.color}
+        label={SITE_MARKERS.lunar.label}
+        onSelect={() => onSelectSite("lunar")}
+      />
+      <SiteMarker
+        position={shackletonSeat.position}
+        quaternion={shackletonSeat.quaternion}
+        color={SITE_MARKERS.shackleton.color}
+        label={SITE_MARKERS.shackleton.label}
+        onSelect={() => onSelectSite("shackleton")}
+      />
+    </>
   );
 }
 
@@ -1377,17 +1483,17 @@ function NebulaHero({ visible }: { visible: boolean }) {
 
 // SkyBodies — the Sun (light emitter, both views) + the Moon globe (orbit-only,
 // the space-vista hero) + Earth (a distant marble, both views) + the clickable
-// lunar-base marker (orbit-only) + the nebula hero accent (orbit-only). The
+// site markers (orbit-only) + the nebula hero accent (orbit-only). The
 // starfield (SpaceEnvironment) shows in both.
-// `onBaseClick`, when provided, flips the app to surface view (the descent) when
-// the marker is clicked.
+// `onSelectSite`, when provided, selects that site AND flips to surface view (the
+// descent) when its orbit marker is clicked — the primary entry into the surface.
 export function SkyBodies({
   viewMode,
-  onBaseClick,
+  onSelectSite,
   sunRef,
 }: {
   viewMode: ViewMode;
-  onBaseClick?: () => void;
+  onSelectSite?: (site: SiteId) => void;
   // Shared ref to the Sun core disc, surfaced for the post-FX GodRays pass (#110).
   sunRef?: React.RefObject<THREE.Mesh>;
 }) {
@@ -1405,7 +1511,7 @@ export function SkyBodies({
       <MoonGlobe visible={inOrbit} />
       <NebulaHero visible={inOrbit} />
       <EarthBody visible viewMode={viewMode} />
-      {inOrbit && onBaseClick ? <LunarBaseMarker onSelect={onBaseClick} /> : null}
+      {inOrbit && onSelectSite ? <SiteMarkers onSelectSite={onSelectSite} /> : null}
     </>
   );
 }
