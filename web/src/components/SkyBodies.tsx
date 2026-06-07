@@ -185,6 +185,7 @@ const EARTH_FRAGMENT = /* glsl */ `
   uniform float uGlintShininess; // specular exponent (tight highlight)
   uniform float uGlintStrength;  // glint brightness
   uniform float uAmbient;        // faint day-side floor so the disc is never pure black
+  uniform float uDayExposure;    // day-side brightness scale (tames the bright Blue Marble)
   varying vec3 vWorldNormal;
   varying vec3 vViewDir;
   varying vec2 vUv;
@@ -203,9 +204,12 @@ const EARTH_FRAGMENT = /* glsl */ `
     // Soft terminator (Earth's atmosphere softens it — unlike the crisp Moon edge).
     float dayF = smoothstep(-uTermWidth, uTermWidth, ndl);
 
-    // Day diffuse with a faint ambient floor.
-    float diff = max(ndl, 0.0);
-    vec3 lit = day * (uAmbient + (1.0 - uAmbient) * diff);
+    // Day diffuse with a faint ambient floor, scaled DOWN by uDayExposure so the
+    // sunlit hemisphere reads as a soft lit marble rather than a blown-out, bloom-
+    // amplified disc (the "day side too bright" the user flagged). A gamma-softened
+    // diffuse (pow 0.8) widens the bright zone gently instead of a hard lambert peak.
+    float diff = pow(max(ndl, 0.0), 0.8);
+    vec3 lit = day * (uAmbient + (1.0 - uAmbient) * diff) * uDayExposure;
 
     // City lights — NIGHT side only (masked by 1−dayF so they never bleed onto the
     // lit hemisphere), with a gentle per-pixel flicker. A LIMB FADE (by view angle)
@@ -221,14 +225,16 @@ const EARTH_FRAGMENT = /* glsl */ `
     vec3 city = night * uNightColor * (1.0 - dayF) * flicker * limbFade;
 
     // Soft warm sunset band straddling the terminator (low-sun forward scatter). A
-    // smooth, gentle warmth — NOT a saturated stripe. The earlier bold version
-    // foreshortened into a bright orange streak where the terminator curved to the
-    // limb, so it's faded out toward the grazing limb (termFade by view angle) and
-    // kept low-strength; squaring the band softens the falloff to a clean gradient.
-    float band = smoothstep(uTermWidth, 0.0, abs(ndl));
-    band *= band;
+    // smooth, gentle warmth — NOT a saturated stripe. Wave 4.1: the band used to be
+    // SQUARED (band *= band), which peaked it into the hard vertical "double-image"
+    // divider the user saw. Now it spreads over a band ~1.7× the terminator width with
+    // a single smoothstep (no squaring) and half the strength, so the warm scatter is
+    // a wide, barely-there gradient that melts day into night. Faded out toward the
+    // grazing limb (termFade) where foreshortened equirect texels would streak it.
+    float bandW = uTermWidth * 1.7;
+    float band = smoothstep(bandW, 0.0, abs(ndl));
     float termFade = smoothstep(0.0, 0.35, NdotV);
-    vec3 termGlow = uTermColor * band * dayF * termFade * 0.1;
+    vec3 termGlow = uTermColor * band * dayF * termFade * 0.05;
 
     // Ocean sun-glint — the "sun waves". Ocean mask from the day map (blue-dominant,
     // low land), Blinn-Phong highlight at the sub-solar point, shimmered over time.
@@ -268,8 +274,11 @@ const CLOUD_FRAGMENT = /* glsl */ `
     float density = texture2D(uCloudMap, vUv).r;
     vec3 N = normalize(vWorldNormal);
     float ndl = dot(N, normalize(uSunDir));
-    float dayF = smoothstep(-0.1, 0.2, ndl);
-    vec3 col = vec3(uAmbient + max(ndl, 0.0));   // white cloud, sun-lit
+    // Wider, softer day fade so clouds dissolve gently across the terminator instead
+    // of cutting off in a hard arc.
+    float dayF = smoothstep(-0.2, 0.35, ndl);
+    // Sun-lit cloud, but held below pure white (×0.8) so the day side doesn't blow out.
+    vec3 col = vec3(uAmbient + max(ndl, 0.0) * 0.8);
     float alpha = density * dayF * uOpacity;     // gone on the night side
     gl_FragColor = vec4(col, alpha);
     #include <tonemapping_fragment>
@@ -548,9 +557,14 @@ function MoonGlobe({ visible }: { visible: boolean }) {
 // stays a prop for symmetry with MoonGlobe; SkyBodies always mounts Earth visible.
 //
 // Spin rates (rad/s) — slow + cinematic, not dizzying; clouds drift a touch faster
-// than the surface so they shear over the continents.
-const EARTH_SPIN = 0.03;
-const CLOUD_SPIN = 0.042;
+// than the surface so they shear over the continents. Wave 4.1: dialled WAY down
+// (0.03→0.008 / 0.042→0.011). Earth is a tiny ~80px disc, so the 2048px equirect
+// maps minify ~25× — a fast spin made the high-contrast coastlines/oceans crawl and
+// alias into the "collapsing / black flickering" the user saw. A near-stately turn
+// (one rotation ≈ 13 min) reads as "alive" while the per-frame texel motion stays
+// well under the minification floor, so the temporal moire is gone.
+const EARTH_SPIN = 0.008;
+const CLOUD_SPIN = 0.011;
 
 // Earth's ORBIT sun DIRECTION is decoupled from the Moon's dramatic dark-side sun
 // (ORBIT_SUN_POSITION). The Moon's sun sits far behind it for a thin crescent; if
@@ -615,13 +629,17 @@ function EarthBody({ visible, viewMode }: { visible: boolean; viewMode: ViewMode
         uTime: { value: 0 },
         // Wide, soft terminator (Wave 4.1) — Earth's thick atmosphere scatters the
         // day/night boundary into a gentle gradient, not the crisp Moon edge. The
-        // old 0.12 read as a hard line; the NASA reference shows a broad soft band.
-        uTermWidth: { value: 0.24 }, // soft terminator half-width
+        // old 0.12 read as a hard line; widened again 0.24→0.40 so the day/night
+        // hand-off is a broad, smooth dusk band like the NASA reference.
+        uTermWidth: { value: 0.4 }, // soft terminator half-width
         // Broader sub-solar highlight (60→30): a tight specular speckled at the small
         // marble size; a softer, wider glint reads cleanly as "sun on the oceans".
         uGlintShininess: { value: 30.0 },
         uGlintStrength: { value: 0.7 },
         uAmbient: { value: 0.03 },
+        // Day-side exposure (Wave 4.1): pull the sunlit hemisphere down to ~0.6 so the
+        // bright Blue Marble + bloom no longer blows out the day side.
+        uDayExposure: { value: 0.6 },
       },
       fog: false,
     });
@@ -637,7 +655,9 @@ function EarthBody({ visible, viewMode }: { visible: boolean; viewMode: ViewMode
         uCloudMap: { value: cloudFallback },
         uSunDir: { value: new THREE.Vector3(1, 0, 0) },
         uAmbient: { value: 0.04 },
-        uOpacity: { value: 0.9 },
+        // Wave 4.1: 0.9→0.55. Near-opaque white clouds were a big part of the bright,
+        // "torn" day side — a thinner veil shears far more gently over the surface.
+        uOpacity: { value: 0.55 },
       },
       transparent: true,
       depthWrite: false,
