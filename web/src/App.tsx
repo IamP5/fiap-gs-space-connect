@@ -22,6 +22,7 @@ import { KillPanel } from "./components/KillPanel";
 import { EarthPanel } from "./components/EarthPanel";
 import { Hotbar } from "./components/Hotbar";
 import { LoadingScreen } from "./components/LoadingScreen";
+import { CinematicCopy } from "./components/CinematicCopy";
 // Type-only — erased at build time, so referencing the camera view-mode type
 // here does NOT pull the lazy three.js Scene3D chunk into the eager shell bundle.
 import type { SiteId, ViewMode } from "./components/Scene3D";
@@ -40,6 +41,7 @@ import {
   isCueKill,
   isTypingTarget,
 } from "./lib/cinematicArm";
+import { copyStepDir, stepCursor } from "./lib/reel/copy";
 import type { BuildMode, Vec2 } from "./types/wire";
 import "./styles/dashboard.css";
 
@@ -124,6 +126,14 @@ export default function App() {
     armedFromSearch(typeof window === "undefined" ? "" : window.location.search),
   );
 
+  // The cinematic copy-overlay cursor (Epic 07 S3 · #156). Another ADDITIVE
+  // client-only UI flag (ADR-0004 carve-out) — it invents ZERO snapshot/wire
+  // fields. -1 = clean stage (no copy burned in); the operator steps it through
+  // the ordered script §6 beats (lib/reel/copy) with `]`/`[`. Stepping back past
+  // the first beat returns to -1 (clean stage). Only mutated while armed; disarm
+  // never resets it, so re-arming resumes where the take left off.
+  const [copyCursor, setCopyCursor] = useState(-1);
+
   // The single cinematic cue this slice owns: the climax kill. While armed, one
   // `K` press emits exactly `{cmd:"cueKill"}` once (the keydown handler ignores
   // OS key-repeat via `e.repeat`, so holding the key still fires only once per
@@ -153,6 +163,16 @@ export default function App() {
       }
       if (cinematic && isCueKill(e)) {
         cueKill();
+        return;
+      }
+      // Copy-overlay step (#156): `]`/`[` advance/retreat the burned-in copy
+      // cursor through the script §6 beats — armed-only, so disarmed presses are
+      // a no-op (normal app unchanged). Scenery: no World Model state touched.
+      if (cinematic) {
+        const dir = copyStepDir(e);
+        if (dir !== 0) {
+          setCopyCursor((c) => stepCursor(c, dir));
+        }
       }
     };
     window.addEventListener("keydown", onKeyDown);
@@ -412,10 +432,19 @@ export default function App() {
           {cinematic ? (
             <span className="reel-arm__badge">
               <span className="reel-arm__dot" aria-hidden="true" />
-              REEL ARMED · <b>K</b> cue · <b>R</b> disarm
+              REEL ARMED · <b>K</b> cue · <b>]</b>/<b>[</b> copy · <b>R</b> disarm
             </span>
           ) : null}
         </div>
+
+        {/* Cinematic copy overlay (Epic 07 S3 · #156). The burned-in PT-BR copy
+            layer — Scenery (non-diegetic; encodes no World Model state). Like the
+            badge above it sits as a SIBLING of `.hud-stage` (NOT a child), so the
+            `H` HUD-fade hides the panels but the bookend wordmark/CTA survives
+            over the orbit vista (Beats 14–15). Mounted ONLY while armed (#155) and
+            stepped by `]`/`[` via the single keydown listener above; disarmed ⇒
+            not mounted, normal app byte-for-byte unchanged. */}
+        {cinematic ? <CinematicCopy cursor={copyCursor} /> : null}
 
         {/* The HUD stage: every floating panel lives here. Two CSS effects compose
             on this one wrapper, and they MUST NOT fight:
