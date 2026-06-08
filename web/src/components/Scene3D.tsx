@@ -36,7 +36,7 @@
 //   - No custom physics; only LICENSED art (CC0/CC-BY/NASA-PD), each with a
 //     mandatory primitive fallback.
 
-import { memo, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
+import { memo, useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { Canvas, useFrame, useThree, type ThreeEvent } from "@react-three/fiber";
 import { ContactShadows, Html, Instance, Instances, Line, OrbitControls } from "@react-three/drei";
 import { SpaceEnvironment, STARFIELD_PARALLAX_NAME } from "./SpaceEnvironment";
@@ -107,8 +107,8 @@ import {
   idleSwayOffset,
   zoomExposure,
 } from "../lib/cameraFeel";
+import { OPEN_MS, openAzimuthOffset } from "../lib/reel/openArc";
 import { LaunchScenery } from "./LaunchScenery";
-import { DecorRocks } from "./DecorRocks";
 
 // Functional telemetry colors (DESIGN.md: live-data signals only — the brand
 // palette itself is black + white). Matched to the 2D canvas so the two
@@ -167,26 +167,14 @@ const SHADOW_WORKSITE_HALF = 25;
 //      stay dark; lifted on the surface for worksite legibility. Plus surface-only
 //      rim/fill directionals (skipped in orbit — the Moon stays a clean dark hero).
 // Orbit IBL grade (Wave 4) — the HDR <Environment> lights the Moon via scene
-// environment diffuse irradiance, and that (not the named lights) is what set the
-// Moon's overall brightness. We dim it hard in orbit so the Moon's far side reads
-// as a dramatic dark crescent (the sun's back-light + a faint earthshine do the
-// rest); the surface keeps full IBL for the metallic rover/glTF reflections. Set
-// imperatively (drei never touches environmentIntensity, so it sticks once set).
-const ORBIT_ENV_INTENSITY = 0.05;
-
-function EnvironmentGrade({ onSurface }: { onSurface: boolean }) {
-  const scene = useThree((s) => s.scene);
-  // useLayoutEffect (not useEffect): apply the env grade BEFORE the browser paints
-  // the first frame of the new view, so the Moon never flashes one frame at the
-  // wrong (surface=1.0) IBL intensity as the view flips — that one-frame bright/flat
-  // pop is what read as the Moon's shadow "shifting" right after the orbit transition.
-  useLayoutEffect(() => {
-    (scene as unknown as { environmentIntensity: number }).environmentIntensity = onSurface
-      ? 1.0
-      : ORBIT_ENV_INTENSITY;
-  }, [scene, onSurface]);
-  return null;
-}
+// environment diffuse irradiance, and that (not the named lights) is what sets the
+// Moon's overall brightness. The grade (dim hard in orbit so the far side reads as
+// a dramatic dark crescent; full IBL on the surface for metallic rover/glTF
+// reflections) is now owned by drei's <Environment> directly via its
+// environmentIntensity prop (see ENV_INTENSITY_* in SpaceEnvironment.tsx). drei
+// re-applies scene env props on EVERY render, so an imperative setter here would be
+// clobbered back to drei's default (1) on the next interaction — the same class of
+// bug as the background band. Single owner = drei.
 
 function SpaceLights({
   onSurface,
@@ -2036,6 +2024,29 @@ type Scene3DProps = {
   // marker click calls BOTH this and onViewModeChange("surface"), descending to
   // the clicked site. Optional (tests / single-site path omit it).
   onActiveSiteChange?: (site: SiteId) => void;
+  // Cinematic marker cues (Epic 07 S4 · #157), threaded straight through to
+  // SkyBodies' orbit site markers. Both optional + additive Scenery (gated upstream
+  // on the `cinematic` arm flag), so omitting them leaves the markers unchanged:
+  //   · `lockedSite` forces the lock-on look on that marker without a mouse hover.
+  //   · `statusOverride` flips the Shackleton marker to cyan/"operational" (Beat 15).
+  lockedSite?: SiteId;
+  statusOverride?: boolean;
+  // Orbit-open camera-arc cue (Epic 07 S5 · #158, Beats 1–2). While true the
+  // <CinematicOpen> rig (mounted alongside CameraFeel) drifts the camera along the
+  // dark lunar limb then ARCS it so the *fixed* sun's godrays/bloom crest in,
+  // easing into ORBIT_POSE — "lost in the dark, found by the sun". Additive Scenery
+  // gated upstream on the `cinematic` arm flag (it invents ZERO snapshot/wire
+  // fields). Omitted/false ⇒ the orbit behaves exactly as today (the script-
+  // sanctioned cold-hold fallback): the rig NEVER blocks anything. Only meaningful
+  // in orbit view; the rig itself no-ops on the surface.
+  cinematicOpen?: boolean;
+  // One-shot disarm: the orbit-open is a fire-once intro beat, so the rig calls
+  // this when its arc finishes OR is interrupted, and App flips `cinematicOpen`
+  // back to false. Without it the flag stays latched and `active` re-fires the arc
+  // every time the view returns to orbit (e.g. the ascent bookend) — the arc then
+  // captures a mid-ascent pose and fights the ascent driver (flicker + a camera
+  // stuck close on the Moon). Must be a STABLE callback (it's an effect dep).
+  onCinematicOpenDone?: () => void;
 };
 
 // Per-mode OrbitControls clamps + target. Both presets are clamped (ADR-0004):
@@ -2096,8 +2107,8 @@ type Pose = { position: THREE.Vector3; target: THREE.Vector3 };
 // regolith terrain spreads out below as a surveyable plain — the rovers + rising
 // dome read from above, with the literally-sized launch complex laid out behind.
 const SURFACE_POSE: Pose = {
-  position: new THREE.Vector3(2.5, 15, 11),
-  target: new THREE.Vector3(2.5, 0, -3),
+  position: new THREE.Vector3(2, 9, 9),
+  target: new THREE.Vector3(0, 0.8, -2),
 };
 // Per-site surface poses. Lunar reuses the elevated worksite framing above.
 // Shackleton now frames its CARVED CRATER: the camera is seated up on the near rim
@@ -2648,6 +2659,8 @@ function SceneContents({
   onViewModeChange,
   activeSite = "lunar",
   onActiveSiteChange,
+  lockedSite,
+  statusOverride,
 }: Scene3DProps) {
   const lightRef = useRef<THREE.DirectionalLight>(null);
   // Shared ref to the Sun core disc — surfaced from SkyBodies so the GodRays
@@ -2745,45 +2758,36 @@ function SceneContents({
   // distant Earth, and stars — so it never floats as a square in space.
   const onSurface = viewMode === "surface";
 
-  if (!snapshot || !map || !taskById) {
-    return (
-      <>
-        {/* Same decorative lighting rig as the main branch (snapshot-independent), so
-            the orbit vista's dark-side Moon reads correctly even before the first
-            snapshot arrives. Per-site surface sun (Epic 04 P2). */}
-        <SpaceLights
-          onSurface={onSurface}
-          lightRef={lightRef}
-          surfaceSunDir={frame.sunDir}
-          surfaceSunIntensity={frame.sunIntensity}
-          crater={activeSite === "shackleton"}
-        />
-        <EnvironmentGrade onSurface={onSurface} />
-        {/* Surface-only horizon fog — per-site (Epic 04 P2). */}
-        {onSurface && <fog attach="fog" args={frame.fog} />}
-        {onSurface && (
-          <LunarTerrain terrainTint={frame.terrainTint} crater={activeSite === "shackleton"} />
-        )}
-        <SpaceEnvironment />
-        <SkyBodies viewMode={viewMode} onSelectSite={onSelectSite} sunRef={sunRef} />
-      </>
-    );
-  }
-
+  // ONE stable root for the whole scene (Epic 07 background-remount fix). The
+  // snapshot-INDEPENDENT scenery (lights, environment grade, fog, the equirect
+  // star background, and the sky bodies) is rendered unconditionally at the top of
+  // a single <group>, and ONLY the snapshot-dependent worksite is gated below.
+  //
+  // Why this matters (load-bearing): SceneContents used to early-return a *Fragment*
+  // before the first snapshot and a *<group>* after. React can't reconcile a
+  // position whose root element type changes (Fragment ↔ group), so every time the
+  // `!snapshot` guard flipped — which happens on the reload-demo board reset and on
+  // transient/empty snapshots — it tore down and rebuilt the ENTIRE subtree,
+  // remounting <SpaceEnvironment>. That re-ran <Starfield>'s `Math.random()`
+  // useMemo([]) (a brand-new random starfield) and fired <StarBackground>'s
+  // load-effect cleanup (which zeroes scene.backgroundRotation/intensity and
+  // restores the black <color>) — the "stars change completely / Milky-Way band
+  // disappears on every interaction" bug. Keeping the scenery at a fixed position
+  // in one stable <group> means it mounts exactly once and survives every snapshot.
   return (
     <group>
-      {/* SPACE LIGHTING rig — shared with the pre-snapshot fallback branch (see the
+      {/* SPACE LIGHTING rig (snapshot-independent). Per-site surface sun direction +
+          intensity (Epic 04 P2): lunar high/bright, Shackleton low grazing/dim;
+          `crater` raises the grazing pole-light tuning at Shackleton. See the
           SpaceLights definition above for the full physical rationale of each light
-          and the Wave-4 decoupled-sun / dark-side-Moon tuning). Per-site surface
-          sun direction + intensity (Epic 04 P2): lunar high/bright, Shackleton low
-          grazing/dim. */}
+          and the Wave-4 decoupled-sun / dark-side-Moon tuning. */}
       <SpaceLights
         onSurface={onSurface}
         lightRef={lightRef}
         surfaceSunDir={frame.sunDir}
         surfaceSunIntensity={frame.sunIntensity}
+        crater={activeSite === "shackleton"}
       />
-      <EnvironmentGrade onSurface={onSurface} />
 
       {/* Surface-only horizon fog — PER-SITE (Epic 04 P2): lunar warm deep grey,
           Shackleton tighter/darker for the pole. Skipped in orbit (the Moon globe
@@ -2792,19 +2796,30 @@ function SceneContents({
 
       {/* Static, snapshot-independent backdrop: hand-rolled starfield + self-
           hosted HDR skybox/IBL (issue #50). Shown in BOTH views. Encodes no world
-          state; gives metallic glTFs real reflections. */}
-      <SpaceEnvironment />
+          state; gives metallic glTFs real reflections. `onSurface` swings the
+          equirect band's per-view yaw so the bright dust stays framed on the
+          surface instead of swinging behind (the descent flip is hidden by the
+          glare peak). MUST stay mounted across snapshots — see the root comment. */}
+      <SpaceEnvironment onSurface={onSurface} />
 
       {/* Decorative sky bodies (issue #51) — snapshot-INDEPENDENT Scenery: the
           Moon globe (orbit-only hero) + a distant Earth (both views) + the Sun
           (light emitter) + the clickable site markers (orbit-only). The
           Moon's appear/vanish is hidden behind the descent glare. */}
-      <SkyBodies viewMode={viewMode} onSelectSite={onSelectSite} sunRef={sunRef} />
+      <SkyBodies
+        viewMode={viewMode}
+        onSelectSite={onSelectSite}
+        sunRef={sunRef}
+        lockedSite={lockedSite}
+        statusOverride={statusOverride}
+      />
 
-      {/* The WORKSITE — only in surface view. In orbit it would float as a square
-          in space ("moonbase lost in space"), so it is mounted only on the
-          surface (the rendered mode flips under the glare, so the swap is unseen). */}
-      {onSurface && (
+      {/* The WORKSITE — only in surface view AND once the first snapshot exists. In
+          orbit it would float as a square in space ("moonbase lost in space"), so it
+          is mounted only on the surface (the rendered mode flips under the glare, so
+          the swap is unseen). Gated on `ready` here rather than in a separate return
+          branch so the scenery above never remounts. */}
+      {snapshot && taskById && onSurface && (
         <>
           <LunarTerrain terrainTint={frame.terrainTint} crater={activeSite === "shackleton"} />
 
@@ -2868,9 +2883,10 @@ function SceneContents({
               pad, hidden until a `launch` beat ramps them in useFrame. */}
           <LaunchFlare beats={beats} />
 
-          {/* Instanced decorative rock field (#58a) — snapshot-INDEPENDENT scatter of
-              low-poly rocks in ONE draw call via <Instances frames={1}>, non-pickable. */}
-          <DecorRocks />
+          {/* Decorative rock scatter removed for the cinematic — the worksite reads
+              cleaner with just the NASA-PD set-pieces on the regolith (Epic 07). The
+              DecorRocks component is kept (and its PBR textures still preload) so the
+              field can be re-mounted per-site if a dressed look is wanted later. */}
         </>
       )}
 
@@ -3185,6 +3201,169 @@ function CameraFeel({ active, onSurface }: { active: boolean; onSurface: boolean
   return null;
 }
 
+// Stable no-op for optional callbacks used as effect deps (a fresh `() => {}` each
+// render would re-run the effect). Module-level so its identity never changes.
+const NOOP = () => {};
+
+// CinematicOpen — the orbit-open camera-arc rig (Epic 07 S5 · #158, Beats 1–2
+// "WANDERING" + "SUN REVEAL"). The film's opening Scenery beat: "lost in the dark,
+// found by the sun." A scene-mounted rig driven by a PROP FLAG (the same pattern as
+// CameraFeel above — NOT an imperative camera handle), so it respects the one-effect-
+// owns-the-camera invariant.
+//
+// While `active`, it drifts the camera laterally along the Moon's dark limb (sun
+// off-frame) and then ARCS the CAMERA so the *fixed* sun's GodRays + celestial bloom
+// crest into frame, easing into ORBIT_POSE. The motion is a CAMERA azimuth offset
+// (lib/reel/openArc.openAzimuthOffset) applied by rotating the settled ORBIT_POSE
+// offset around the target's up-axis — CAMERA-ARC, NOT SUN-ARC (grilling outcome 5):
+// the sun STAYS at ORBIT_SUN_POSITION (moving it would be physically wrong + snapshot-
+// independent motion). It runs under frameloop="always" (ADR-0004 Wave-4) and invents
+// ZERO snapshot/wire fields (pure decorative Scenery, ADR-0004 purity intact).
+//
+// Transition discipline: while running it calls `onTransition(true)` so Scene3D sets
+// `transitioning` — which deactivates CameraFeel (its idle sway can't fight the arc)
+// and disables OrbitControls rotate. It ALSO owns `controls.enabled=false` directly
+// (mirrors runDescent). On completion OR cancel (prop flips false / unmount), it
+// settles EXACTLY on ORBIT_POSE, re-enables controls, and calls `onTransition(false)`
+// so CameraFeel re-arms and idle drift eases back in — no stuck-disabled controls, no
+// leaked state. The cleanup runs on EVERY teardown, so cancelling mid-arc restores
+// cleanly to the framed orbit pose (never a half-rotated camera).
+//
+// FALLBACK (script-sanctioned, Beats 1–2): if this cue is never fired, the orbit
+// behaves EXACTLY as today — a cold static ORBIT_POSE hold + idle sway, and the
+// "found by light" read moves to the descent glare (Beat 4). The rig is inert when
+// `active` is false, so it NEVER blocks the rest of the film. Only meaningful in
+// orbit; on the surface it no-ops (the open is an orbit vista beat).
+function CinematicOpen({
+  active,
+  onSurface,
+  onTransition,
+  onDone,
+}: {
+  active: boolean;
+  onSurface: boolean;
+  onTransition: (running: boolean) => void;
+  // Fire-once: called when the arc finishes OR is interrupted, so the upstream
+  // `cinematicOpen` flag disarms and the arc can't re-trigger on the next return
+  // to orbit (the ascent bookend). Must be STABLE — it's an effect dependency.
+  onDone: () => void;
+}) {
+  const controls = useThree((s) => s.controls) as FeelControls | null;
+  const camera = useThree((s) => s.camera);
+  const invalidate = useThree((s) => s.invalidate);
+
+  useEffect(() => {
+    // Inert unless armed-and-triggered AND in orbit (the open is an orbit vista
+    // beat). On the surface or when not cued, do nothing — the orbit is untouched
+    // (the cold-hold fallback) and controls/CameraFeel keep their current state.
+    if (!active || onSurface || !controls || !camera) return;
+
+    // Capture the LIVE rest pose at the moment the cue fires — NOT the hardcoded
+    // ORBIT_POSE. The open is a there-and-back: it must settle EXACTLY where it
+    // started so the world-fixed backdrop (the Milky-Way equirect band + NebulaHero)
+    // is byte-identical on return. The equirect background is sampled purely by
+    // camera ORIENTATION, so even a few degrees of idle-sway azimuth between the live
+    // pose and the canonical ORBIT_POSE would rotate the warm dust band out of frame
+    // on settle (the reported "dust gone after the arc"). Snapping back to the live
+    // start pose removes that drift entirely.
+    const startTarget = controls.target.clone();
+    const startPos = camera.position.clone();
+    // The rest offset (position − target) the arc rotates a CLONE of around the
+    // target's up-axis so the radius + pitch are preserved and only the azimuth
+    // swings (CAMERA-ARC, not sun-arc).
+    const restOffset = startPos.clone().sub(startTarget);
+    const up = camera.up.clone(); // world-up (0,1,0) in orbit — the azimuth axis
+    const tmpOffset = new THREE.Vector3();
+    const tmpQuat = new THREE.Quaternion();
+
+    // We own the camera for the duration: disable controls and tell Scene3D we're
+    // transitioning (deactivates CameraFeel, disables OrbitControls rotate). Mirrors
+    // runDescent's discipline so the two rigs never fight over the camera.
+    controls.enabled = false;
+    onTransition(true);
+
+    let raf = 0;
+    let start = 0;
+    let cancelled = false;
+    // True once the arc has run to completion and handed the camera back. Guards the
+    // cleanup from re-snapping the camera to ORBIT_POSE on a LATER teardown (e.g. the
+    // operator toggles the cue off, or orbits away then unmounts) — after a natural
+    // finish there is nothing to cancel, so the cleanup must not yank the camera.
+    let finished = false;
+
+    const apply = (t: number) => {
+      const azOffset = openAzimuthOffset(t);
+      tmpOffset.copy(restOffset).applyQuaternion(tmpQuat.setFromAxisAngle(up, azOffset));
+      camera.position.copy(startTarget).add(tmpOffset);
+      camera.up.set(0, 1, 0);
+      camera.lookAt(startTarget);
+      // Keep OrbitControls' target on the Moon so it resumes from the framed pose.
+      controls.target.copy(startTarget);
+      invalidate();
+    };
+
+    const step = (now: number) => {
+      if (cancelled) return;
+      if (!start) start = now;
+      const t = Math.min(1, (now - start) / OPEN_MS);
+      apply(t);
+      if (t < 1) {
+        raf = requestAnimationFrame(step);
+      } else {
+        // Settle EXACTLY on the live start pose (openAzimuthOffset(1) === 0, but snap
+        // to the captured pose so there is zero residual), re-enable controls, and
+        // hand the camera back to CameraFeel via onTransition(false) — idle drift
+        // eases in. Returning to the SAME pose keeps the backdrop dust band intact.
+        finish();
+      }
+    };
+
+    const finish = () => {
+      finished = true;
+      camera.position.copy(startPos);
+      camera.up.set(0, 1, 0);
+      camera.lookAt(startTarget);
+      controls.target.copy(startTarget);
+      controls.enabled = true;
+      onTransition(false);
+      // One-shot: disarm so the arc plays exactly once. Returning to orbit later
+      // (the ascent bookend) must NOT replay it — that re-fire captured a
+      // mid-ascent pose and fought the ascent driver (flicker + stuck-close Moon).
+      onDone();
+      invalidate();
+    };
+
+    raf = requestAnimationFrame(step);
+
+    return () => {
+      cancelled = true;
+      cancelAnimationFrame(raf);
+      // If the arc already finished naturally, `finish()` settled + handed the camera
+      // back to CameraFeel/OrbitControls — there is nothing to cancel, so DON'T touch
+      // the camera (the operator may have orbited away since). Only an INTERRUPTED arc
+      // (prop flips false / unmount mid-run) needs the restore: settle back to the
+      // live start pose and re-enable controls so nothing is left stuck-disabled or
+      // half-rotated.
+      if (!finished) {
+        if (controls) {
+          camera.position.copy(startPos);
+          camera.up.set(0, 1, 0);
+          camera.lookAt(startTarget);
+          controls.target.copy(startTarget);
+          controls.enabled = true;
+        }
+        onTransition(false);
+        // Disarm on interruption too (e.g. descent started mid-arc): a one-shot
+        // intro should not resume/replay when the view next returns to orbit.
+        onDone();
+        invalidate();
+      }
+    };
+  }, [active, onSurface, controls, camera, invalidate, onTransition, onDone]);
+
+  return null;
+}
+
 // The canonical settled pose for a (view, site) pair — the start/end of every
 // transition. Orbit is site-agnostic (one Moon vista for both markers); the
 // surface picks the active site's framing (Epic 04 P4: Shackleton lower/back).
@@ -3210,6 +3389,10 @@ export function Scene3D({
   onViewModeChange,
   activeSite = "lunar",
   onActiveSiteChange,
+  lockedSite,
+  statusOverride,
+  cinematicOpen,
+  onCinematicOpenDone,
 }: Scene3DProps) {
   // Initial camera pose, seeded to the DEFAULT view so the app opens already
   // framed on it. The Canvas `camera` prop is applied ONCE on mount, so this is
@@ -3244,6 +3427,15 @@ export function Scene3D({
   const [shownSite, setShownSite] = useState<SiteId>(activeSite);
   const shownSiteRef = useRef<SiteId>(activeSite);
   const [transitioning, setTransitioning] = useState(false);
+
+  // The orbit-open rig (#158) reuses the SAME `transitioning` discipline as the
+  // descent/traverse runners: while it owns the camera it flips `transitioning` so
+  // CameraFeel stands down and OrbitControls rotate is disabled, then clears it on
+  // settle so idle drift eases back in (one-effect-owns-the-camera). Memoised so the
+  // rig's effect (which depends on it) doesn't re-run on unrelated re-renders.
+  const runOpenTransition = useCallback((running: boolean) => {
+    setTransitioning(running);
+  }, []);
 
   // Live handles to the in-Canvas camera/controls/invalidate, captured by RigBridge.
   const cameraRef = useRef<THREE.Camera | null>(null);
@@ -3653,6 +3845,8 @@ export function Scene3D({
           // worksite + per-site lighting/fog/scenery swap unseen behind the flash.
           activeSite={shownSite}
           onActiveSiteChange={onActiveSiteChange}
+          lockedSite={lockedSite}
+          statusOverride={statusOverride}
         />
         <RigBridge
           cameraRef={cameraRef}
@@ -3689,6 +3883,19 @@ export function Scene3D({
             never reads the snapshot. Orbit exposure is scaled down so deep space
             reads darker (the sunlit limb + celestial bloom stop blowing out). */}
         <CameraFeel active={!placing && !transitioning} onSurface={shown === "surface"} />
+        {/* Orbit-open camera-arc (#158): the film's opening Scenery beat. Driven by
+            the `cinematicOpen` prop (gated upstream on the cinematic arm flag); while
+            running it sets `transitioning` (via runOpenTransition) so CameraFeel +
+            OrbitControls stand down, then settles into ORBIT_POSE and hands the camera
+            back. The SUN never moves (camera-arc, not sun-arc). Inert + non-blocking
+            when the cue isn't fired — the orbit then behaves exactly as today (the
+            script-sanctioned cold-hold fallback). Orbit-only; no-ops on the surface. */}
+        <CinematicOpen
+          active={cinematicOpen === true && shown === "orbit" && !placing}
+          onSurface={shown === "surface"}
+          onTransition={runOpenTransition}
+          onDone={onCinematicOpenDone ?? NOOP}
+        />
       </Canvas>
       {/* Glare overlay for the descent transition. A child of .stage (position:
           relative), so it fills the stage; pointer-events:none keeps clicks going

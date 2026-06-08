@@ -1,0 +1,103 @@
+# Kustomize OVERLAY — the Epic 07 cinematic topology (ADR-0011).
+#
+# Turns the pod-per-rover base into the 2:30 shooting-script demo by flipping ONE
+# coordinator env value (COORDINATOR_ROVERS=cinematic) and dropping the inert
+# standalone Rover Pods. The base (deploy/k8s/base/, COORDINATOR_ROVERS=external)
+# is referenced as-is and left byte-for-byte unchanged.
+#   render base:      kubectl kustomize deploy/k8s/
+#   render cinematic: kubectl kustomize deploy/k8s/overlays/cinematic/
+#
+# WHY the rover Pods are removed (read this before "fixing" it):
+#   The merged #154 `Cinematic()` pacing KEEPS the coordinator's in-process
+#   six-rover-per-site swarm (it does NOT set NoInProcRovers — unlike External()).
+#   Those in-process rovers are named `lunar-R*` / `shackleton-R*` and are the
+#   ones that win the site-gated auction, hold the hero wall, and take the
+#   in-process cueKill kill. The base's standalone Rover Pods (bare R1..R6) carry
+#   no SiteID, so the site-gated auction never awards them a lunar/shackleton
+#   Task — under cinematic pacing they are inert dead-weight (verified on
+#   kind-swarmbuild: with cinematic selected, lunar/wall-1 stays held, the
+#   in-proc lunar-R* swarm builds the dome, and cueKill heals lunar-R4 -> lunar-R2
+#   with NO pod delete). So the overlay deletes the six Rover Pods: the cinematic
+#   fleet lives in-process in the coordinator Pod, and the cueKill kill darkens an
+#   in-process rover in place — the coordinator Pod is never deleted, satisfying
+#   "in-process kill, no pod delete".
+#
+#   NOTE (Go follow-up, NOT this infra slice): a future `cinematic-external` mode
+#   = External() + the hero-wall hold would let the kill land on a *standalone*
+#   Rover Pod-agent honouring --op-every-ms / a long --recover-ms in place. That
+#   needs a one-line coordinator selector + demo helper (Go, out of #160's scope:
+#   "do NOT modify Go code"). Until then the cinematic runs the in-process swarm,
+#   which is fully deterministic and heals identically (see cuekill_test.go). The
+#   --op-every-ms / --recover-ms agent flags are documented in the capture recipe
+#   (docs/07-demo-cinematic/CAPTURE-RECIPE.md) for when that mode lands; today the
+#   in-proc rovers use the demo defaults.
+apiVersion: kustomize.config.k8s.io/v1beta1
+kind: Kustomization
+
+namespace: swarmbuild
+
+# Reuse the entire pod-per-rover base unchanged…
+resources:
+  - ../../base
+
+# …then apply the cinematic deltas: flip the coordinator to cinematic pacing and
+# drop the (inert) standalone Rover Pods.
+patches:
+  # Coordinator -> cinematic pacing: hero-wall hold + cueKill machinery, in-process
+  # swarm kept (#154). Killer stays KILLER_ON_KILL=false from the base (in-process
+  # kill, never a pod delete), so it is NOT patched here. The env list order in the
+  # base 20-coordinator.yaml is [0]=NATS_URL, [1]=COORDINATOR_ROVERS.
+  - target:
+      kind: Deployment
+      name: coordinator
+    patch: |-
+      - op: replace
+        path: /spec/template/spec/containers/0/env/1/value
+        value: cinematic
+
+  # Remove the six standalone Rover Pods: under cinematic pacing the fleet is the
+  # coordinator's in-process lunar-R*/shackleton-R* swarm, so these bare R1..R6
+  # Pods would only sit idle (site-gated auction never awards them a Task). The
+  # namespace must match the base (swarmbuild) for the delete to find its target.
+  - patch: |-
+      apiVersion: apps/v1
+      kind: Deployment
+      metadata:
+        name: rover-r1
+        namespace: swarmbuild
+      $patch: delete
+  - patch: |-
+      apiVersion: apps/v1
+      kind: Deployment
+      metadata:
+        name: rover-r2
+        namespace: swarmbuild
+      $patch: delete
+  - patch: |-
+      apiVersion: apps/v1
+      kind: Deployment
+      metadata:
+        name: rover-r3
+        namespace: swarmbuild
+      $patch: delete
+  - patch: |-
+      apiVersion: apps/v1
+      kind: Deployment
+      metadata:
+        name: rover-r4
+        namespace: swarmbuild
+      $patch: delete
+  - patch: |-
+      apiVersion: apps/v1
+      kind: Deployment
+      metadata:
+        name: rover-r5
+        namespace: swarmbuild
+      $patch: delete
+  - patch: |-
+      apiVersion: apps/v1
+      kind: Deployment
+      metadata:
+        name: rover-r6
+        namespace: swarmbuild
+      $patch: delete

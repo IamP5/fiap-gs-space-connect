@@ -127,6 +127,13 @@ export type EarthUplink = {
 //   · reloadDemo               — reset the board so the swarm rebuilds the dome
 //                                from scratch (the Coordinator re-seeds the
 //                                worksite); cmd-only, no robot/value
+//   · cueKill                  — Epic 07 climax cue (ADR-0011): the Coordinator
+//                                releases the held hero wall (lunar/wall-1), lets a
+//                                Rover lease + drive to it, then fires the in-process
+//                                kill on that Rover (Expiry → Re-auction → a surviving
+//                                Rover seals the dome). The browser only ARMS + fires;
+//                                the "which Rover / when" stays in Go (deterministic).
+//                                cmd-only, no robot/value
 //   · setFailureProb  (value) — 0..1 per-rover induced failure rate (issue 08)
 //   · setLatency      (value) — ms of delay on the earth.uplink feed (issue 09)
 //   · placeBlueprint  (blueprint_id, origin, rotation, mode) — drag a pre-authored

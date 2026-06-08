@@ -161,3 +161,22 @@ Six micro-beats. Stage on **Lunar Base** (the deterministic `lunar/wall-1` kill 
 - **Tech line (hold 1s under wordmark):** `Auto-cura = expiração de lease + re-leilão. Decisões na borda. Terra fora do loop.` (Self-heal = lease expiry + re-auction. Decisions at the edge. Earth out of the loop.)
 
 **Optional VO (only these):** the two stakes lines (Beat 3) and the final thesis line (Beat 14). Everything else is on-screen text synced to live HUD events that name each mechanic at the exact frame it happens. **No burned-in rover/task counts** — let MissionHud render the true live numbers (6 rovers, 13-task dome as a %).
+
+### Capture checklist — beat-locked copy (never name a beat before it happens)
+
+The copy overlay (#156, `web/src/lib/reel/copy.ts`) is operator-advanced with `]`
+(next) / `[` (prev) while cinematic mode is armed (`?reel=1` or `R`). Each line is
+tagged **free** (advance any time) or **beat-locked**. The three **beat-locked**
+lines NAME a live worksite event, so the operator MUST land them **after** the
+real event fires on screen — never before (otherwise the Scenery fabricates
+Choreography, which the domain model forbids). This is a documented capture rule,
+NOT a gating engine (no World Model clock gates the cursor — ADR-0004 purity):
+
+| Order | Line | Land it AFTER… |
+|-------|------|----------------|
+| 1 | `ROBÔ PERDIDO · lease expirou` (Beat 11) | the rover dims + the lease beam severs (the scripted kill fires) |
+| 2 | `RE-LEILÃO → CÚPULA FECHADA · zero humano no loop` (Beat 12) | the survivor seats the final block + the dome seals |
+| 3 | `TERRA +2.6s ATRÁS — nenhum comando humano chegaria a tempo.` (Beat 13) | the seal, framed against the Earth panel reading +2.6s behind |
+
+Everything else (wordmark, stakes, objectives, the Shackleton card, the bookend
+CTA) is **free** — safe to advance to at any point in the take.

@@ -44,6 +44,7 @@ func run() error {
 		battery   = flag.Float64("battery", 1.0, "rover battery in (0,1]")
 		caps      = flag.String("capabilities", "foundation", "comma-separated capabilities")
 		hbMS      = flag.Int("heartbeat-ms", 500, "heartbeat interval in milliseconds")
+		opEveryMS = flag.Int("op-every-ms", 0, "build-op pacing: ms between emitted ops while working a Task (0 = brisk default; widen for the cinematic so the dome rises across the establishing beats)")
 		recoverMS = flag.Int("recover-ms", 6000, "recoverable-outage window: ms a killed rover stays down before reviving in place")
 		settleMS  = flag.Int("settle-ms", 2500, "post-revival settle window: ms a revived rover holds station before bidding again")
 		natsURL   = flag.String("nats-url", "", "NATS URL (overrides NATS_URL env)")
@@ -65,6 +66,7 @@ func run() error {
 		Battery:           *battery,
 		Capabilities:      parseCapabilities(*caps),
 		HeartbeatEvery:    time.Duration(*hbMS) * time.Millisecond,
+		OpEvery:           time.Duration(*opEveryMS) * time.Millisecond,
 		RecoverAfter:      time.Duration(*recoverMS) * time.Millisecond,
 		SettleAfterRevive: time.Duration(*settleMS) * time.Millisecond,
 	}

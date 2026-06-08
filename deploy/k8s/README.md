@@ -28,15 +28,37 @@ killer (retained for encore parity) with least-privilege RBAC.
 
 | File | What it is |
 | --- | --- |
-| `00-namespace.yaml` | Namespace `swarmbuild` (scopes the killer's RBAC). |
-| `10-nats.yaml` | NATS (JetStream, `-m 8222`) Deployment + Service — the swarm bus. |
-| `20-coordinator.yaml` | Coordinator with `COORDINATOR_ROVERS=external` (zero in-process Rovers). |
-| `30-gateway.yaml` | WS Gateway Deployment + Service (`:8080`). |
-| `40-web.yaml` | Dashboard (nginx) Deployment + Service (`:80`). |
-| `50-rover-r1.yaml` … `55-rover-r6.yaml` | One Deployment per Rover, R1..R6. |
-| `60-killer.yaml` | Killer ServiceAccount + Role + RoleBinding + Deployment. |
-| `kustomization.yaml` | Ties it together for `kubectl apply -k`. |
-| `up.sh` / `down.sh` | kind-based bring-up (auto port-forwards web+gateway) / teardown (stops the forwards). |
+| `base/00-namespace.yaml` | Namespace `swarmbuild` (scopes the killer's RBAC). |
+| `base/10-nats.yaml` | NATS (JetStream, `-m 8222`) Deployment + Service — the swarm bus. |
+| `base/20-coordinator.yaml` | Coordinator with `COORDINATOR_ROVERS=external` (zero in-process Rovers). |
+| `base/30-gateway.yaml` | WS Gateway Deployment + Service (`:8080`). |
+| `base/40-web.yaml` | Dashboard (nginx) Deployment + Service (`:80`). |
+| `base/50-rover-r1.yaml` … `55-rover-r6.yaml` | One Deployment per Rover, R1..R6. |
+| `base/60-killer.yaml` | Killer ServiceAccount + Role + RoleBinding + Deployment. |
+| `base/kustomization.yaml` | The pod-per-rover base. |
+| `kustomization.yaml` | Thin root that re-exports `base/` so `kubectl apply -k deploy/k8s/` is the unchanged default deploy. |
+| `overlays/cinematic/kustomization.yaml` | Epic 07 cinematic overlay (ADR-0011): `COORDINATOR_ROVERS=cinematic`, standalone Rover Pods dropped. |
+| `up.sh` / `down.sh` | kind-based bring-up (auto port-forwards web+gateway) / teardown (stops the forwards). `up.sh --cinematic` applies the overlay. |
+| `logs.sh` | Tail every service during a take (coordinator + gateway + NATS + killer + any Rover Pods); `--climax` greps just the cueKill→heal trail. |
+
+### Cinematic overlay (Epic 07, ADR-0011)
+
+The Epic 07 demo runs the cinematic overlay, which flips the coordinator to
+`COORDINATOR_ROVERS=cinematic` — the in-process `lunar-R*` / `shackleton-R*` swarm
+holds the hero wall (`lunar/wall-1`) un-leasable until an operator **`cueKill`** cue,
+then orchestrates release → lease → **in-process kill in place** (no Pod delete) →
+Lease Expiry → Re-auction → a surviving Rover seals the dome. Because that pacing
+keeps the in-process swarm, the overlay **drops the six standalone Rover Pods** (under
+site-gated auction they'd sit idle); the cinematic fleet lives in the coordinator Pod.
+See `overlays/cinematic/kustomization.yaml` for the full rationale and the
+`cinematic-external` Go follow-up note, and `docs/07-demo-cinematic/CAPTURE-RECIPE.md`
+for the chrome-devtools-MCP capture recipe (dedicated Chrome profile + remote-debug).
+
+```sh
+./deploy/k8s/up.sh --cinematic     # bring up the cinematic overlay + port-forwards
+./deploy/k8s/logs.sh --cinematic   # tail all services; assert the take e2e from the logs
+kubectl kustomize deploy/k8s/overlays/cinematic/   # render-only validation (no cluster)
+```
 
 The Rover roster (ids, positions, batteries, capabilities) mirrors
 `internal/demo/demo.go` `DomeRovers()` exactly, so the board is identical to the

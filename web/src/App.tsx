@@ -22,6 +22,7 @@ import { KillPanel } from "./components/KillPanel";
 import { EarthPanel } from "./components/EarthPanel";
 import { Hotbar } from "./components/Hotbar";
 import { LoadingScreen } from "./components/LoadingScreen";
+import { CinematicCopy } from "./components/CinematicCopy";
 // Type-only — erased at build time, so referencing the camera view-mode type
 // here does NOT pull the lazy three.js Scene3D chunk into the eager shell bundle.
 import type { SiteId, ViewMode } from "./components/Scene3D";
@@ -34,6 +35,20 @@ import {
   type Ghost,
 } from "./lib/placement";
 import { missionStats, tasksForSite } from "./lib/missionStats";
+import {
+  armedFromSearch,
+  isArmToggle,
+  isCueKill,
+  isTypingTarget,
+} from "./lib/cinematicArm";
+import { copyStepDir, stepCursor } from "./lib/reel/copy";
+import {
+  cycleLockOn,
+  isMarkerFlip,
+  isMarkerLockOn,
+  type MarkerSite,
+} from "./lib/reel/markerCue";
+import { isOpenCue } from "./lib/reel/openArc";
 import type { BuildMode, Vec2 } from "./types/wire";
 import "./styles/dashboard.css";
 
@@ -102,6 +117,129 @@ export default function App() {
     window.addEventListener("keydown", onKeyDown);
     return () => window.removeEventListener("keydown", onKeyDown);
   }, []);
+
+  // --- Cinematic arming (Epic 07 S2 · #155, ADR-0011). `cinematic` is an
+  // ADDITIVE client-only UI flag — the same ADR-0004 carve-out as `hudHidden`
+  // above; it invents ZERO snapshot/wire fields and the dashboard stays a pure
+  // re-render of the server snapshot. It has two entry points: the `?reel=1` URL
+  // param seeds the INITIAL value on load (capture tooling, not a domain concept
+  // — the layer is "interactive Choreography", CONTEXT.md), and the `R` key
+  // toggles it live during a take. While DISARMED every cue handler below no-ops,
+  // so the normal app is byte-for-byte unchanged. Later slices (#156/#157/#158)
+  // gate their Scenery cues on this same flag, so it's threaded as a prop-ready
+  // piece of App state. We read the URL ONCE at mount (lazy useState init) — it's
+  // a one-shot seed, not reactive to history changes.
+  const [cinematic, setCinematic] = useState(() =>
+    armedFromSearch(typeof window === "undefined" ? "" : window.location.search),
+  );
+
+  // The cinematic copy-overlay cursor (Epic 07 S3 · #156). Another ADDITIVE
+  // client-only UI flag (ADR-0004 carve-out) — it invents ZERO snapshot/wire
+  // fields. -1 = clean stage (no copy burned in); the operator steps it through
+  // the ordered script §6 beats (lib/reel/copy) with `]`/`[`. Stepping back past
+  // the first beat returns to -1 (clean stage). Only mutated while armed; disarm
+  // never resets it, so re-arming resumes where the take left off.
+  const [copyCursor, setCopyCursor] = useState(-1);
+
+  // The cinematic marker cues (Epic 07 S4 · #157). Two more ADDITIVE client-only
+  // UI flags (the ADR-0004 carve-out) — they invent ZERO snapshot/wire fields and
+  // only DRIVE Scenery visuals the orbit markers already own:
+  //   · `lockedSite` forces the lock-on look on a chosen marker without a mouse
+  //     hover (`M` cycles null → lunar → shackleton → null) — Beats 3/6.
+  //   · `markerFlip` flips the Shackleton marker cyan/"operational" over the close
+  //     (`B` toggles) — Beat 15. A Scenery transition: asserts no World Model state.
+  // Only mutated while armed; disarm never resets them, so re-arming resumes the
+  // take. `MarkerSite` is the lib's site union (identical to Scene3D's `SiteId`).
+  const [lockedSite, setLockedSite] = useState<MarkerSite | null>(null);
+  const [markerFlip, setMarkerFlip] = useState(false);
+
+  // The orbit-open camera-arc cue (Epic 07 S5 · #158, Beats 1–2). One more ADDITIVE
+  // client-only UI flag (the ADR-0004 carve-out) — it invents ZERO snapshot/wire
+  // fields and only DRIVES Scenery the Scene3D <CinematicOpen> rig owns: while true
+  // the camera drifts the dark lunar limb then ARCS so the *fixed* sun's godrays
+  // crest in, easing into ORBIT_POSE ("lost in the dark, found by the sun"). `O`
+  // toggles it (mnemonic: open) — press once to run the open; pressing again cancels
+  // mid-arc (the rig settles cleanly into ORBIT_POSE). The SUN never moves (camera-
+  // arc, not sun-arc). Only mutated while armed; disarm never resets it. FALLBACK-
+  // READY: if never fired, the orbit is byte-for-byte unchanged (a cold ORBIT_POSE
+  // hold + the descent glare carries "found by light"), so the cue never blocks.
+  const [cinematicOpen, setCinematicOpen] = useState(false);
+
+  // One-shot disarm for the orbit-open arc: the <CinematicOpen> rig calls this when
+  // its arc finishes (or is interrupted) so the cue plays EXACTLY once. Stable
+  // (setState identity) — it's an effect dependency inside the rig. Without it the
+  // flag stayed latched and the arc re-fired on every return to orbit (the ascent
+  // bookend), capturing a mid-ascent pose and fighting the ascent driver.
+  const disarmCinematicOpen = useCallback(() => setCinematicOpen(false), []);
+
+  // The single cinematic cue this slice owns: the climax kill. While armed, one
+  // `K` press emits exactly `{cmd:"cueKill"}` once (the keydown handler ignores
+  // OS key-repeat via `e.repeat`, so holding the key still fires only once per
+  // physical press — the acceptance criterion). The browser carries NO "which
+  // Rover / when" logic: the
+  // Coordinator releases the held `lunar/wall-1`, positions a Rover, and fires the
+  // in-process kill (Expiry → Re-auction → a survivor seals the dome). cmd-only,
+  // matching the `cueKill` verb #154 added to types/wire.ts.
+  const cueKill = useCallback(() => {
+    send({ cmd: "cueKill" });
+  }, [send]);
+
+  // One window keydown listener owns BOTH cinematic keys (dedup'd per
+  // vercel client-event-listeners). `R` toggles arm at any time; `K` fires the
+  // cue ONLY while armed (disarmed ⇒ no-op, normal app unchanged). Both yield to
+  // text-entry contexts so they never hijack typing. We ignore OS key-repeat
+  // (`e.repeat`) so HOLDING a key can't flicker the arm flag or fire the cue more
+  // than ONCE per physical press (the acceptance criterion). Re-subscribes when
+  // `armed` or the stable `cueKill` change so the closure reads fresh values.
+  useEffect(() => {
+    const onKeyDown = (e: KeyboardEvent) => {
+      if (e.repeat) return;
+      if (isTypingTarget(e.target as HTMLElement | null)) return;
+      if (isArmToggle(e)) {
+        setCinematic((v) => !v);
+        return;
+      }
+      if (cinematic && isCueKill(e)) {
+        cueKill();
+        return;
+      }
+      // Copy-overlay step (#156): `]`/`[` advance/retreat the burned-in copy
+      // cursor through the script §6 beats — armed-only, so disarmed presses are
+      // a no-op (normal app unchanged). Scenery: no World Model state touched.
+      if (cinematic) {
+        const dir = copyStepDir(e);
+        if (dir !== 0) {
+          setCopyCursor((c) => stepCursor(c, dir));
+          return;
+        }
+      }
+      // Marker cues (#157): `M` cycles the lock-on target, `B` toggles the
+      // Shackleton bookend flip — armed-only, so disarmed presses are a no-op.
+      // Pure Scenery: drives the markers' existing visuals, touches no World Model.
+      if (cinematic && isMarkerLockOn(e)) {
+        setLockedSite((s) => cycleLockOn(s));
+        return;
+      }
+      if (cinematic && isMarkerFlip(e)) {
+        setMarkerFlip((v) => !v);
+        return;
+      }
+      // Orbit-open camera-arc (#158): `O` toggles the open cue — armed-only, so a
+      // disarmed press is a no-op (normal app unchanged). Pure Scenery: it drives
+      // the Scene3D <CinematicOpen> rig (camera-arc, the sun never moves), touches
+      // no World Model. ALSO gated on `viewMode === "orbit"`: the rig only runs in
+      // orbit, so a surface press must not LATCH the flag true — otherwise it stays
+      // armed and the arc fires on the next return to orbit (the ascent bookend),
+      // capturing a mid-ascent pose and fighting the ascent driver. Fallback-ready:
+      // never firing it leaves the orbit unchanged.
+      if (cinematic && viewMode === "orbit" && isOpenCue(e)) {
+        setCinematicOpen((v) => !v);
+        return;
+      }
+    };
+    window.addEventListener("keydown", onKeyDown);
+    return () => window.removeEventListener("keydown", onKeyDown);
+  }, [cinematic, cueKill, viewMode]);
 
   // --- Preload-everything-behind-a-splash (Epic 05 P1). On mount we kick the
   // explicit asset preload (lib/assets) AND warm the lazy Scene3D chunk, both via
@@ -345,6 +483,31 @@ export default function App() {
       />
 
       <main className="stage">
+        {/* Cinematic "armed" affordance (Epic 07 S2 · #155). A subtle, non-diegetic
+            capture-tooling badge that shows ONLY while armed, telling the operator
+            the cue keys are hot. It sits as a SIBLING of `.hud-stage` (outside it)
+            so it is NOT faded by the `H` HUD-hide — the operator must still see the
+            armed state during a clean-stage take. It's pointer-inert (decorative)
+            and aria-live so a screen reader announces the arm/disarm. Disarmed ⇒
+            not mounted, so the normal app is byte-for-byte unchanged. */}
+        <div className="reel-arm" role="status" aria-live="polite">
+          {cinematic ? (
+            <span className="reel-arm__badge">
+              <span className="reel-arm__dot" aria-hidden="true" />
+              REEL ARMED · <b>K</b> cue · <b>]</b>/<b>[</b> copy · <b>M</b> lock · <b>B</b> flip · <b>R</b> disarm
+            </span>
+          ) : null}
+        </div>
+
+        {/* Cinematic copy overlay (Epic 07 S3 · #156). The burned-in PT-BR copy
+            layer — Scenery (non-diegetic; encodes no World Model state). Like the
+            badge above it sits as a SIBLING of `.hud-stage` (NOT a child), so the
+            `H` HUD-fade hides the panels but the bookend wordmark/CTA survives
+            over the orbit vista (Beats 14–15). Mounted ONLY while armed (#155) and
+            stepped by `]`/`[` via the single keydown listener above; disarmed ⇒
+            not mounted, normal app byte-for-byte unchanged. */}
+        {cinematic ? <CinematicCopy cursor={copyCursor} /> : null}
+
         {/* The HUD stage: every floating panel lives here. Two CSS effects compose
             on this one wrapper, and they MUST NOT fight:
               (a) `hud--surface`/`hud--orbit` (keyed on `viewMode`) drives the
@@ -447,6 +610,20 @@ export default function App() {
               onViewModeChange={setViewMode}
               activeSite={activeSite}
               onActiveSiteChange={setActiveSite}
+              // Cinematic marker cues (#157) — only ever non-default while armed.
+              // `lockedSite` is the lib's MarkerSite union, identical to SiteId;
+              // null ⇒ undefined (no cue, manual hover only).
+              lockedSite={lockedSite ?? undefined}
+              statusOverride={markerFlip}
+              // Orbit-open camera-arc (#158) — only ever true while armed + cued.
+              // The Scene3D rig runs it in orbit only; false ⇒ the orbit is unchanged
+              // (the cold-hold fallback). Additive Scenery, zero snapshot fields.
+              cinematicOpen={cinematicOpen}
+              // One-shot disarm: the rig calls this when the arc finishes or is
+              // interrupted, so the open plays exactly once and never replays on a
+              // later return to orbit (the ascent bookend) — which used to re-fire
+              // the arc mid-ascent (flicker + camera stuck close on the Moon).
+              onCinematicOpenDone={disarmCinematicOpen}
             />
           </Suspense>
         ) : null}

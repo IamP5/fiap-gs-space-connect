@@ -57,9 +57,20 @@ func run() error {
 	//     backend, KILLER_BACKEND=kubectl). The coordinator still runs the auction,
 	//     the Lease Manager, the World Model, and snapshots, and the swarm
 	//     Self-heals over the real bus.
+	//   - "cinematic" (Epic 07, ADR-0011): the demo pacing for the 2:30 shooting
+	//     script. It KEEPS the in-process six-rover swarm but DISARMS the early
+	//     scripted auto-kill — the operator owns the Kill. The hero wall (lunar/wall-1)
+	//     is held un-leasable until a cueKill control arrives; the dome builds
+	//     everything else first, then the operator fires the cue at the climax and the
+	//     Coordinator orchestrates release → lease → in-process kill → Self-heal. Runs
+	//     against the k8s pod-per-rover overlay (#160) where the kill darkens the
+	//     victim's pod-agent in place (KILLER_ON_KILL=false), never a pod delete.
 	pacing := demo.Rehearsal()
-	if os.Getenv("COORDINATOR_ROVERS") == "external" {
+	switch os.Getenv("COORDINATOR_ROVERS") {
+	case "external":
 		pacing = demo.External()
+	case "cinematic":
+		pacing = demo.Cinematic()
 	}
 	cfg := demo.DomeScenario(natsURL, pacing)
 

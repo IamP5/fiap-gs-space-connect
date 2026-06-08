@@ -128,6 +128,15 @@ type Config struct {
 	Capabilities   []domain.Capability
 	HeartbeatEvery time.Duration // e.g. 500ms
 
+	// OpEvery is the build-op pacing this rover emits at while working a Task: at
+	// most one op per interval, so the structure rises at a watchable speed rather
+	// than all ops landing in a single tick. Zero ⇒ defaultOpEvery (the brisk
+	// pre-cinematic cadence). The Epic 07 cinematic widens it (e.g. --op-every-ms
+	// 600) so the swarm visibly builds across the establishing beats instead of
+	// finishing the dome in ~20s. It is the Choreography cadence for the work phase
+	// — a heartbeat still goes out on its own HeartbeatEvery cadence throughout.
+	OpEvery time.Duration
+
 	// SiteID is the worksite this rover is stationed at (two-site lunar surface,
 	// epic 04). The rover stamps it onto every Telemetry (so the coordinator can
 	// tag the rover's RoverView.Site) and uses it to GATE bidding: it ignores any
@@ -229,6 +238,17 @@ func (c Config) liveFailureThreshold() int {
 	return defaultLiveFailureThreshold
 }
 
+// opEvery is this rover's build-op pacing: Config.OpEvery when positive, else
+// defaultOpEvery. The cinematic widens it (--op-every-ms) so the dome rises across
+// the establishing beats instead of finishing in ~20s; left zero it is the brisk
+// pre-cinematic cadence, byte-for-byte unchanged.
+func (c Config) opEvery() time.Duration {
+	if c.OpEvery > 0 {
+		return c.OpEvery
+	}
+	return defaultOpEvery
+}
+
 // opsFor resolves the ordered op stream this rover emits while working task (of
 // type t), in strict precedence:
 //
@@ -319,12 +339,14 @@ const (
 	// ops, the work phase instead lasts until every op has been streamed.
 	workDuration = 600 * time.Millisecond
 
-	// opEvery is the build-op pacing: the rover emits at most one op per interval
-	// so the structure rises at a watchable speed rather than all ops landing in a
-	// single tick (ADR-0007 — paced by the Choreography cadence, derived from real
-	// emission). It is brisk enough that a handful of ops still completes inside a
-	// test budget. A heartbeat still goes out on its own cadence throughout.
-	opEvery = 120 * time.Millisecond
+	// defaultOpEvery is the build-op pacing when Config.OpEvery is left zero: the
+	// rover emits at most one op per interval so the structure rises at a watchable
+	// speed rather than all ops landing in a single tick (ADR-0007 — paced by the
+	// Choreography cadence, derived from real emission). It is brisk enough that a
+	// handful of ops still completes inside a test budget. A heartbeat still goes
+	// out on its own cadence throughout. The Epic 07 cinematic OVERRIDES it per
+	// rover via Config.OpEvery (--op-every-ms) to slow the build to film length.
+	defaultOpEvery = 120 * time.Millisecond
 
 	// minBattery floors the charge so 1/battery (used by the cost function for
 	// bidding) stays finite — the rover never bricks itself in the demo.
@@ -1066,7 +1088,7 @@ func streamLiveOps(ctx context.Context, cfg Config, conn *bus.Conn, st *rover, h
 	defer cancel()
 	build := startLiveBuilder(genCtx, cfg, aw)
 
-	op := time.NewTicker(opEvery)
+	op := time.NewTicker(cfg.opEvery())
 	defer op.Stop()
 	tick := time.NewTicker(moveStep)
 	defer tick.Stop()
@@ -1277,7 +1299,7 @@ func workTimer(ctx context.Context, cfg Config, conn *bus.Conn, st *rover, heart
 // replacement Rover resuming a partial Task re-confirms appended ops (deduped by
 // the coordinator) and continues from where its predecessor stopped.
 func streamOps(ctx context.Context, cfg Config, conn *bus.Conn, st *rover, heart, fault *time.Ticker, down <-chan struct{}, aw wire.Award, ops []wire.BuildOp) phaseResult {
-	op := time.NewTicker(opEvery)
+	op := time.NewTicker(cfg.opEvery())
 	defer op.Stop()
 	tick := time.NewTicker(moveStep)
 	defer tick.Stop()
