@@ -68,7 +68,7 @@ export const TopBar = memo(function TopBar({
         onClick={onReload}
         disabled={reloading}
         aria-disabled={reloading}
-        title="Reset the board so the swarm rebuilds the dome"
+        title="Pre-roll: reset the board to the deterministic seed so the swarm rebuilds the dome (re-holds the hero wall lunar/wall-1, no pod restart)"
       >
         {reloading ? "Reloading…" : "Reload demo"}
       </button>
