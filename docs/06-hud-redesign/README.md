@@ -1,5 +1,13 @@
 # [Epic] Floating game-like HUD — view-gated, minimal, NMS-style orbit markers
 
+> **Status: SHIPPED ✅** — all 6 slices built and merged to `main` (branch
+> `feat/06-hud-redesign`). `tsc -b` clean + 195 web tests green. `feature_list.json`
+> `r3d-147..r3d-152` → `passing`. **Outstanding follow-ups:** capture the 8-shot
+> verification screenshots ([VERIFICATION.md](./VERIFICATION.md)) and the in-world
+> orbit-marker fade-in (R3F, not CSS-reachable). All boxes below delivered:
+>
+> - [x] #147 foundation · [x] #148 NMS markers · [x] #149 hotbar · [x] #150 Mission HUD · [x] #151 placement gestures · [x] #152 motion + polish
+
 - **Issues:** no umbrella epic ticket; published as 6 slices on `IamP5/fiap-gs-space-connect`:
   [#147](https://github.com/IamP5/fiap-gs-space-connect/issues/147) foundation ·
   [#149](https://github.com/IamP5/fiap-gs-space-connect/issues/149) hotbar ·

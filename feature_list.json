@@ -1437,6 +1437,130 @@
         "PR #146 (branch r3d-138) merged into feat/two-site-and-app-init. Scene3D single transition driver keyed [viewMode, activeSite] (shown + shownSite, no racing effects), three branches: orbit<->surface descent/ascent, surface->surface match-cut (~900ms lateral glare whip, flips site at glare peak t=0.5, settles via lerpPose pitchHold=1), and silent orbit site-sync. LUNAR/SHACKLETON_SURFACE_POSE + poseFor(view,site); CameraFeel input clock suspended during the tween, re-armed at t=1 (no snap/no drift-fight); frameloop stays always. ShackletonShadows = procedural canvas radial-gradient decals (no assets.ts entry, no pop-in) raking opposite the grazing sun. 10 new transition.test.ts tests. Verified visually on integration tip: match-cut measured glare 0->0.88 peak ~487ms->0 ~660ms, settles cleanly; 178 tests pass."
       ],
       "notes": "Epic 04 P4. Frontend spine finale — the convergence of Epic 04 + Epic 05. See docs/04-two-site-lunar-surface."
+    },
+    {
+      "id": "r3d-147",
+      "priority": 69,
+      "area": "hud-redesign",
+      "title": "HUD foundation — view-gating + floating top bar + game-UI skin + H hide-key",
+      "user_visible_behavior": "Orbit shows only a slim floating top bar (+ the in-scene markers); surface shows the panels reskinned as solid game-UI plates. Pressing H fades the whole HUD for clean screenshots.",
+      "status": "passing",
+      "issue": 147,
+      "depends_on": [
+        "r3d-130"
+      ],
+      "verification": [
+        "cd web && npm run build && npm test (TS-clean + vitest)",
+        "manual: orbit declutter (only top bar in DOM), H toggles all HUD without eating clicks — code-verified; live screenshot pass pending"
+      ],
+      "evidence": [
+        "Implemented on feat/06-hud-redesign @ 2f275fb via a subagent swarm; tsc -b --noEmit clean + 195 web tests (vitest, +13 new: footprintGlyph/missionStats/dragDeltaToRadians) + vite build green. New TopBar; App view-gating via .hud-stage (hud--surface/orbit/hidden); .panel base + cyan/amber tokens; hudHidden state + H listener. Polish: floating transparent top bar, dropped 'dashboard' sublabel."
+      ],
+      "notes": "Epic 06 P0. No umbrella epic ticket (6 slices #147-152). See docs/06-hud-redesign/."
+    },
+    {
+      "id": "r3d-148",
+      "priority": 70,
+      "area": "hud-redesign",
+      "title": "NMS-style orbit markers — in-world line-diamond reticle + SDF labels",
+      "user_visible_behavior": "The two orbit site markers are crisp billboarded line-diamonds with in-world name+status labels (cyan Lunar / amber Shackleton), bloom, subtle pulse and hover lock-on; they occlude behind the Moon's limb and still descend on click.",
+      "status": "passing",
+      "issue": 148,
+      "depends_on": [
+        "r3d-137"
+      ],
+      "verification": [
+        "cd web && npm run build && npm test (TS-clean + vitest)",
+        "manual: diamonds billboard + occlude behind limb, hover lock-on, click descends — code-verified; live visual pass pending"
+      ],
+      "evidence": [
+        "Implemented on feat/06-hud-redesign @ 2f275fb via a subagent swarm; tsc -b --noEmit clean + 195 web tests (vitest, +13 new: footprintGlyph/missionStats/dragDeltaToRadians) + vite build green. SkyBodies SiteMarker rewritten to drei Line+Text+Billboard on CELESTIAL_BLOOM_LAYER (12); removed ring/disc/beacon meshes + Html import; invisible cylinder kept as sole hit-proxy; onSelectSite contract unchanged."
+      ],
+      "notes": "Epic 06 P3. Isolated to SkyBodies. Deferred: in-world marker fade-in on entering orbit (R3F useFrame ramp, not CSS-reachable)."
+    },
+    {
+      "id": "r3d-149",
+      "priority": 71,
+      "area": "hud-redesign",
+      "title": "Bottom hotbar — footprint glyphs + LLM-Generated toggle + stress popovers + site chip",
+      "user_visible_behavior": "Surface shows one bottom hotbar: footprint-glyph build buttons (from the catalog's real rel positions), a persistent LLM-Generated text toggle (off=Replay), Failure/Latency slider popovers, and a site chip that cycles Lunar/Shackleton with a re-descent.",
+      "status": "passing",
+      "issue": 149,
+      "depends_on": [
+        "r3d-147"
+      ],
+      "verification": [
+        "cd web && npm run build && npm test (TS-clean + vitest incl. footprintGlyph tests)",
+        "manual: pick glyph places via existing confirm path; LLM toggle threads mode; popovers send same frames; chip re-descends"
+      ],
+      "evidence": [
+        "Implemented on feat/06-hud-redesign @ 2f275fb via a subagent swarm; tsc -b --noEmit clean + 195 web tests (vitest, +13 new: footprintGlyph/missionStats/dragDeltaToRadians) + vite build green. New Hotbar + StressControls + lib/footprintGlyph (pure, 5 tests); App liveMode seeds placement.mode; deleted BlueprintPalette + ControlsPanel. Polish: text-pill LLM toggle (no checkbox, :has fill), diamond site glyph tinted by site."
+      ],
+      "notes": "Epic 06 P1."
+    },
+    {
+      "id": "r3d-150",
+      "priority": 72,
+      "area": "hud-redesign",
+      "title": "Mission HUD — progress bar + rovers-alive, expandable to task list",
+      "user_visible_behavior": "A compact Mission HUD (site-scoped build done/total + rovers N/M alive) replaces the verbose ledger; both dip on a failure spike and recover as the swarm heals. Click expands the full task list; the legend is a hover tooltip.",
+      "status": "passing",
+      "issue": 150,
+      "depends_on": [
+        "r3d-147"
+      ],
+      "verification": [
+        "cd web && npm run build && npm test (TS-clean + vitest incl. missionStats tests)",
+        "manual: counts dip+recover under failure; expand reveals task list; no scrollbar in compact view"
+      ],
+      "evidence": [
+        "Implemented on feat/06-hud-redesign @ 2f275fb via a subagent swarm; tsc -b --noEmit clean + 195 web tests (vitest, +13 new: footprintGlyph/missionStats/dragDeltaToRadians) + vite build green. New MissionHud + lib/missionStats (pure site-scoped derivations, 4 tests incl. dip/recover); App threads done/total + roversAlive/roversTotal; deleted TaskLedger. Polish: removed panel scrollbar, expanded list truncates instead of x-scrolling."
+      ],
+      "notes": "Epic 06 P2."
+    },
+    {
+      "id": "r3d-151",
+      "priority": 73,
+      "area": "hud-redesign",
+      "title": "In-scene placement gestures — camera-lock, L-place, R-drag rotate, scroll zoom, ESC cancel",
+      "user_visible_behavior": "Picking a build glyph locks the camera; left-click places on a valid spot, right-drag rotates the ghost, scroll zooms, ESC or re-click cancels. A cursor-anchored validity tick + one-line key hint replace the old sub-panel.",
+      "status": "passing",
+      "issue": 151,
+      "depends_on": [
+        "r3d-149"
+      ],
+      "verification": [
+        "cd web && npm run build && npm test (TS-clean + vitest incl. dragDeltaToRadians tests)",
+        "manual: camera always restored on place/cancel/interrupt; place gated to button 0; right-drag rotates; context menu suppressed while placing"
+      ],
+      "evidence": [
+        "Implemented on feat/06-hud-redesign @ 2f275fb via a subagent swarm; tsc -b --noEmit clean + 195 web tests (vitest, +13 new: footprintGlyph/missionStats/dragDeltaToRadians) + vite build green. Declarative camera-lock (OrbitControls enableRotate={!placing} — cannot trap the camera); PlacementPlane pointer-down gated to button 0; right-drag rotate via lib/placement.dragDeltaToRadians; PlacementTip validity Html + PlacementGestureGuard contextmenu suppression; App ESC listener + re-added rotate/cancel mutators."
+      ],
+      "notes": "Epic 06 P1 gesture rework."
+    },
+    {
+      "id": "r3d-152",
+      "priority": 74,
+      "area": "hud-redesign",
+      "title": "HUD motion + polish — animated view transitions + Earth/Kill restyle",
+      "user_visible_behavior": "Surface panels slide/fade in as the glare-masked descent settles and out on return (pure CSS off the viewMode flip); H cross-fades cleanly even mid-transition. Earth (bottom-right) and Kill (top-right) wear the shared game-UI skin.",
+      "status": "passing",
+      "issue": 152,
+      "depends_on": [
+        "r3d-147",
+        "r3d-148",
+        "r3d-149",
+        "r3d-150",
+        "r3d-151"
+      ],
+      "verification": [
+        "cd web && npm run build && npm test (TS-clean + vitest)",
+        "manual: transition composes with H (hide always wins); Earth/Kill restyled; Kill still contextual"
+      ],
+      "evidence": [
+        "Implemented on feat/06-hud-redesign @ 2f275fb via a subagent swarm; tsc -b --noEmit clean + 195 web tests (vitest, +13 new: footprintGlyph/missionStats/dragDeltaToRadians) + vite build green. .hud-stage carries hud--surface/hud--orbit keyed on viewMode (tuned IN delay ~820ms after glare peak); composes with hud--hidden (parent opacity wins). Earth/Kill on .panel skin. OUTSTANDING: the 8-shot screenshot artifact capture (docs/06-hud-redesign/VERIFICATION.md) is deferred — blocked locally by the devtools MCP Chrome-profile lock."
+      ],
+      "notes": "Epic 06 P4. Deferred follow-up: capture verification screenshots; in-world orbit-marker fade-in."
     }
   ]
 }
