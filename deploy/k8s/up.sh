@@ -22,6 +22,27 @@ SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 REPO_ROOT="$(cd "${SCRIPT_DIR}/../.." && pwd)"
 K8S_DIR="${REPO_ROOT}/deploy/k8s"
 
+# --cinematic selects the Epic 07 cinematic overlay (ADR-0011): the coordinator
+# runs COORDINATOR_ROVERS=cinematic (hero-wall hold + cueKill + the in-process
+# lunar-R*/shackleton-R* swarm) and the inert standalone Rover Pods are dropped.
+# Default (no flag) brings up the unchanged pod-per-rover base.
+#   ./deploy/k8s/up.sh              # default pod-per-rover deploy
+#   ./deploy/k8s/up.sh --cinematic  # Epic 07 cinematic overlay (2:30 shooting script)
+CINEMATIC=0
+[[ "${1:-}" == "--cinematic" ]] && CINEMATIC=1
+
+if [[ ${CINEMATIC} -eq 1 ]]; then
+  KUSTOMIZE_DIR="${K8S_DIR}/overlays/cinematic"
+  # Cinematic drops the six standalone Rover Pods (the fleet is in-process in the
+  # coordinator), so the rollout/restart lists must NOT include rover-r*.
+  WORKLOADS=(coordinator gateway web killer)
+  ROLLOUTS=(nats coordinator gateway web killer)
+else
+  KUSTOMIZE_DIR="${K8S_DIR}"
+  WORKLOADS=(coordinator gateway web killer rover-r1 rover-r2 rover-r3 rover-r4 rover-r5 rover-r6)
+  ROLLOUTS=(nats coordinator gateway web killer rover-r1 rover-r2 rover-r3 rover-r4 rover-r5 rover-r6)
+fi
+
 # Stable locations for the auto port-forward bookkeeping. The pidfile lets
 # down.sh (or a re-run of up.sh) find and kill the exact forwards we started;
 # the logs are where a forward's stderr lands if it never comes up.
@@ -87,8 +108,20 @@ else
   echo "    add OPENAI_API_KEY to .env and re-run to enable the Lab panel."
 fi
 
-echo "▶ applying manifests (kubectl apply -k ${K8S_DIR})…"
-kubectl apply -k "${K8S_DIR}"
+echo "▶ applying manifests (kubectl apply -k ${KUSTOMIZE_DIR})…"
+kubectl apply -k "${KUSTOMIZE_DIR}"
+
+# `kubectl apply` never prunes, so switching MODES on a pre-existing cluster
+# (e.g. a default run, then `up.sh --cinematic`) would leave the prior mode's
+# standalone Rover Pods running — and a bare R* Pod racing the in-process swarm
+# muddies the board. In cinematic mode, explicitly delete any leftover rover
+# Deployments so only the in-process lunar-R*/shackleton-R* swarm builds.
+if [[ ${CINEMATIC} -eq 1 ]]; then
+  echo "▶ cinematic mode → pruning any standalone Rover Pods (the fleet is in-process)…"
+  kubectl -n "${NS}" delete deployment \
+    rover-r1 rover-r2 rover-r3 rover-r4 rover-r5 rover-r6 \
+    --ignore-not-found
+fi
 
 # On a re-run, the Deployment specs are unchanged, so the existing Pods keep
 # their stale images even though `kind load` just refreshed the node. Force a
@@ -100,20 +133,21 @@ if [[ ${CLUSTER_PREEXISTED} -eq 1 ]]; then
   # NOTE: `rollout restart deployment --all` is rejected by newer kubectl
   # (unknown flag). Restart by explicit name instead (nats is excluded — its
   # upstream image is unchanged, so there's no reason to bounce JetStream).
-  kubectl -n "${NS}" rollout restart deployment \
-    coordinator gateway web killer \
-    rover-r1 rover-r2 rover-r3 rover-r4 rover-r5 rover-r6
+  kubectl -n "${NS}" rollout restart deployment "${WORKLOADS[@]}"
 fi
 
 echo "▶ waiting for rollouts to be ready…"
-for dep in nats coordinator gateway web killer \
-  rover-r1 rover-r2 rover-r3 rover-r4 rover-r5 rover-r6; do
+for dep in "${ROLLOUTS[@]}"; do
   echo "  • deployment/${dep}"
   kubectl -n "${NS}" rollout status "deployment/${dep}" --timeout=120s
 done
 
 echo
-echo "✅ SwarmBuild pod-per-rover swarm is up."
+if [[ ${CINEMATIC} -eq 1 ]]; then
+  echo "✅ SwarmBuild CINEMATIC overlay is up (in-process swarm; COORDINATOR_ROVERS=cinematic)."
+else
+  echo "✅ SwarmBuild pod-per-rover swarm is up."
+fi
 
 # --- auto port-forward --------------------------------------------------------
 # Kill any STALE forwards from a previous run first, so re-running up.sh is
@@ -171,9 +205,24 @@ else
   echo "  Try opening http://localhost:5173 anyway; the forwards may still be settling."
 fi
 echo
-echo "Hit KILL Rx on the dashboard — the rover suffers a recoverable OUTAGE: it"
-echo "goes dark at its current position (the Pod keeps running), its Lease expires,"
-echo "the swarm self-heals onto a neighbour, then the SAME rover revives in place"
-echo "after ~6s. The in-app \"Reload demo\" button rebuilds the dome with no restart."
+if [[ ${CINEMATIC} -eq 1 ]]; then
+  echo "CINEMATIC mode (Epic 07, ADR-0011): the dome builds everything EXCEPT the held"
+  echo "hero wall (lunar/wall-1). At the climax fire the cueKill cue ({cmd:\"cueKill\"})"
+  echo "from the dashboard — the Coordinator releases the hold, a Rover leases + drives"
+  echo "to the wall, then takes the in-process kill IN PLACE (no Pod delete): its Lease"
+  echo "expires → Re-auction → a surviving Rover seals the dome. The in-app \"Reload"
+  echo "demo\" button ({cmd:\"reloadDemo\"}) resets the board with NO Pod restart, so the"
+  echo "pre-roll is deterministic for a clean take."
+  echo
+  echo "Tail every service during a take with:  ./deploy/k8s/logs.sh --cinematic"
+  echo "Chrome-MCP capture recipe:              docs/07-demo-cinematic/CAPTURE-RECIPE.md"
+else
+  echo "Hit KILL Rx on the dashboard — the rover suffers a recoverable OUTAGE: it"
+  echo "goes dark at its current position (the Pod keeps running), its Lease expires,"
+  echo "the swarm self-heals onto a neighbour, then the SAME rover revives in place"
+  echo "after ~6s. The in-app \"Reload demo\" button rebuilds the dome with no restart."
+  echo
+  echo "Tail every service with: ./deploy/k8s/logs.sh"
+fi
 echo
 echo "Tear down (also stops the port-forwards) with: ./deploy/k8s/down.sh"

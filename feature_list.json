@@ -1679,7 +1679,7 @@
       "area": "demo-cinematic",
       "title": "k8s cinematic overlay (pod-per-rover) + chrome-mcp capture harness + log aggregation",
       "user_visible_behavior": "The k8s pod-per-rover deploy gains a cinematic overlay wiring #154's pacing/flags + cueKill (up.sh -> web on localhost:5173); a chrome-mcp launch recipe (dedicated Chrome profile) resolves the Epic-06 profile lock; a logs helper tails all services for e2e confirmation. KILL stays the in-process outage (KILLER_ON_KILL=false).",
-      "status": "not_started",
+      "status": "passing",
       "issue": 160,
       "depends_on": [
         "r3d-154"
@@ -1688,6 +1688,7 @@
         "deploy: up.sh brings up the cinematic overlay; port-forward web->localhost:5173; reloadDemo resets the board with no pod restart; default deploy unchanged",
         "chrome-devtools MCP: navigate localhost:5173, screenshot live dashboard, confirm WS snapshot flowing; logs helper tails coordinator+gateway+nats+rovers+killer and shows the swarm auctioning/building"
       ],
+      "evidence": "kustomize overlay deploy/k8s/overlays/cinematic/ (base moved to deploy/k8s/base/, thin root re-exports it). RENDER: `kubectl kustomize deploy/k8s/` (default, 18 objs, COORDINATOR_ROVERS=external, 6 rover Deployments) is byte-for-byte identical to origin (diff ignoring comments = empty); `kubectl kustomize deploy/k8s/overlays/cinematic/` (12 objs, COORDINATOR_ROVERS=cinematic, 0 rover Deployments, killer KILLER_ON_KILL=false). DRY-RUN: `kubectl apply -k deploy/k8s/overlays/cinematic/ --dry-run=client|server` both clean. LINT: bash -n on up.sh/down.sh/logs.sh. CLUSTER (kind-swarmbuild): brought the overlay up (only nats/coordinator/gateway/web/killer Ready, no rover-r* pods); in-proc lunar-R* swarm built the dome with lunar/wall-1 HELD (0 awards); fired {cmd:cueKill} via gateway WS -> coordinator trail 'cueKill: hero wall released + kill armed' -> award lunar/wall-1 to=lunar-R1 -> 'scripted kill' rover=lunar-R1 (in-process, NO pod delete) -> expiry UNCLAIMED -> award lunar-R3 -> complete (dome sealed); {cmd:reloadDemo} reset the board on the SAME coordinator pod (no restart); logs.sh --climax surfaces the trail; restored cluster to base afterward. KNOWN LIMITATION (documented): #154 Cinematic() keeps the in-proc swarm, so the standalone-Rover-Pod flags --op-every-ms/--recover-ms aren't in the live path (hero-wall hold provides film-length pacing instead); landing the kill on a standalone Pod-agent needs a cinematic-external Go follow-up (out of #160's no-Go-changes scope). chrome-mcp recipe: docs/07-demo-cinematic/CAPTURE-RECIPE.md (dedicated --user-data-dir + --remote-debugging-port=9222).",
       "notes": "Epic 07 infra prerequisite (type:task, area:infra). Reshaped/added 2026-06-08 (grilling): mock can't drive Self-heal, so all heal/e2e verification runs on k8s. See docs/07-demo-cinematic/."
     }
   ]
