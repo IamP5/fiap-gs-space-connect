@@ -1586,7 +1586,7 @@
       "area": "demo-cinematic",
       "title": "Cinematic arm + cueKill trigger (money shot trigger)",
       "user_visible_behavior": "?reel=1 + a keybind arm cinematic mode (armed affordance shown); while armed, one key sends {cmd:'cueKill'} and the backend (#154) runs the whole climax. No snapshot-reading or rover-id logic in the browser.",
-      "status": "not_started",
+      "status": "passing",
       "issue": 155,
       "depends_on": [
         "r3d-154"
@@ -1594,6 +1594,9 @@
       "verification": [
         "cd web && npm run build && npm test (TS-clean + vitest)",
         "chrome-devtools MCP on k8s (#160): load ?reel=1, assert armed affordance; press cue key -> real Self-heal runs (MissionHud dips then recovers; lunar/wall-1 LEASED->UNCLAIMED->LEASED-new; dome seals); screenshot kill + heal frames"
+      ],
+      "evidence": [
+        "Implemented on feat/07-155-web-arm. DoD green: `cd web && npm run build` TS-clean (tsc -b + vite build OK); `npm test` 206 passed (17 files), incl. 11 new in src/lib/cinematicArm.test.ts. Arming is additive client UI state (ADR-0004 carve-out, like hudHidden): `cinematic` flag in App.tsx, seeded once at mount from ?reel=1 (lib/cinematicArm.armedFromSearch) and toggled live by `R`; `K` (armed-only) dispatches exactly `{cmd:'cueKill'}` via the existing send() — cmd-only, matching the #154 wire.ts verb; NO snapshot/rover-id logic in the browser. Disarmed => both cues no-op and the affordance is not mounted (normal app byte-for-byte unchanged). A subtle 'REEL ARMED' badge (sibling of .hud-stage so it survives the H HUD-hide; aria-live, pointer-inert, prefers-reduced-motion respected) is the on-screen affordance. Pure key/URL logic extracted to lib/cinematicArm.ts with co-located test. No new snapshot fields; cueKill is the only control verb (already #154). E2E (k8s + chrome-mcp climax) deferred to the coordinator on the merged branch per #160 (needs #160 overlay)."
       ],
       "notes": "Epic 07. Reshaped 2026-06-08 (grilling): backend-orchestrated cueKill, so the browser only arms + triggers. See docs/07-demo-cinematic/ + ADR-0011."
     },

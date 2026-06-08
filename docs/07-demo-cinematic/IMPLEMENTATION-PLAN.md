@@ -264,7 +264,7 @@ all-AFK, with chrome-devtools MCP acceptance criteria (functionality + look-and-
 
 - [x] **S1 · #154** `feat(*): Cinematic External pacing + hero-wall hold + cueKill` · `area:backend` · `r3d-154` · blocked by: none
 - [ ] **INFRA · #160** `task(infra): k8s cinematic overlay + chrome-mcp harness + log aggregation` · `area:infra` · `r3d-160` · blocked by: #154
-- [ ] **S2 · #155** `feat(web): cinematic arm + cueKill trigger` · `area:frontend` · `r3d-155` · blocked by: #154
+- [x] **S2 · #155** `feat(web): cinematic arm + cueKill trigger` · `area:frontend` · `r3d-155` · blocked by: #154
 - [ ] **S3 · #156** `feat(web): cinematic copy overlay (survives H, beat-locked rule)` · `area:frontend` · `r3d-156` · blocked by: #155
 - [ ] **S4 · #157** `feat(web): marker lock-on cue + bookend label flip (Scenery)` · `area:frontend` · `r3d-157` · blocked by: #155
 - [ ] **S5 · #158** `feat(web): orbit-open camera-arc — found by light (fallback-ready)` · `area:frontend` · `r3d-158` · blocked by: #155

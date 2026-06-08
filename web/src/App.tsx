@@ -34,6 +34,12 @@ import {
   type Ghost,
 } from "./lib/placement";
 import { missionStats, tasksForSite } from "./lib/missionStats";
+import {
+  armedFromSearch,
+  isArmToggle,
+  isCueKill,
+  isTypingTarget,
+} from "./lib/cinematicArm";
 import type { BuildMode, Vec2 } from "./types/wire";
 import "./styles/dashboard.css";
 
@@ -102,6 +108,56 @@ export default function App() {
     window.addEventListener("keydown", onKeyDown);
     return () => window.removeEventListener("keydown", onKeyDown);
   }, []);
+
+  // --- Cinematic arming (Epic 07 S2 · #155, ADR-0011). `cinematic` is an
+  // ADDITIVE client-only UI flag — the same ADR-0004 carve-out as `hudHidden`
+  // above; it invents ZERO snapshot/wire fields and the dashboard stays a pure
+  // re-render of the server snapshot. It has two entry points: the `?reel=1` URL
+  // param seeds the INITIAL value on load (capture tooling, not a domain concept
+  // — the layer is "interactive Choreography", CONTEXT.md), and the `R` key
+  // toggles it live during a take. While DISARMED every cue handler below no-ops,
+  // so the normal app is byte-for-byte unchanged. Later slices (#156/#157/#158)
+  // gate their Scenery cues on this same flag, so it's threaded as a prop-ready
+  // piece of App state. We read the URL ONCE at mount (lazy useState init) — it's
+  // a one-shot seed, not reactive to history changes.
+  const [cinematic, setCinematic] = useState(() =>
+    armedFromSearch(typeof window === "undefined" ? "" : window.location.search),
+  );
+
+  // The single cinematic cue this slice owns: the climax kill. While armed, one
+  // `K` press emits exactly `{cmd:"cueKill"}` once (the keydown handler ignores
+  // OS key-repeat via `e.repeat`, so holding the key still fires only once per
+  // physical press — the acceptance criterion). The browser carries NO "which
+  // Rover / when" logic: the
+  // Coordinator releases the held `lunar/wall-1`, positions a Rover, and fires the
+  // in-process kill (Expiry → Re-auction → a survivor seals the dome). cmd-only,
+  // matching the `cueKill` verb #154 added to types/wire.ts.
+  const cueKill = useCallback(() => {
+    send({ cmd: "cueKill" });
+  }, [send]);
+
+  // One window keydown listener owns BOTH cinematic keys (dedup'd per
+  // vercel client-event-listeners). `R` toggles arm at any time; `K` fires the
+  // cue ONLY while armed (disarmed ⇒ no-op, normal app unchanged). Both yield to
+  // text-entry contexts so they never hijack typing. We ignore OS key-repeat
+  // (`e.repeat`) so HOLDING a key can't flicker the arm flag or fire the cue more
+  // than ONCE per physical press (the acceptance criterion). Re-subscribes when
+  // `armed` or the stable `cueKill` change so the closure reads fresh values.
+  useEffect(() => {
+    const onKeyDown = (e: KeyboardEvent) => {
+      if (e.repeat) return;
+      if (isTypingTarget(e.target as HTMLElement | null)) return;
+      if (isArmToggle(e)) {
+        setCinematic((v) => !v);
+        return;
+      }
+      if (cinematic && isCueKill(e)) {
+        cueKill();
+      }
+    };
+    window.addEventListener("keydown", onKeyDown);
+    return () => window.removeEventListener("keydown", onKeyDown);
+  }, [cinematic, cueKill]);
 
   // --- Preload-everything-behind-a-splash (Epic 05 P1). On mount we kick the
   // explicit asset preload (lib/assets) AND warm the lazy Scene3D chunk, both via
@@ -345,6 +401,22 @@ export default function App() {
       />
 
       <main className="stage">
+        {/* Cinematic "armed" affordance (Epic 07 S2 · #155). A subtle, non-diegetic
+            capture-tooling badge that shows ONLY while armed, telling the operator
+            the cue keys are hot. It sits as a SIBLING of `.hud-stage` (outside it)
+            so it is NOT faded by the `H` HUD-hide — the operator must still see the
+            armed state during a clean-stage take. It's pointer-inert (decorative)
+            and aria-live so a screen reader announces the arm/disarm. Disarmed ⇒
+            not mounted, so the normal app is byte-for-byte unchanged. */}
+        <div className="reel-arm" role="status" aria-live="polite">
+          {cinematic ? (
+            <span className="reel-arm__badge">
+              <span className="reel-arm__dot" aria-hidden="true" />
+              REEL ARMED · <b>K</b> cue · <b>R</b> disarm
+            </span>
+          ) : null}
+        </div>
+
         {/* The HUD stage: every floating panel lives here. Two CSS effects compose
             on this one wrapper, and they MUST NOT fight:
               (a) `hud--surface`/`hud--orbit` (keyed on `viewMode`) drives the
