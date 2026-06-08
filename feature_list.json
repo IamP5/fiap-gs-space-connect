@@ -8,7 +8,7 @@
     "do_not_skip_verification": true,
     "do_not_edit_status_to_hide_unfinished_work": true,
     "respect_depends_on_order": true,
-    "cross_reference_github_issue": "every tracker-mapped feature carries `issue` + `epic`; feature.status and the GitHub issue state must agree (passing <-> closed)"
+    "cross_reference_github_issue": "every tracker-mapped feature carries `issue` + `milestone` (the GitHub milestone number that groups the slice; legacy pre-2026-06 features carry `epic` = a now-retired type:epic tracking-issue number instead); feature.status and the GitHub issue state must agree (passing <-> closed)"
   },
   "status_legend": {
     "not_started": "Work has not begun.",
@@ -1700,6 +1700,115 @@
       ],
       "evidence": "kustomize overlay deploy/k8s/overlays/cinematic/ (base moved to deploy/k8s/base/, thin root re-exports it). RENDER: `kubectl kustomize deploy/k8s/` (default, 18 objs, COORDINATOR_ROVERS=external, 6 rover Deployments) is byte-for-byte identical to origin (diff ignoring comments = empty); `kubectl kustomize deploy/k8s/overlays/cinematic/` (12 objs, COORDINATOR_ROVERS=cinematic, 0 rover Deployments, killer KILLER_ON_KILL=false). DRY-RUN: `kubectl apply -k deploy/k8s/overlays/cinematic/ --dry-run=client|server` both clean. LINT: bash -n on up.sh/down.sh/logs.sh. CLUSTER (kind-swarmbuild): brought the overlay up (only nats/coordinator/gateway/web/killer Ready, no rover-r* pods); in-proc lunar-R* swarm built the dome with lunar/wall-1 HELD (0 awards); fired {cmd:cueKill} via gateway WS -> coordinator trail 'cueKill: hero wall released + kill armed' -> award lunar/wall-1 to=lunar-R1 -> 'scripted kill' rover=lunar-R1 (in-process, NO pod delete) -> expiry UNCLAIMED -> award lunar-R3 -> complete (dome sealed); {cmd:reloadDemo} reset the board on the SAME coordinator pod (no restart); logs.sh --climax surfaces the trail; restored cluster to base afterward. KNOWN LIMITATION (documented): #154 Cinematic() keeps the in-proc swarm, so the standalone-Rover-Pod flags --op-every-ms/--recover-ms aren't in the live path (hero-wall hold provides film-length pacing instead); landing the kill on a standalone Pod-agent needs a cinematic-external Go follow-up (out of #160's no-Go-changes scope). chrome-mcp recipe: docs/07-demo-cinematic/CAPTURE-RECIPE.md (dedicated --user-data-dir + --remote-debugging-port=9222).",
       "notes": "Epic 07 infra prerequisite (type:task, area:infra). Reshaped/added 2026-06-08 (grilling): mock can't drive Self-heal, so all heal/e2e verification runs on k8s. See docs/07-demo-cinematic/."
+    },
+    {
+      "id": "r3d-169",
+      "priority": 82,
+      "area": "surface-immersion",
+      "title": "Declutter resting worksite — gate UNCLAIMED task ghosts (08-P1)",
+      "user_visible_behavior": "At rest the lunar/Shackleton worksite shows clean regolith instead of a field of translucent ghost boxes + a ghost dome; UNCLAIMED tasks render as a flat survey-marker decal (or faint shrunk ghost), while LEASED/DONE and the drag-to-place ghost are unchanged.",
+      "status": "not_started",
+      "issue": 169,
+      "milestone": 3,
+      "depends_on": [],
+      "verification": [
+        "cd web && npm run build && npm test (TS-clean + vitest)",
+        "manual: reel start shows no floating ghost-box field; LEASED/DONE + drag-place ghost still render; Epic 07 headline replay unaffected"
+      ],
+      "evidence": "",
+      "notes": "Milestone 08 (surface immersion). Plan docs/08-surface-immersion/ WS-1. Render gate only, no data change."
+    },
+    {
+      "id": "r3d-170",
+      "priority": 83,
+      "area": "surface-immersion",
+      "title": "Regolith overhaul — grey color + 1K/2K maps + anti-tiling (08-P2)",
+      "user_visible_behavior": "The ground reads as neutral grey lunar regolith (not brown dirt), with no visible texture tiling at working distance, upgraded >=1K CC0 PBR maps, and crisp near-field foreground detail.",
+      "status": "not_started",
+      "issue": 170,
+      "milestone": 3,
+      "depends_on": [],
+      "verification": [
+        "cd web && npm run build && npm test",
+        "manual: grey (not brown) regolith; no tiling at working distance; new CC0 textures credited in public/assets/CREDITS.md; no frame-time regression"
+      ],
+      "evidence": "",
+      "notes": "Milestone 08. Plan WS-4 (ground). Poly Haven CC0 lunar maps; Draco/KTX2 if VRAM tight."
+    },
+    {
+      "id": "r3d-171",
+      "priority": 84,
+      "area": "surface-immersion",
+      "title": "Robotic rover readability — scale 2.5-3x + load-fix + material (08-P4)",
+      "user_visible_behavior": "Rovers are unmistakably robots at default camera distance — visibly metal, subtly alive, scaled ~2.5-3x larger (intentional realism break), and never silently rendered as primitive boxes.",
+      "status": "not_started",
+      "issue": 171,
+      "milestone": 3,
+      "depends_on": [],
+      "verification": [
+        "cd web && npm run build && npm test",
+        "manual: confirm rassor_rover.glb loads (no primitive fallback); hit-proxy scales with body (no missed clicks); rover reads as metal robot with idle motion; structures unchanged"
+      ],
+      "evidence": "",
+      "notes": "Milestone 08. Plan WS-3. Decision locked: rover scale breaks realism (~2.5-3x); structures stay real (realMeters x 0.12). Document the break next to scale constants."
+    },
+    {
+      "id": "r3d-172",
+      "priority": 85,
+      "area": "surface-immersion",
+      "title": "Cinematic lunar lighting + exposure pass (08-P3)",
+      "user_visible_behavior": "The sunlit surface is bright with deep near-black shadows (no muddy grey wash); tonemapping/exposure tuned so regolith doesn't clip; bloom confined to sun + halos; Earth-over-horizon reads as a hero shot.",
+      "status": "not_started",
+      "issue": 172,
+      "milestone": 3,
+      "depends_on": [
+        "r3d-170"
+      ],
+      "verification": [
+        "cd web && npm run build && npm test",
+        "manual: high-contrast surface (bright sun, near-black shadow); no terrain bloom haze; Earth hero framing; Epic 07 cinematic unaffected"
+      ],
+      "evidence": "",
+      "notes": "Milestone 08. Plan WS-5. Tune against the new regolith (r3d-170) to avoid re-doing twice."
+    },
+    {
+      "id": "r3d-173",
+      "priority": 86,
+      "area": "surface-immersion",
+      "title": "Hero lava-tube cave skylight + boulder scatter (08-P6)",
+      "user_visible_behavior": "The lunar site gains a focal landform — a collapsed lava-tube skylight (dark recessed mouth + carved rim) off-center — plus an instanced boulder scatter clustered near the rim and absent from structure footprints.",
+      "status": "not_started",
+      "issue": 173,
+      "milestone": 3,
+      "depends_on": [
+        "r3d-170"
+      ],
+      "verification": [
+        "cd web && npm run build && npm test",
+        "manual: lava-tube cave skylight present + reads as a tube mouth; boulders clustered, off footprints, instance-capped; no frame-time regression"
+      ],
+      "evidence": "",
+      "notes": "Milestone 08. Plan WS-4 (landform). Decision locked: hero landform is a lava-tube cave skylight, not an impact crater. Reuses craterProfile machinery."
+    },
+    {
+      "id": "r3d-174",
+      "priority": 87,
+      "area": "surface-immersion",
+      "title": "Composed base layout + NASA-PD assets [HITL] (08-P5)",
+      "user_visible_behavior": "The surface reads as one designed base with clear zones (landing pad / habitat cluster / power farm / comms ridge), structures grounded by pad + rover-track decals, populated with insignia-clean NASA-PD GLBs (Apollo LM, Astronaut, EMU, 70-m dish, habitat parts).",
+      "status": "not_started",
+      "issue": 174,
+      "milestone": 3,
+      "depends_on": [
+        "r3d-169"
+      ],
+      "verification": [
+        "cd web && npm run build && npm test",
+        "HITL: design review of the composed layout before merge",
+        "manual: zoned base, nothing randomly dropped, pad/track decals ground structures; new GLBs Draco-conditioned + insignia-audited + credited; Epic 07 cinematic (lunar/wall-1 + orbit bookend) unaffected"
+      ],
+      "evidence": "",
+      "notes": "Milestone 08. Plan WS-2 + WS-6. HITL (art-direction review). NASA-PD only; audit each GLB for NASA insignia (meatball/worm/seal) and strip/hide. Skip Gateway Core (66 MB). Asset URLs in docs/08-surface-immersion/ASSET-RESEARCH.md."
     }
   ]
 }

@@ -128,17 +128,21 @@ then commit (Conventional Commits, below) — one focused commit per logical cha
 
 Full convention: [`docs/harness/issue-tracking.md`](./docs/harness/issue-tracking.md). In short:
 
-- **Label every issue with one `type:` + one `area:`.** Tiers: `type:epic` (tracks
-  child slices, never worked directly) · `type:feature` (one demoable slice) ·
-  `type:task` (chore, no user-visible change) · `type:bug` · `type:refactor`.
-  Areas: `area:frontend` `area:backend` `area:docs` `area:infra`.
+- **Group initiatives with a GitHub milestone** (`NN — Initiative Name`, matching
+  `docs/NN-name/`), **not** a tracking issue. File each vertical slice as an issue
+  assigned to that milestone. (`type:epic` is retired — kept only for legacy
+  issues #46/#62.)
+- **Label every issue with one `type:` + one `area:`.** Tiers: `type:feature` (one
+  demoable slice) · `type:task` (chore, no user-visible change) · `type:bug` ·
+  `type:refactor`. Areas: `area:frontend` `area:backend` `area:docs` `area:infra`.
 - **Name the issue your PR delivers in the title** — `type(scope): subject (#NN)` —
   and add `Closes #NN` in the body. Merging to `main` then closes it (GitHub +
   the `issue-sync` Action safety net). `Relates`/`Blocked by`/`Refs #NN` never close.
 - **Three trackers stay in sync per merge:** GitHub issue → closed (automatic);
-  `feature_list.json` feature → `passing` + evidence; epic docs checklist → ticked
-  — the last two **in the same PR**. Features map to issues by `issue`/`epic` fields
-  and the `r3d-<issue>` id (`passing` ⇔ closed). Full rules:
+  `feature_list.json` feature → `passing` + evidence; milestone docs checklist →
+  ticked — the last two **in the same PR**. Features map to issues by
+  `issue`/`milestone` fields and the `r3d-<issue>` id (`passing` ⇔ closed; legacy
+  features use `epic`). Full rules:
   [`docs/harness/issue-tracking.md`](./docs/harness/issue-tracking.md).
 
 ## Skills
