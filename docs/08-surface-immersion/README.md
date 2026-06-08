@@ -15,7 +15,7 @@ initiative is grouped by a milestone, not a `type:epic` issue (see
 Tick each on merge (`- [x] #NN … · PR #MM`) and flip its `feature_list.json`
 feature to `passing`.
 
-- [ ] #169 — 08-P1 Declutter resting worksite (WS-1) · `r3d-169` · _no blockers_
+- [x] #169 — 08-P1 Declutter resting worksite (WS-1) · `r3d-169` · _branch `feat/08-surface-immersion`_
 - [ ] #170 — 08-P2 Regolith overhaul: grey + 1K/2K + anti-tiling (WS-4) · `r3d-170` · _no blockers_
 - [ ] #171 — 08-P4 Robotic rover readability: scale 2.5–3× + load-fix + material (WS-3) · `r3d-171` · _no blockers_
 - [ ] #172 — 08-P3 Cinematic lunar lighting + exposure (WS-5) · `r3d-172` · _blocked by #170_

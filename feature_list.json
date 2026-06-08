@@ -1707,7 +1707,7 @@
       "area": "surface-immersion",
       "title": "Declutter resting worksite — gate UNCLAIMED task ghosts (08-P1)",
       "user_visible_behavior": "At rest the lunar/Shackleton worksite shows clean regolith instead of a field of translucent ghost boxes + a ghost dome; UNCLAIMED tasks render as a flat survey-marker decal (or faint shrunk ghost), while LEASED/DONE and the drag-to-place ghost are unchanged.",
-      "status": "not_started",
+      "status": "passing",
       "issue": 169,
       "milestone": 3,
       "depends_on": [],
@@ -1715,8 +1715,8 @@
         "cd web && npm run build && npm test (TS-clean + vitest)",
         "manual: reel start shows no floating ghost-box field; LEASED/DONE + drag-place ghost still render; Epic 07 headline replay unaffected"
       ],
-      "evidence": "",
-      "notes": "Milestone 08 (surface immersion). Plan docs/08-surface-immersion/ WS-1. Render gate only, no data change."
+      "evidence": "feat/08-surface-immersion: TaskBlock UNCLAIMED ghost opacity 0.28->0.10 + 0.82 shrink (faint scribe, operator choice), both primitive + interpreted paths; LEASED/DONE + BlueprintGhost untouched. Verified: tsc -b clean, eslint 0 errors, vitest 239 pass. Visual reel-start + Epic 07 replay to be confirmed by operator.",
+      "notes": "Milestone 08 (surface immersion). Plan docs/08-surface-immersion/ WS-1. Render gate only, no data change. Operator chose faint-scribe (C) over survey-marker (A): opacity 0.10 + 0.82 scale."
     },
     {
       "id": "r3d-170",

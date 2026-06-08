@@ -1383,7 +1383,14 @@ function TaskBlock({
   const built = isBuilt(task);
 
   const color = built ? "#cfcfd6" : task.status === "LEASED" ? SIGNAL_WARN : SIGNAL_IDLE;
-  const opacity = built ? 1 : task.status === "LEASED" ? 0.5 : 0.28;
+  // WS-1 (#169): at rest an UNCLAIMED task is a faint *scribe* of the structure to
+  // come — a build affordance, not set dressing. Drop it to a barely-there outline
+  // (opacity 0.10, was 0.28) and shrink it, so the resting worksite reads as clean
+  // regolith with a planned footprint rather than a field of solid translucent
+  // boxes + a ghost dome. LEASED (in-progress) and DONE (built) render unchanged.
+  const isUnclaimedGhost = !built && task.status === "UNCLAIMED";
+  const opacity = built ? 1 : task.status === "LEASED" ? 0.5 : 0.1;
+  const ghostScale = isUnclaimedGhost ? 0.82 : 1;
 
   // The dome cap reads as a hemisphere; foundations/walls as low blocks.
   const isCap = tier === "dome";
@@ -1426,7 +1433,10 @@ function TaskBlock({
         }
       }
     }
-    const popScale = solidify > 0 ? 1 + Math.sin(solidify * Math.PI) * 0.25 : 1;
+    // ghostScale folds the WS-1 UNCLAIMED shrink into the same scale channel as
+    // the solidify pop, so a faint resting ghost reads ~0.82 and a completing
+    // block still pops from there (UNCLAIMED tasks never carry a solidify beat).
+    const popScale = (solidify > 0 ? 1 + Math.sin(solidify * Math.PI) * 0.25 : 1) * ghostScale;
 
     // Interpreted structure: pop the group (scale only — procedural mats stay).
     if (groupRef.current) groupRef.current.scale.setScalar(popScale);
