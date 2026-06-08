@@ -2036,6 +2036,13 @@ type Scene3DProps = {
   // marker click calls BOTH this and onViewModeChange("surface"), descending to
   // the clicked site. Optional (tests / single-site path omit it).
   onActiveSiteChange?: (site: SiteId) => void;
+  // Cinematic marker cues (Epic 07 S4 · #157), threaded straight through to
+  // SkyBodies' orbit site markers. Both optional + additive Scenery (gated upstream
+  // on the `cinematic` arm flag), so omitting them leaves the markers unchanged:
+  //   · `lockedSite` forces the lock-on look on that marker without a mouse hover.
+  //   · `statusOverride` flips the Shackleton marker to cyan/"operational" (Beat 15).
+  lockedSite?: SiteId;
+  statusOverride?: boolean;
 };
 
 // Per-mode OrbitControls clamps + target. Both presets are clamped (ADR-0004):
@@ -2648,6 +2655,8 @@ function SceneContents({
   onViewModeChange,
   activeSite = "lunar",
   onActiveSiteChange,
+  lockedSite,
+  statusOverride,
 }: Scene3DProps) {
   const lightRef = useRef<THREE.DirectionalLight>(null);
   // Shared ref to the Sun core disc — surfaced from SkyBodies so the GodRays
@@ -2765,7 +2774,13 @@ function SceneContents({
           <LunarTerrain terrainTint={frame.terrainTint} crater={activeSite === "shackleton"} />
         )}
         <SpaceEnvironment />
-        <SkyBodies viewMode={viewMode} onSelectSite={onSelectSite} sunRef={sunRef} />
+        <SkyBodies
+          viewMode={viewMode}
+          onSelectSite={onSelectSite}
+          sunRef={sunRef}
+          lockedSite={lockedSite}
+          statusOverride={statusOverride}
+        />
       </>
     );
   }
@@ -2799,7 +2814,13 @@ function SceneContents({
           Moon globe (orbit-only hero) + a distant Earth (both views) + the Sun
           (light emitter) + the clickable site markers (orbit-only). The
           Moon's appear/vanish is hidden behind the descent glare. */}
-      <SkyBodies viewMode={viewMode} onSelectSite={onSelectSite} sunRef={sunRef} />
+      <SkyBodies
+        viewMode={viewMode}
+        onSelectSite={onSelectSite}
+        sunRef={sunRef}
+        lockedSite={lockedSite}
+        statusOverride={statusOverride}
+      />
 
       {/* The WORKSITE — only in surface view. In orbit it would float as a square
           in space ("moonbase lost in space"), so it is mounted only on the
@@ -3210,6 +3231,8 @@ export function Scene3D({
   onViewModeChange,
   activeSite = "lunar",
   onActiveSiteChange,
+  lockedSite,
+  statusOverride,
 }: Scene3DProps) {
   // Initial camera pose, seeded to the DEFAULT view so the app opens already
   // framed on it. The Canvas `camera` prop is applied ONCE on mount, so this is
@@ -3653,6 +3676,8 @@ export function Scene3D({
           // worksite + per-site lighting/fog/scenery swap unseen behind the flash.
           activeSite={shownSite}
           onActiveSiteChange={onActiveSiteChange}
+          lockedSite={lockedSite}
+          statusOverride={statusOverride}
         />
         <RigBridge
           cameraRef={cameraRef}
