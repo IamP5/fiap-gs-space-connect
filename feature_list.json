@@ -1758,7 +1758,7 @@
       "area": "surface-immersion",
       "title": "Cinematic lunar lighting + exposure pass (08-P3)",
       "user_visible_behavior": "The sunlit surface is bright with deep near-black shadows (no muddy grey wash); tonemapping/exposure tuned so regolith doesn't clip; bloom confined to sun + halos; Earth-over-horizon reads as a hero shot.",
-      "status": "not_started",
+      "status": "passing",
       "issue": 172,
       "milestone": 3,
       "depends_on": [
@@ -1768,8 +1768,8 @@
         "cd web && npm run build && npm test",
         "manual: high-contrast surface (bright sun, near-black shadow); no terrain bloom haze; Earth hero framing; Epic 07 cinematic unaffected"
       ],
-      "evidence": "",
-      "notes": "Milestone 08. Plan WS-5. Tune against the new regolith (r3d-170) to avoid re-doing twice."
+      "evidence": "feat/08-surface-immersion: lunar key raised + elevated (sunDir y 1265->2600 ~10deg->21deg so flat regolith catches light; intensity 1.9->3.6); fill CRUSHED (ambient 0.12->0.05, hemisphere warm #ffe9cc/0.25 -> cool #cdd6e2/0.10, secondary fills 0.35->0.16 & 0.22->0.07); surface-only exposure lift SURFACE_EXPOSURE_SCALE 1.15. Shackleton craterFill branch untouched (kept dark/cold identity). Verified: tsc clean, eslint 0 err, 239 vitest pass; chrome-mcp = lunar bright high-contrast lit regolith, Shackleton still distinct dark crater, orbit unaffected (surface-gated). DEFERRED: WS-5 Earth-over-horizon camera re-framing (risks Epic 07).",
+      "notes": "Milestone 08. Plan WS-5. Tune against the new regolith (r3d-170) to avoid re-doing twice. Earth-over-horizon hero framing (WS-5 task 4) deferred to avoid Epic 07 cinematic regression."
     },
     {
       "id": "r3d-173",

@@ -66,6 +66,12 @@ export const EXPOSURE_FAR = 1.04; // pulled all the way out
 // exposure (1.0) so the worksite stays legible under its fill/rim rig.
 export const ORBIT_EXPOSURE_SCALE = 0.8;
 
+// WS-5 (#172): the surface gets a small exposure LIFT (1.0 → 1.15) so the bright
+// sunlit regolith reads premium-hot while ACES still rolls the crushed shadows to
+// near-black — the high-contrast "10× more premium" lunar look. Surface-only (orbit
+// keeps its own darker scale) so it never blows out the deep-space vista.
+export const SURFACE_EXPOSURE_SCALE = 1.15;
+
 // Map a raw distance + the active clamp band to an exposure value. Distances
 // outside the band are clamped, so the exposure never runs away past the dolly
 // limits. A degenerate band (max<=min) returns the far value.

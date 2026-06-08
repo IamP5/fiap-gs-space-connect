@@ -228,8 +228,16 @@ export const SITE_FRAMES: Record<"lunar" | "shackleton", SiteFrame> = {
     cy: 0,
     rot: 0,
     worksiteUnitsToMeters: 2.5,
-    sunDir: [2300, 1265, -6490],
-    sunIntensity: 1.9,
+    // WS-5 (#172): lift the lunar sun elevation (y 1265 → 2600, ~10° → ~21°) so the
+    // flat regolith actually CATCHES the key instead of being grazed to mid-grey,
+    // while still raking enough to throw dramatic shadows. Azimuth (x,z) unchanged so
+    // the Earth-framing / cinematic sun bearing is preserved.
+    sunDir: [2300, 2600, -6490],
+    // A brighter, harder lunar key (1.9 → 3.6). Real lunar sun is brutal — blinding
+    // sunlit regolith against near-black shadow (no atmosphere to scatter fill).
+    // Paired with crushed ambient/hemisphere fill below for high contrast.
+    // Shackleton keeps its dimmer grazing pole key (1.7).
+    sunIntensity: 3.6,
     // WS-4 (#170): neutral grey, NOT warm brown. The old #9a948c (r>g>b) tinted the
     // regolith map toward dirt/Mars — the single biggest "this looks like dirt" tell.
     // Real lunar regolith is a near-neutral, faintly cool grey; this multiplies the

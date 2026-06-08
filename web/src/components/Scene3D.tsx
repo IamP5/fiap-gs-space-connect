@@ -102,6 +102,7 @@ import { type Ghost, dragDeltaToRadians, footprintOf } from "../lib/placement";
 import {
   IDLE_DELAY_MS,
   ORBIT_EXPOSURE_SCALE,
+  SURFACE_EXPOSURE_SCALE,
   PARALLAX_SETTLE_EPS,
   advanceParallax,
   idleSwayOffset,
@@ -205,12 +206,19 @@ function SpaceLights({
   const craterFill = onSurface && crater;
   return (
     <>
+      {/* WS-5 (#172): CRUSH the lunar fill so shadows fall near-black for the hard-
+          sun, high-contrast look (no atmosphere = no scatter fill). Ambient 0.12 →
+          0.05. The Shackleton crater floor KEEPS its lifted cool fill (it's in
+          permanent rim shadow, lit only by reflected light — a different place). */}
       <ambientLight
         color={craterFill ? "#1a2230" : "#0e1014"}
-        intensity={onSurface ? (craterFill ? 0.34 : 0.12) : 0.01}
+        intensity={onSurface ? (craterFill ? 0.34 : 0.05) : 0.01}
       />
+      {/* Lunar hemisphere fill cooled (#ffe9cc warm → neutral cool) + dimmed
+          (0.25 → 0.1): the warm sky-fill was part of the "muddy brown" cast and it
+          lifted shadows. Shackleton's craterFill branch unchanged. */}
       <hemisphereLight
-        args={[craterFill ? "#aebfd6" : "#ffe9cc", "#1a1814", onSurface ? (craterFill ? 0.6 : 0.25) : 0.0]}
+        args={[craterFill ? "#aebfd6" : "#cdd6e2", "#1a1814", onSurface ? (craterFill ? 0.6 : 0.1) : 0.0]}
       />
       <directionalLight
         ref={lightRef}
@@ -244,8 +252,12 @@ function SpaceLights({
       />
       {onSurface && (
         <>
-          <directionalLight position={[-40, 26, -30]} color="#9fb6d8" intensity={0.35} />
-          <directionalLight position={[36, 22, 28]} color="#ffd9b0" intensity={0.22} />
+          {/* WS-5 (#172): the secondary fills are crushed too (cool 0.35 → 0.16,
+              warm 0.22 → 0.07) — they were the "muddy mid-grey wash" lifting the
+              shadow side. A whisper of cool earthshine fill stays so shadow detail
+              isn't pure black; the warm bounce is nearly gone (it browned the grey). */}
+          <directionalLight position={[-40, 26, -30]} color="#9fb6d8" intensity={0.16} />
+          <directionalLight position={[36, 22, 28]} color="#ffd9b0" intensity={0.07} />
         </>
       )}
     </>
@@ -3248,7 +3260,7 @@ function CameraFeel({ active, onSurface }: { active: boolean; onSurface: boolean
         controls.getDistance(),
         controls.minDistance,
         controls.maxDistance,
-      ) * (onSurface ? 1 : ORBIT_EXPOSURE_SCALE);
+      ) * (onSurface ? SURFACE_EXPOSURE_SCALE : ORBIT_EXPOSURE_SCALE);
 
     const azimuth = controls.getAzimuthalAngle();
 
