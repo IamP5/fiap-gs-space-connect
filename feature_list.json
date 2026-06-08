@@ -1666,7 +1666,7 @@
       "area": "demo-cinematic",
       "title": "Dress rehearsal — deterministic pre-roll + full-beat chrome-mcp walkthrough",
       "user_visible_behavior": "A one-press pre-roll resets the board to the known seed before a take; a capture checklist documents window size, replay mode, the beat-locked-copy rule, and the manual latency-to-2600ms drag. The full 15-beat reel is verified end-to-end.",
-      "status": "not_started",
+      "status": "passing",
       "issue": 159,
       "depends_on": [
         "r3d-155",
@@ -1680,7 +1680,8 @@
         "chrome-devtools MCP on the k8s cinematic overlay (#160): pre-roll then walk all 15 beats end-to-end (open->descent->build->traverse->return->cueKill->Self-heal[victim stays down]->latency drag->H->ascent->bookend); two pre-roll runs match start framing; capture headline frames",
         "e2e log verification: #160 helper tails all services; confirm the climax trail in kubectl logs (cueKill -> award -> in-process kill in place -> Expiry -> Re-auction -> survivor award -> DONE -> seal; revive only after seal) — screen and logs agree"
       ],
-      "notes": "Epic 07 capstone. Runs on k8s pod-per-rover (#160). Latency = manual slider drag to 2600ms (no cue-key). See docs/07-demo-cinematic/."
+      "evidence": "Pre-roll reuses the existing TopBar Reload-demo button ({cmd:'reloadDemo'}); minimal additive change = its tooltip now states the pre-roll contract (resets to deterministic seed, re-holds hero wall lunar/wall-1, no pod restart). No new keydown listener/wire verbs added (ADR-0004). New doc docs/07-demo-cinematic/CAPTURE-CHECKLIST.md cross-references CAPTURE-RECIPE.md and covers: fixed record window size, replay build mode (liveMode OFF), the beat-locked-copy 'land after the real event' rule (#156), the manual latency-slider drag to 2600ms (NOT a cue-key), the chrome-mcp launch recipe (ref #160), and a numbered 15-beat operator run-sheet mapping each beat to the real shipped keys (O open-arc, ] / [ copy, M lock-on, B bookend flip, K cueKill, H hud-hide, marker click descent, site-chip traverse) verified against cinematicArm.ts / reel/copy.ts / reel/markerCue.ts / reel/openArc.ts. BUILD: `cd web && npm run build` TS-clean (tsc -b + vite build, 0 errors). TEST: `cd web && npm test` 239/239 pass (20 files). MOCK SELF-CHECK (chrome-devtools MCP @ VITE_MOCK=1 localhost:5173/?reel=1): armed badge renders ('REEL ARMED · K cue · ]/[ copy · M lock · B flip · R disarm'); Reload-demo button shows the new pre-roll tooltip and click flips to 'Reloading…' (handler fired); cue keys O/]/M/K/B/H all fire without throwing and two ] presses advance the copy cursor to beat 2 ('Regolito destrói robôs...'); R disarms -> badge + copy overlay unmount (cues no-op when disarmed), R re-arms -> restored. Shot: .e2e-captures/159-armed-preroll.png. DELEGATED TO INTEGRATION GATE (coordinator, merged branch): the full 15-beat k8s + chrome-devtools MCP walkthrough + kubectl-logs climax-trail e2e (single kind-swarmbuild cluster + single chrome browser serialize that at the orchestrator level); backend untouched (no Go change), so go test -race not re-run here.",
+      "notes": "Epic 07 capstone. Runs on k8s pod-per-rover (#160). Latency = manual slider drag to 2600ms (no cue-key). See docs/07-demo-cinematic/. Code self-verified on VITE_MOCK; k8s 15-beat walkthrough verified by the integration gate."
     },
     {
       "id": "r3d-160",
