@@ -1,3 +1,6 @@
+.claude
+.screenshots
+
 /web/node_modules/
 *.log
 .DS_Store
