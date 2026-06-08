@@ -113,6 +113,19 @@ function backgroundEulerFor(onSurface: boolean): THREE.Euler {
 // dust band reads a touch richer behind the dark-side crescent Moon (SVS #14992).
 const STAR_BG_INTENSITY = 0.9;
 
+// scene.environmentIntensity scales the IBL (scene.environment = the HDR set by
+// drei's <Environment> below) contribution to PBR materials — and that diffuse
+// irradiance, not the named lights, sets the Moon's overall brightness. The
+// surface keeps full IBL for the metallic rover/glTF reflections; orbit dims it
+// HARD so the Moon's far side reads as a dramatic dark crescent (the sun's
+// back-light + a faint earthshine do the rest). drei is the SINGLE owner — these
+// are passed as the <Environment environmentIntensity> prop so its every-render
+// re-apply asserts the per-view value instead of drei's default (1). An imperative
+// scene-side setter would be clobbered on the next interaction (same bug class as
+// the background band).
+const ENV_INTENSITY_SURFACE = 1.0;
+const ENV_INTENSITY_ORBIT = 0.05;
+
 // The Milky-Way band carries most of the sky detail, so the hand-rolled points
 // shell is a sparse near-field of foreground stars layered ON TOP of the band
 // for extra crisp, brighter accents (issue #91).
@@ -236,15 +249,17 @@ function HdrBackdrop({ onSurface }: { onSurface: boolean }) {
   // IBL only (`background` omitted ⇒ false): the HDRI lights metals via
   // scene.environment but is never shown as the sky — the visible backdrop is the
   // Milky-Way equirect set by <StarBackground>. drei IS, however, the single owner
-  // of backgroundIntensity + backgroundRotation: it re-applies them on every render
-  // (its layout effect has no dep array), so we MUST pass our values here or it
-  // resets the band to its defaults (intensity 1, rotation [0,0,0]) on every
-  // interaction — the dust-band bug. See the note in <StarBackground>.
+  // of backgroundIntensity, backgroundRotation, AND environmentIntensity (the
+  // per-view IBL grade): it re-applies all scene env props on every render (its
+  // layout effect has no dep array), so we MUST pass our values here or it resets
+  // them to its defaults (background intensity 1, rotation [0,0,0], env intensity 1)
+  // on every interaction — the dust-band / IBL-grade bug. See <StarBackground>.
   return (
     <Environment
       files={HDR_FILE}
       backgroundIntensity={STAR_BG_INTENSITY}
       backgroundRotation={backgroundRotation}
+      environmentIntensity={onSurface ? ENV_INTENSITY_SURFACE : ENV_INTENSITY_ORBIT}
     />
   );
 }

@@ -36,7 +36,7 @@
 //   - No custom physics; only LICENSED art (CC0/CC-BY/NASA-PD), each with a
 //     mandatory primitive fallback.
 
-import { memo, useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
+import { memo, useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { Canvas, useFrame, useThree, type ThreeEvent } from "@react-three/fiber";
 import { ContactShadows, Html, Instance, Instances, Line, OrbitControls } from "@react-three/drei";
 import { SpaceEnvironment, STARFIELD_PARALLAX_NAME } from "./SpaceEnvironment";
@@ -167,26 +167,14 @@ const SHADOW_WORKSITE_HALF = 25;
 //      stay dark; lifted on the surface for worksite legibility. Plus surface-only
 //      rim/fill directionals (skipped in orbit — the Moon stays a clean dark hero).
 // Orbit IBL grade (Wave 4) — the HDR <Environment> lights the Moon via scene
-// environment diffuse irradiance, and that (not the named lights) is what set the
-// Moon's overall brightness. We dim it hard in orbit so the Moon's far side reads
-// as a dramatic dark crescent (the sun's back-light + a faint earthshine do the
-// rest); the surface keeps full IBL for the metallic rover/glTF reflections. Set
-// imperatively (drei never touches environmentIntensity, so it sticks once set).
-const ORBIT_ENV_INTENSITY = 0.05;
-
-function EnvironmentGrade({ onSurface }: { onSurface: boolean }) {
-  const scene = useThree((s) => s.scene);
-  // useLayoutEffect (not useEffect): apply the env grade BEFORE the browser paints
-  // the first frame of the new view, so the Moon never flashes one frame at the
-  // wrong (surface=1.0) IBL intensity as the view flips — that one-frame bright/flat
-  // pop is what read as the Moon's shadow "shifting" right after the orbit transition.
-  useLayoutEffect(() => {
-    (scene as unknown as { environmentIntensity: number }).environmentIntensity = onSurface
-      ? 1.0
-      : ORBIT_ENV_INTENSITY;
-  }, [scene, onSurface]);
-  return null;
-}
+// environment diffuse irradiance, and that (not the named lights) is what sets the
+// Moon's overall brightness. The grade (dim hard in orbit so the far side reads as
+// a dramatic dark crescent; full IBL on the surface for metallic rover/glTF
+// reflections) is now owned by drei's <Environment> directly via its
+// environmentIntensity prop (see ENV_INTENSITY_* in SpaceEnvironment.tsx). drei
+// re-applies scene env props on EVERY render, so an imperative setter here would be
+// clobbered back to drei's default (1) on the next interaction — the same class of
+// bug as the background band. Single owner = drei.
 
 function SpaceLights({
   onSurface,
@@ -2793,7 +2781,6 @@ function SceneContents({
         surfaceSunIntensity={frame.sunIntensity}
         crater={activeSite === "shackleton"}
       />
-      <EnvironmentGrade onSurface={onSurface} />
 
       {/* Surface-only horizon fog — PER-SITE (Epic 04 P2): lunar warm deep grey,
           Shackleton tighter/darker for the pole. Skipped in orbit (the Moon globe
