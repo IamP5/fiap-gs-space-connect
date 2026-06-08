@@ -165,6 +165,13 @@ export default function App() {
   // hold + the descent glare carries "found by light"), so the cue never blocks.
   const [cinematicOpen, setCinematicOpen] = useState(false);
 
+  // One-shot disarm for the orbit-open arc: the <CinematicOpen> rig calls this when
+  // its arc finishes (or is interrupted) so the cue plays EXACTLY once. Stable
+  // (setState identity) — it's an effect dependency inside the rig. Without it the
+  // flag stayed latched and the arc re-fired on every return to orbit (the ascent
+  // bookend), capturing a mid-ascent pose and fighting the ascent driver.
+  const disarmCinematicOpen = useCallback(() => setCinematicOpen(false), []);
+
   // The single cinematic cue this slice owns: the climax kill. While armed, one
   // `K` press emits exactly `{cmd:"cueKill"}` once (the keydown handler ignores
   // OS key-repeat via `e.repeat`, so holding the key still fires only once per
@@ -609,6 +616,11 @@ export default function App() {
               // The Scene3D rig runs it in orbit only; false ⇒ the orbit is unchanged
               // (the cold-hold fallback). Additive Scenery, zero snapshot fields.
               cinematicOpen={cinematicOpen}
+              // One-shot disarm: the rig calls this when the arc finishes or is
+              // interrupted, so the open plays exactly once and never replays on a
+              // later return to orbit (the ascent bookend) — which used to re-fire
+              // the arc mid-ascent (flicker + camera stuck close on the Moon).
+              onCinematicOpenDone={disarmCinematicOpen}
             />
           </Suspense>
         ) : null}

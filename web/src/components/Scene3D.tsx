@@ -2040,6 +2040,13 @@ type Scene3DProps = {
   // sanctioned cold-hold fallback): the rig NEVER blocks anything. Only meaningful
   // in orbit view; the rig itself no-ops on the surface.
   cinematicOpen?: boolean;
+  // One-shot disarm: the orbit-open is a fire-once intro beat, so the rig calls
+  // this when its arc finishes OR is interrupted, and App flips `cinematicOpen`
+  // back to false. Without it the flag stays latched and `active` re-fires the arc
+  // every time the view returns to orbit (e.g. the ascent bookend) — the arc then
+  // captures a mid-ascent pose and fights the ascent driver (flicker + a camera
+  // stuck close on the Moon). Must be a STABLE callback (it's an effect dep).
+  onCinematicOpenDone?: () => void;
 };
 
 // Per-mode OrbitControls clamps + target. Both presets are clamped (ADR-0004):
@@ -3194,6 +3201,10 @@ function CameraFeel({ active, onSurface }: { active: boolean; onSurface: boolean
   return null;
 }
 
+// Stable no-op for optional callbacks used as effect deps (a fresh `() => {}` each
+// render would re-run the effect). Module-level so its identity never changes.
+const NOOP = () => {};
+
 // CinematicOpen — the orbit-open camera-arc rig (Epic 07 S5 · #158, Beats 1–2
 // "WANDERING" + "SUN REVEAL"). The film's opening Scenery beat: "lost in the dark,
 // found by the sun." A scene-mounted rig driven by a PROP FLAG (the same pattern as
@@ -3227,10 +3238,15 @@ function CinematicOpen({
   active,
   onSurface,
   onTransition,
+  onDone,
 }: {
   active: boolean;
   onSurface: boolean;
   onTransition: (running: boolean) => void;
+  // Fire-once: called when the arc finishes OR is interrupted, so the upstream
+  // `cinematicOpen` flag disarms and the arc can't re-trigger on the next return
+  // to orbit (the ascent bookend). Must be STABLE — it's an effect dependency.
+  onDone: () => void;
 }) {
   const controls = useThree((s) => s.controls) as FeelControls | null;
   const camera = useThree((s) => s.camera);
@@ -3310,6 +3326,10 @@ function CinematicOpen({
       controls.target.copy(startTarget);
       controls.enabled = true;
       onTransition(false);
+      // One-shot: disarm so the arc plays exactly once. Returning to orbit later
+      // (the ascent bookend) must NOT replay it — that re-fire captured a
+      // mid-ascent pose and fought the ascent driver (flicker + stuck-close Moon).
+      onDone();
       invalidate();
     };
 
@@ -3333,10 +3353,13 @@ function CinematicOpen({
           controls.enabled = true;
         }
         onTransition(false);
+        // Disarm on interruption too (e.g. descent started mid-arc): a one-shot
+        // intro should not resume/replay when the view next returns to orbit.
+        onDone();
         invalidate();
       }
     };
-  }, [active, onSurface, controls, camera, invalidate, onTransition]);
+  }, [active, onSurface, controls, camera, invalidate, onTransition, onDone]);
 
   return null;
 }
@@ -3369,6 +3392,7 @@ export function Scene3D({
   lockedSite,
   statusOverride,
   cinematicOpen,
+  onCinematicOpenDone,
 }: Scene3DProps) {
   // Initial camera pose, seeded to the DEFAULT view so the app opens already
   // framed on it. The Canvas `camera` prop is applied ONCE on mount, so this is
@@ -3870,6 +3894,7 @@ export function Scene3D({
           active={cinematicOpen === true && shown === "orbit" && !placing}
           onSurface={shown === "surface"}
           onTransition={runOpenTransition}
+          onDone={onCinematicOpenDone ?? NOOP}
         />
       </Canvas>
       {/* Glare overlay for the descent transition. A child of .stage (position:
