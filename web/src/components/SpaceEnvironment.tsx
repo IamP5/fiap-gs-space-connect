@@ -74,13 +74,39 @@ export const HDR_FILE = "/assets/hdr/moonless_golf_2k.hdr";
 export const STAR_BG_FILE = "/assets/starmap_2020_8k_gal.jpg";
 
 // scene.backgroundRotation (three r0.169): roll tilts the horizontal galactic band
-// to a diagonal; yaw swings the bright galactic-centre bulge toward the orbit
-// camera's look direction so the warm dust reads in-frame (not behind us). The
-// orbit camera looks mostly toward -X, which samples the equirect's galactic
+// to a diagonal; yaw swings the bright galactic-centre bulge toward the camera's
+// look direction so the warm dust reads in-frame (not behind us).
+//
+// PER-VIEW YAW (the "dust band swings to the opposite side on descent" fix): the
+// equirect is sampled purely by camera ORIENTATION, and the two views look very
+// different ways — orbit looks toward the Moon (≈ −X), the surface camera looks
+// DOWN toward ≈ −Z, ~74° further around the world up-axis. A single fixed yaw
+// (tuned for orbit) therefore swings the bright bulge ~74° out of the surface
+// frame, so it lands behind/to the side. We give each view its OWN yaw so the band
+// stays framed in BOTH. The re-orient is applied when the rendered view flips
+// (shown → surface), which on a descent happens at the t=0.5 glare peak — so the
+// band never flips on-screen; it's already framed when the flash clears.
+//
+// Orbit: the camera looks mostly toward −X, which samples the equirect's galactic
 // ANTI-centre (the dimmest edge of the _gal map) by default — a 180° yaw brings
 // the bright central dust/bulge into the frame.
-const STAR_BG_YAW_DEG = 180; // swing galactic centre into the orbit view
-const STAR_BG_ROLL_DEG = 28; // diagonal tilt of the band
+const STAR_BG_YAW_DEG = 180; // orbit: swing galactic centre into the Moon vista
+// Surface: ≈ 180 − 74 (the orbit→surface heading delta), so the SAME bright band
+// region frames over the lunar horizon instead of swinging behind. Eye-tunable
+// (roll/pitch could be added too if the band wants lifting above the horizon).
+const STAR_BG_YAW_SURFACE_DEG = 106;
+const STAR_BG_ROLL_DEG = 28; // diagonal tilt of the band (shared by both views)
+
+// The equirect background Euler for a given view. yaw (Y) swings the bright bulge
+// into frame per-view; roll (Z) holds the shared diagonal tilt. Order matches the
+// original single-Euler assignment (THREE.Euler default 'XYZ', X = 0).
+function backgroundEulerFor(onSurface: boolean): THREE.Euler {
+  return new THREE.Euler(
+    0,
+    THREE.MathUtils.degToRad(onSurface ? STAR_BG_YAW_SURFACE_DEG : STAR_BG_YAW_DEG),
+    THREE.MathUtils.degToRad(STAR_BG_ROLL_DEG),
+  );
+}
 // scene.backgroundIntensity (three r0.169): scales the band/star map brightness.
 // Kept below 1 so the galaxy reads as a faint deep-space backdrop, not a bright
 // wash — the Moon/Earth stay the focus. Wave 4: nudged 0.8→0.9 so the warm galactic
@@ -144,6 +170,22 @@ function StarBackground() {
   const scene = useThree((s) => s.scene);
   const gl = useThree((s) => s.gl);
   const invalidate = useThree((s) => s.invalidate);
+
+  // SINGLE OWNER of scene.background (the Milky-Way equirect TEXTURE). The two
+  // background MODIFIER props — backgroundIntensity (brightness) and
+  // backgroundRotation (per-view yaw/roll) — are owned by drei's <Environment> in
+  // <HdrBackdrop>, NOT here.
+  //
+  // Why (load-bearing — this is the dust-band bug): drei's EnvironmentCube re-runs
+  // its scene-prop apply on EVERY render (its useLayoutEffect has NO dependency
+  // array, drei core/Environment.js), and `setEnvProps` defaults backgroundIntensity
+  // to 1 and backgroundRotation to [0,0,0]. So if WE also set those here, drei
+  // clobbers them back to its defaults on the very next render (every interaction /
+  // reload-demo / at a transition's settle) while our stable-dep effects don't
+  // re-run to repair it — the band loses its tilt + brightness. Passing OUR values
+  // as <Environment> props makes drei re-assert the CORRECT values each render
+  // instead. We keep ONLY the texture here (background=false on the Environment, so
+  // drei never touches scene.background).
   useEffect(() => {
     let cancelled = false;
     const prev = scene.background; // the black <color> fallback from Scene3D
@@ -163,14 +205,6 @@ function StarBackground() {
       tex.magFilter = THREE.LinearFilter;
       tex.needsUpdate = true; // re-upload with the new mapping/filters
       scene.background = tex;
-      // Orient + brighten the galactic band (three r0.169) so the warm dust runs
-      // diagonally through the orbit frame behind the bodies.
-      scene.backgroundRotation = new THREE.Euler(
-        0,
-        THREE.MathUtils.degToRad(STAR_BG_YAW_DEG),
-        THREE.MathUtils.degToRad(STAR_BG_ROLL_DEG),
-      );
-      scene.backgroundIntensity = STAR_BG_INTENSITY;
       invalidate(); // wake the demand loop ONCE
     });
     return () => {
@@ -178,11 +212,7 @@ function StarBackground() {
       const cur = scene.background;
       // Only restore if WE installed the texture; if the load failed or is still
       // pending, `cur` is still `prev`. The cache owns `tex` — do NOT dispose it.
-      if (cur === tex) {
-        scene.background = prev;
-        scene.backgroundIntensity = 1;
-        scene.backgroundRotation = new THREE.Euler();
-      }
+      if (cur === tex) scene.background = prev;
     };
   }, [scene, gl, invalidate]);
   return null;
@@ -192,7 +222,7 @@ function StarBackground() {
 // equirect / starfield / black is the visible space sky). Kept in its own
 // component so it sits under the Suspense boundary; it wakes the demand loop
 // once on (re)load.
-function HdrBackdrop() {
+function HdrBackdrop({ onSurface }: { onSurface: boolean }) {
   const invalidate = useThree((s) => s.invalidate);
   // <Environment files> suspends until the .hdr is decoded; this effect runs on
   // the FIRST committed render after it resolves — i.e. once, on load — so we
@@ -200,9 +230,23 @@ function HdrBackdrop() {
   useEffect(() => {
     invalidate();
   }, [invalidate]);
-  // IBL only: no `background`, so the HDRI lights metals but is never shown as
-  // the sky (it's a terrestrial HDRI — its horizon/trees must not appear in space).
-  return <Environment files={HDR_FILE} />;
+  // The band's per-view orientation (yaw swings the bright bulge into frame; roll
+  // holds the shared diagonal tilt). Re-keyed on the rendered view.
+  const backgroundRotation = useMemo(() => backgroundEulerFor(onSurface), [onSurface]);
+  // IBL only (`background` omitted ⇒ false): the HDRI lights metals via
+  // scene.environment but is never shown as the sky — the visible backdrop is the
+  // Milky-Way equirect set by <StarBackground>. drei IS, however, the single owner
+  // of backgroundIntensity + backgroundRotation: it re-applies them on every render
+  // (its layout effect has no dep array), so we MUST pass our values here or it
+  // resets the band to its defaults (intensity 1, rotation [0,0,0]) on every
+  // interaction — the dust-band bug. See the note in <StarBackground>.
+  return (
+    <Environment
+      files={HDR_FILE}
+      backgroundIntensity={STAR_BG_INTENSITY}
+      backgroundRotation={backgroundRotation}
+    />
+  );
 }
 
 // A static starfield: points on a sphere shell, generated once. No useFrame.
@@ -470,15 +514,17 @@ function SkyAnimator({ uTime }: { uTime: { value: number } }) {
   );
 }
 
-export function SpaceEnvironment() {
+export function SpaceEnvironment({ onSurface = false }: { onSurface?: boolean }) {
   // Shared twinkle clock: one stable uniform object read by the star shader patch
   // and mutated each frame by SkyAnimator. Created once so the material compiles
   // exactly once (no shader rebuilds).
   const [uTime] = useState(() => ({ value: 0 }));
   return (
     <>
-      {/* Milky-Way equirect on scene.background (imperative loader, black
-          fallback). Separate from the IBL environment below. */}
+      {/* Milky-Way equirect TEXTURE on scene.background (imperative loader, black
+          fallback). Its per-view yaw + brightness live on <HdrBackdrop>'s
+          <Environment> (the single owner of backgroundRotation/backgroundIntensity)
+          so drei's every-render re-apply can't reset them — see the notes there. */}
       <StarBackground />
       {/* Sparse foreground star points (per-vertex size/brightness/color),
           twinkled by the shared uTime clock (issue #106). */}
@@ -486,10 +532,11 @@ export function SpaceEnvironment() {
       {/* The single sky useFrame: drives twinkle + meteor streaks, pauses while
           the tab is hidden (issue #106). */}
       <SkyAnimator uTime={uTime} />
-      {/* HDR under Suspense (never block paint) + error boundary (never blank). */}
+      {/* HDR under Suspense (never block paint) + error boundary (never blank).
+          `onSurface` swings the band's per-view yaw (drei owns backgroundRotation). */}
       <EnvErrorBoundary>
         <Suspense fallback={null}>
-          <HdrBackdrop />
+          <HdrBackdrop onSurface={onSurface} />
         </Suspense>
       </EnvErrorBoundary>
     </>

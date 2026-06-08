@@ -40,30 +40,37 @@ export function isOpenCue(e: {
 }
 
 // How long (ms) the whole open runs: a slow, unhurried "lost then found" arc. The
-// Beat-1 drift + Beat-2 reveal in the script run ~0:00–0:12 (~12s); we run the rig
-// a touch shorter so it settles cleanly into ORBIT_POSE with headroom before the
-// operator steps the stakes copy (Beat 3).
-export const OPEN_MS = 9000;
+// Beat-1 drift + Beat-2 reveal in the script run ~0:00–0:12 (~12s). The reveal now
+// sweeps a much wider azimuth (the sun genuinely crests — see OPEN_AZIMUTH_RAD), so
+// we run a touch longer than the old token-swing rig to keep the sweep gentle, not a
+// whip, and still settle cleanly into ORBIT_POSE before the operator steps the copy.
+export const OPEN_MS = 11000;
 
-// Fraction of the open spent in the lateral DRIFT phase (Beat 1 "WANDERING") before
-// the ARC toward the sun begins (Beat 2 "SUN REVEAL"). The drift is the cold, lost
-// wander along the dark limb; the arc is the reveal. ~42% drift / ~58% arc reads as
-// a held loneliness that then commits to the light.
-export const DRIFT_FRACTION = 0.42;
+// Fraction of the open spent in the WANDERING hold (Beat 1) before the reveal ARC
+// begins (Beat 2 "SUN REVEAL"). The hold sits on the dark limb with the sun just
+// off-frame; the arc is the reveal. ~38% hold / ~62% sweep reads as a held loneliness
+// that then commits to the light without dragging.
+export const DRIFT_FRACTION = 0.38;
 
-// Peak azimuth offset (radians, ~26°) the camera starts BACK from ORBIT_POSE, on the
-// dark-limb side (negative = away from the sun). At t=0 the camera sits here with the
-// sun off-frame; the arc walks this back to 0 (the settled ORBIT_POSE azimuth) so the
-// sun's godrays crest in as it closes. Tuned so the sun is genuinely out of frame at
-// the start (the orbit fov is 50°, and ORBIT_POSE already sits ~88° in azimuth from
-// the sun heading) yet the swing is a gentle reveal, not a whip.
-export const OPEN_AZIMUTH_RAD = (26 * Math.PI) / 180;
+// Peak azimuth offset (radians, ~118°) the camera starts BACK from ORBIT_POSE at t=0.
+// GEOMETRY (measured against the live scene, not assumed): the orbit Sun DISC sits at
+// ORBIT_SUN_POSITION — high and to one side, ~91° off the settled ORBIT_POSE view axis
+// AND well above it, so at the rest pose the sun is fully off-frame (top + behind) and
+// no godrays read. A NEGATIVE azimuth offset swings the CAMERA toward the sun: by
+// ~−50° the disc reaches the right frame edge, by ~−75° it blazes in the top-right,
+// and by ~−118° it has risen off the upper-LEFT edge (sun off-frame again, Moon dark).
+// So the open starts at −118° (dark, sun just off upper-left — Beat 1) and the reveal
+// walks the offset to 0: the sun RISES across the top of frame (godrays + flare crest
+// and sweep, Beat 2) and EXITS top-right exactly as the sunlit lunar crescent + both
+// worksite markers rotate into the settled ORBIT_POSE establishing vista (offset 0).
+// A "sunrise across the top," not the old imperceptible 26° token swing.
+export const OPEN_AZIMUTH_RAD = (118 * Math.PI) / 180;
 
-// Extra lateral drift (radians, ~5°) layered ONTO the dark-limb side during the
-// WANDERING phase — a slow sub-sway that reads as aimless searching before the
-// reveal commits. It eases fully back to 0 by the time the arc hands off, so it
-// never displaces the final ORBIT_POSE settle.
-export const DRIFT_SWAY_RAD = (5 * Math.PI) / 180;
+// Extra drift (radians, ~7°) layered onto the dark-limb hold during the WANDERING
+// phase — a slow sub-sway that reads as aimless searching before the reveal commits.
+// It eases fully back to 0 by the time the sweep hands off, so it never displaces the
+// final ORBIT_POSE settle.
+export const DRIFT_SWAY_RAD = (7 * Math.PI) / 180;
 
 // easeInOutCubic — gentle accelerate-out, hard decelerate-in, for the reveal ARC so
 // the sun crests in smoothly and the camera settles into ORBIT_POSE without overshoot.
@@ -75,23 +82,23 @@ const easeInOutCubic = (x: number) =>
 const halfSine = (x: number) => Math.sin(Math.min(1, Math.max(0, x)) * Math.PI);
 
 // The CAMERA azimuth offset (radians) to ADD to the settled ORBIT_POSE azimuth at a
-// given progress t∈[0,1]. The offset is NEGATIVE (dark-limb side, sun off-frame) and
-// walks to 0 (settled ORBIT_POSE, sun cresting in) by t=1:
-//   · t∈[0, DRIFT_FRACTION]  — WANDERING: hold near the dark-limb peak with a slow
-//     searching sub-sway (the lost lateral drift); no commitment to the light yet.
+// given progress t∈[0,1]. The offset is NEGATIVE (swung toward the sun) and walks to
+// 0 (settled ORBIT_POSE) by t=1:
+//   · t∈[0, DRIFT_FRACTION]  — WANDERING: hold near the −118° peak (sun just off the
+//     upper-left, Moon dark) with a slow searching sub-sway; no commitment yet.
 //   · t∈[DRIFT_FRACTION, 1]  — SUN REVEAL: ease the azimuth from the peak back to 0,
-//     arcing the camera so the fixed sun's godrays/bloom crest into frame and the
-//     camera settles EXACTLY on ORBIT_POSE (offset 0) at t=1.
+//     so the sun rises across the top of frame (godrays/flare crest + sweep) and
+//     exits top-right as the camera settles EXACTLY on ORBIT_POSE (offset 0) at t=1.
 // Clamped, so an out-of-range t can't push the camera past its framed pose.
 export function openAzimuthOffset(t: number): number {
   const c = Math.min(1, Math.max(0, t));
   if (c <= DRIFT_FRACTION) {
-    // WANDERING: hold at the dark-limb peak, with a searching half-sine sub-sway
-    // that blooms and fully resolves within the drift window.
+    // WANDERING: hold at the dark peak, with a searching half-sine sub-sway that
+    // blooms and fully resolves within the drift window.
     const local = DRIFT_FRACTION > 0 ? c / DRIFT_FRACTION : 1;
     return -OPEN_AZIMUTH_RAD - DRIFT_SWAY_RAD * halfSine(local);
   }
-  // SUN REVEAL: arc from the dark-limb peak back to the settled pose (offset 0).
+  // SUN REVEAL: arc from the dark peak back to the settled pose (offset 0).
   const span = 1 - DRIFT_FRACTION;
   const local = span > 0 ? (c - DRIFT_FRACTION) / span : 1;
   const eased = easeInOutCubic(local);
