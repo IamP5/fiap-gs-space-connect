@@ -142,6 +142,16 @@ stop. `feature_list.json` is the per-feature source of truth; this file is the n
 - **Known risk / unresolved:** user's visual quality review of generated geometry is deferred (per plan); the 7 stacked PRs await merge (or fast-track `bh/integration`).
 - **Next best step:** visual review on stage; merge the stack (or `bh/integration`) to `main`.
 
+### Session 011 — 2026-06-07 — Close Epic 04 (#133) + Epic 05 (#127)
+- **Goal:** Close the two parallel epics now that their work is on `main`, and sync the repo.
+- **Verified before closing:** all 9 slices CLOSED on GitHub (#128–#131, #134–#138) and
+  `feature_list.json` `r3d-128..131`, `r3d-134..138` all `passing`. The work shipped to `main`
+  via the `feat/06-hud-redesign` → `main` full-stack merge (PR #153, Session 009).
+- **Action:** closed **#133** (two-site lunar surface) and **#127** (app-init refactor) in `gh`
+  with closure comments. This completes the "close epics #127/#133" step queued in Session 010.
+- **State:** only open epic remaining is **#62** (NL Blueprint authoring — separate milestone).
+  No code/tracker drift — `feature_list.json` and PROGRESS already reflected `passing`.
+
 ### Session 009 — 2026-06-07
 - **Goal:** Implement Epic 06 (floating game-like HUD, `docs/06-hud-redesign/`) via a subagent swarm, then visual-polish, commit, and merge the stack to `main`.
 - **Completed:** All 6 slices via orchestrated subagents (Wave 1: #147 foundation ‖ #148 NMS markers; then #149 hotbar → #150 Mission HUD → #151 placement gestures → #152 motion+polish — five serialize through `App.tsx`/`dashboard.css`). New: `TopBar`, `Hotbar`, `StressControls`, `MissionHud` + `lib/footprintGlyph`, `lib/missionStats`; deleted `BlueprintPalette`/`ControlsPanel`/`TaskLedger`. Declarative camera-lock (`enableRotate={!placing}`). Then an operator visual-polish pass: floating transparent top bar (no header plate), dropped "dashboard" sublabel, removed Mission HUD scrollbars (compact + expanded-list x-scroll), text-pill LLM toggle (no checkbox, `:has` fill), diamond site glyph tinted by site. `feature_list.json` `r3d-147..152` added → `passing`.
