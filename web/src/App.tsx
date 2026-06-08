@@ -227,16 +227,19 @@ export default function App() {
       // Orbit-open camera-arc (#158): `O` toggles the open cue — armed-only, so a
       // disarmed press is a no-op (normal app unchanged). Pure Scenery: it drives
       // the Scene3D <CinematicOpen> rig (camera-arc, the sun never moves), touches
-      // no World Model. The rig itself only runs in orbit; firing it on the surface
-      // is inert. Fallback-ready: never firing it leaves the orbit unchanged.
-      if (cinematic && isOpenCue(e)) {
+      // no World Model. ALSO gated on `viewMode === "orbit"`: the rig only runs in
+      // orbit, so a surface press must not LATCH the flag true — otherwise it stays
+      // armed and the arc fires on the next return to orbit (the ascent bookend),
+      // capturing a mid-ascent pose and fighting the ascent driver. Fallback-ready:
+      // never firing it leaves the orbit unchanged.
+      if (cinematic && viewMode === "orbit" && isOpenCue(e)) {
         setCinematicOpen((v) => !v);
         return;
       }
     };
     window.addEventListener("keydown", onKeyDown);
     return () => window.removeEventListener("keydown", onKeyDown);
-  }, [cinematic, cueKill]);
+  }, [cinematic, cueKill, viewMode]);
 
   // --- Preload-everything-behind-a-splash (Epic 05 P1). On mount we kick the
   // explicit asset preload (lib/assets) AND warm the lazy Scene3D chunk, both via
