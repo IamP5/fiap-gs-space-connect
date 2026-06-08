@@ -120,12 +120,16 @@ function fitAndSeat(obj: THREE.Object3D, fit: number) {
 // must render IDENTICALLY (same silhouette, placement, materials).
 //
 // The model arrives already fitAndSeat-normalized, i.e. its own transform (scale
-// + x/z recenter + base-at-y=0 lift) lives on the ROOT. We bake every child's
-// world transform into a cloned geometry but FIRST strip the root's own matrix
-// out of it — the merged mesh is parented under the SAME wrapping
-// <group position rotation>, which already expects the normalized (root-local)
-// frame. So each child geometry is baked by `rootInverse * child.matrixWorld`,
-// putting it exactly where the cloned tree sat under that group.
+// + x/z recenter + base-at-y=0 lift) lives on the ROOT. We bake every child's FULL
+// world matrix into a cloned geometry so that normalization (the fit SCALE + the
+// recenter/seat) is frozen into the merged buffers — the merged group is then
+// parented under the wrapping <group position rotation> which only adds placement.
+// (A prior version stripped the root matrix back off via `rootInverse`, which
+// silently CANCELLED fitAndSeat's scale + recenter — pieces rendered at their raw
+// native size + off-origin pivot. That was masked only because the lunar GLBs are
+// authored near unit scale; raw NASA models like the habitat/astronaut, 70–380
+// native units, then rendered enormous. Baking the full world matrix fixes it so
+// realMeters actually governs on-screen size for EVERY piece — Epic 04 P0's intent.)
 //
 // Geometries are bucketed by (material identity, attribute signature). Material
 // identity keeps materials pixel-identical (one output mesh per material).
@@ -141,10 +145,10 @@ function mergeSetPiece(root: THREE.Object3D): {
   group: THREE.Group;
   geometries: THREE.BufferGeometry[];
 } {
-  // Freeze the normalized transforms into world matrices, then peel the root's
-  // own matrix back off each child so the bake lands in root-local space.
+  // Freeze the normalized transforms (fitAndSeat's root scale + recenter + every
+  // child's own transform) into world matrices, so the bake captures the model at
+  // its NORMALIZED size/placement — not the raw native frame.
   root.updateMatrixWorld(true);
-  const rootInverse = new THREE.Matrix4().copy(root.matrixWorld).invert();
   const local = new THREE.Matrix4();
 
   // Bucket key → { material, geometries[] }. Insertion order is preserved so the
@@ -164,8 +168,9 @@ function mergeSetPiece(root: THREE.Object3D): {
       ? mesh.material
       : [mesh.material];
 
-    // Bake child → root-local: rootInverse * childWorld.
-    local.copy(mesh.matrixWorld).premultiply(rootInverse);
+    // Bake the child's FULL normalized world matrix (includes fitAndSeat's root
+    // scale + recenter/seat), so the merged geometry renders at the fitted size.
+    local.copy(mesh.matrixWorld);
 
     for (let g = 0; g < materials.length; g++) {
       const material = materials[g];

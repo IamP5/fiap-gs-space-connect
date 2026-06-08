@@ -5,6 +5,10 @@ web/node_modules
 web/dist
 *.log
 tmp
+# Local agent state + worktrees (≈7GB of full repo copies) and screenshots —
+# never part of any build; shipping them as context starves the build / OOMs kind.
+.claude
+.screenshots
 # Never ship local secrets into any build layer (the gateway reads the key from a
 # k8s Secret / env at runtime, never from a baked-in file).
 .env

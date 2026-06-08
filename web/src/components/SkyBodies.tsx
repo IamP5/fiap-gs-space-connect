@@ -21,11 +21,11 @@
 // flips at the glare peak of the descent transition — so the Moon appearing/
 // vanishing is hidden behind the flash, never seen as a pop.
 //
-// DEMAND-LOOP SAFETY (non-negotiable): NO useFrame of our own. Textures load
-// imperatively via THREE.TextureLoader (NOT a Suspense that can throw); each
-// successful load calls invalidate() once so the demand loop paints it, then
-// returns to 0 idle fps. We also invalidate() whenever the visible body swaps on
-// a view-mode change, or the LOD/visibility would stick under the demand loop.
+// DEMAND-LOOP SAFETY (historical): the bodies still load textures imperatively via
+// THREE.TextureLoader (NOT a Suspense that can throw) and invalidate() once on load
+// / on a visible-body swap — cheap and harmless. NB: the demand loop was DROPPED
+// (the scene runs frameloop="always", see AGENTS.md), so a continuous useFrame is
+// now allowed: the orbit SiteMarker reticles use one for their subtle pulse.
 //
 // MANDATORY FALLBACK (ADR-0004): a missing/failed texture leaves the sphere
 // rendered with its flat material color — never blank, never thrown. Geometry +
@@ -36,7 +36,7 @@
 // unaffected.
 
 import { useEffect, useMemo, useRef, useState } from "react";
-import { Detailed, Html } from "@react-three/drei";
+import { Billboard, Detailed, Line, Text } from "@react-three/drei";
 import { useFrame, useThree } from "@react-three/fiber";
 import * as THREE from "three";
 
@@ -797,6 +797,11 @@ function EarthBody({ visible, viewMode }: { visible: boolean; viewMode: ViewMode
 // unmount. No per-frame work — the flare is static (a spinning flare would force
 // the demand loop to render forever).
 
+// The Sun core's base emissive intensity. Pulled out as a constant so the
+// behind-Moon bloom mask (SunBody's useFrame) can fade FROM this value back to it
+// without re-encoding the literal in two places.
+const SUN_CORE_EMISSIVE = 1.7;
+
 // Build a soft round radial-gradient glow texture (white centre → transparent).
 function makeGlowTexture(): THREE.Texture | null {
   if (typeof document === "undefined") return null;
@@ -956,6 +961,7 @@ function SunBody({
   position,
   coreRef: externalCoreRef,
   showStreak,
+  occludeBehindMoon,
 }: {
   position: [number, number, number];
   // Shared ref to the core disc mesh, so the post-FX GodRays pass (#110) can use
@@ -963,8 +969,13 @@ function SunBody({
   coreRef?: React.RefObject<THREE.Mesh>;
   // Orbit-gates the anamorphic lens-flare streak (#110): the Sun is the orbit hero.
   showStreak?: boolean;
+  // Orbit-gates the behind-Moon bloom mask: in orbit the Moon globe is rendered and
+  // can sit between camera and Sun, so we fade the core's bloom as the Moon covers
+  // it (see the useFrame below). The surface view has no Moon, so it stays off.
+  occludeBehindMoon?: boolean;
 }) {
   const invalidate = useThree((s) => s.invalidate);
+  const camera = useThree((s) => s.camera);
   // The Sun core mesh glows in the celestial bloom pass (#99) and is the GodRays
   // light source (#110). Use the shared ref when given, else a local one.
   const localCoreRef = useRef<THREE.Mesh>(null);
@@ -977,7 +988,7 @@ function SunBody({
     const material = new THREE.MeshStandardMaterial({
       color: "#fff8f0",
       emissive: "#ffffff",
-      emissiveIntensity: 1.7,
+      emissiveIntensity: SUN_CORE_EMISSIVE,
       roughness: 1,
       metalness: 0,
       toneMapped: false,
@@ -1040,6 +1051,52 @@ function SunBody({
   useEffect(() => {
     coreRef.current?.layers.enable(CELESTIAL_BLOOM_LAYER);
   }, [coreRef]);
+
+  // --- Behind-Moon occlusion (orbit) ----------------------------------------
+  // The celestial SelectiveBloom (Scene3D) re-renders the Sun core into its OWN
+  // buffer, which has NO Moon in it, then SCREEN-blends the blurred glow back over
+  // the frame — so the core's soft halo leaked straight THROUGH the Moon globe
+  // whenever the Sun sat behind it (the "sun getting through the moon" the user
+  // saw). The in-scene additive glow/ray sprites are depth-tested and already clip
+  // cleanly to the Moon's silhouette; only the post-process bloom (and the bloom-
+  // layer core it keys off) ignore that depth. So we HIDE the core whenever the
+  // camera→Sun ray passes through the Moon sphere — replicating exactly what depth-
+  // testing already does in the main render, but extending it to the bloom + GodRays
+  // passes (a hidden mesh is skipped in every pass, so its glow can't leak). The
+  // surrounding sprites stay mounted; they keep their correct depth-clipped spill
+  // around the limb. Analytic ray–sphere test against the known Moon berth
+  // (MOON_POSITION/MOON_RADIUS) — no raycaster, no Moon ref. Gated to orbit (the
+  // surface view has no Moon). frameloop="always", so this runs every frame.
+  const occScratch = useMemo(
+    () => ({ cam: new THREE.Vector3(), dir: new THREE.Vector3(), m: new THREE.Vector3() }),
+    [],
+  );
+  useFrame(() => {
+    const core = coreRef.current;
+    if (!core) return;
+    let occluded = false;
+    if (occludeBehindMoon) {
+      const cam = camera.getWorldPosition(occScratch.cam);
+      // Ray camera→Sun (the group sits at `position` with no parent transform).
+      const dir = occScratch.dir.set(position[0], position[1], position[2]).sub(cam);
+      const L = dir.length();
+      if (L > 1e-3) {
+        dir.divideScalar(L);
+        const m = occScratch.m
+          .set(MOON_POSITION[0], MOON_POSITION[1], MOON_POSITION[2])
+          .sub(cam);
+        const tca = m.dot(dir); // Moon-centre projection onto the ray
+        // The Moon must be BETWEEN the camera and the Sun (0 < tca < L), and the ray
+        // must pass within the Moon's disc (perpendicular distance < its radius). The
+        // far Sun is angularly tiny, so this hard silhouette edge needs no soft band.
+        if (tca > 0 && tca < L) {
+          const perp2 = m.lengthSq() - tca * tca;
+          occluded = perp2 < MOON_RADIUS * MOON_RADIUS;
+        }
+      }
+    }
+    if (core.visible === occluded) core.visible = !occluded;
+  });
 
   return (
     <group position={position} raycast={() => null}>
@@ -1180,36 +1237,106 @@ const SITE_COORDS: Record<SiteId, { lat: number; lon: number }> = {
 
 // Per-site marker styling. Cyan = the live Lunar Base (brand telemetry cyan,
 // matches selection/revive); amber = Shackleton, still "in construction".
+// `name` + `status` are the two in-world reticle label lines (NO build counts —
+// that payoff is reserved for the surface view); `label` is kept for any legacy
+// consumer but the NMS reticle uses the split fields.
 const SITE_MARKERS: Record<
   SiteId,
-  { color: string; label: string }
+  { color: string; label: string; name: string; status: string }
 > = {
-  lunar: { color: "#38e1ff", label: "Lunar Base" },
-  shackleton: { color: "#ffb347", label: "Shackleton — in construction" },
+  lunar: {
+    color: "#38e1ff",
+    label: "Lunar Base",
+    name: "LUNAR BASE",
+    status: "operational",
+  },
+  shackleton: {
+    color: "#ffb347",
+    label: "Shackleton — in construction",
+    name: "SHACKLETON",
+    status: "in construction",
+  },
 };
 
+// --- NMS-style reticle geometry --------------------------------------------
+// A thin line-DIAMOND (4 outer points + a closing point) in the billboard's local
+// XY plane. Radius in WORLD units (the marker group carries no scale beyond the
+// subtle pulse), tuned to read at the orbit zoom band.
+const RETICLE_RADIUS = 6;
+const DIAMOND_POINTS: [number, number, number][] = [
+  [0, RETICLE_RADIUS, 0], // top
+  [RETICLE_RADIUS, 0, 0], // right
+  [0, -RETICLE_RADIUS, 0], // bottom
+  [-RETICLE_RADIUS, 0, 0], // left
+  [0, RETICLE_RADIUS, 0], // close the loop
+];
+// Hover "lock-on" corner brackets — four short L's hugging the diamond's outer
+// points, drawn as a SEGMENTS line (pairs of endpoints) just outside the diamond.
+const TICK = 2.4; // bracket arm length
+const BR = RETICLE_RADIUS + 2.4; // bracket reach (sits just outside the diamond)
+const BRACKET_POINTS: [number, number, number][] = [
+  // top bracket (apex up)
+  [-TICK, BR - TICK, 0], [0, BR, 0], [0, BR, 0], [TICK, BR - TICK, 0],
+  // right
+  [BR - TICK, TICK, 0], [BR, 0, 0], [BR, 0, 0], [BR - TICK, -TICK, 0],
+  // bottom
+  [TICK, -BR + TICK, 0], [0, -BR, 0], [0, -BR, 0], [-TICK, -BR + TICK, 0],
+  // left
+  [-BR + TICK, -TICK, 0], [-BR, 0, 0], [-BR, 0, 0], [-BR + TICK, TICK, 0],
+];
+
 // One clickable site marker, seated + oriented by the caller (SiteMarkers). The
-// ring lies flat on the globe (oriented to the local surface normal) and the
-// beacon rises straight up off it; hover brightens/scales via React state.
+// pickable part is an invisible cylinder hit-proxy seated along the local surface
+// normal; the visible part is an in-world, billboarded NMS-style line-diamond
+// reticle + SDF label that floats slightly off the globe and OCCLUDES naturally
+// behind the Moon's limb (it lives on the celestial bloom layer, real depth — no
+// depthTest:false). A subtle continuous pulse breathes the reticle (free under
+// frameloop="always"); hover brightens + locks on with corner brackets.
 function SiteMarker({
   position,
   quaternion,
   color,
-  label,
+  name,
+  status,
   onSelect,
 }: {
   position: [number, number, number];
   quaternion: [number, number, number, number];
   color: string;
-  label: string;
+  name: string;
+  status: string;
   onSelect: () => void;
 }) {
-  const invalidate = useThree((s) => s.invalidate);
   const [hover, setHover] = useState(false);
+  // The reticle content (diamond + brackets + label) — pulsed/scaled per frame.
+  const reticleRef = useRef<THREE.Group>(null);
+  const diamondRef = useRef<THREE.Object3D>(null);
+  const bracketRef = useRef<THREE.Object3D>(null);
 
+  // Put the reticle lines on the celestial bloom layer so they pick up the
+  // existing selective-bloom halo (#99) — same pattern as the Sun/Earth cores.
   useEffect(() => {
-    invalidate();
-  }, [hover, invalidate]);
+    diamondRef.current?.layers.enable(CELESTIAL_BLOOM_LAYER);
+    bracketRef.current?.layers.enable(CELESTIAL_BLOOM_LAYER);
+  }, [hover]);
+
+  // Subtle continuous breathe + hover lock-on tighten. frameloop="always", so a
+  // per-frame pulse is free (no invalidate gymnastics). Hover snaps the diamond a
+  // touch tighter (lock-on) and reveals the corner brackets.
+  useFrame((state) => {
+    const t = state.clock.elapsedTime;
+    const breathe = 1 + Math.sin(t * 2) * 0.04; // ±4% gentle breathe
+    const lock = hover ? 0.9 : 1; // tighten on lock-on
+    if (reticleRef.current) {
+      reticleRef.current.scale.setScalar(breathe * lock);
+    }
+    if (bracketRef.current) {
+      // brackets fade/pop in on hover (opacity lives on the Line2 material)
+      const mat = (bracketRef.current as THREE.Mesh)
+        .material as THREE.Material & { opacity: number };
+      if (mat) mat.opacity = THREE.MathUtils.lerp(mat.opacity, hover ? 1 : 0, 0.2);
+    }
+  });
 
   const onOver = (e: ThreeEvent<PointerEvent>) => {
     e.stopPropagation();
@@ -1221,13 +1348,15 @@ function SiteMarker({
     document.body.style.cursor = "default";
   };
 
-  const intensity = hover ? 2.4 : 1.5;
-  const scale = hover ? 1.14 : 1;
+  // Brighter when hovered (lock-on). Lines are toneMapped:false so the bloom pass
+  // reads the raw color; we boost the line width slightly on hover too.
+  const lineWidth = hover ? 2.4 : 1.6;
 
   return (
-    <group position={position} quaternion={quaternion} scale={scale}>
+    <group position={position} quaternion={quaternion}>
       {/* Invisible, generous hit-proxy — the SOLE pickable part. A click sets the
-          site + surface view, triggering the descent. */}
+          site + surface view, triggering the descent (contract unchanged). Seated
+          along the local surface normal, same as before. */}
       <mesh
         position={[0, 11, 0]}
         onClick={(e: ThreeEvent<MouseEvent>) => {
@@ -1241,77 +1370,55 @@ function SiteMarker({
         <meshBasicMaterial transparent opacity={0} depthWrite={false} />
       </mesh>
 
-      {/* Pulsing-style ring flat on the surface (static — no per-frame work). */}
-      <mesh rotation={[-Math.PI / 2, 0, 0]} position={[0, 0.4, 0]} raycast={() => null}>
-        <ringGeometry args={[7, 10, 40]} />
-        <meshStandardMaterial
-          color={color}
-          emissive={color}
-          emissiveIntensity={intensity}
-          toneMapped={false}
-          transparent
-          opacity={0.95}
-          side={THREE.DoubleSide}
-        />
-      </mesh>
-
-      {/* A bright core disc inside the ring. */}
-      <mesh rotation={[-Math.PI / 2, 0, 0]} position={[0, 0.5, 0]} raycast={() => null}>
-        <circleGeometry args={[6.2, 32]} />
-        <meshStandardMaterial
-          color={color}
-          emissive={color}
-          emissiveIntensity={intensity * 0.5}
-          toneMapped={false}
-          transparent
-          opacity={0.28}
-          side={THREE.DoubleSide}
-        />
-      </mesh>
-
-      {/* Vertical beacon — a short tapering glow column rising off the surface, the
-          "you are here / land here" signal. Additive so it reads as light. Kept
-          SHORT (was 36u, which foreshortened into a streak across the disc at the
-          orbit angle) and dim so it reads as a beacon dot, not a line. */}
-      <mesh position={[0, 8, 0]} raycast={() => null}>
-        <cylinderGeometry args={[0.4, 2.6, 16, 16, 1, true]} />
-        <meshBasicMaterial
-          color={color}
-          transparent
-          opacity={hover ? 0.32 : 0.18}
-          side={THREE.DoubleSide}
-          depthWrite={false}
-          blending={THREE.AdditiveBlending}
-          toneMapped={false}
-        />
-      </mesh>
-
-      {/* Floating HTML label above the beacon — non-interactive (pointerEvents
-          none) so it never steals the marker's click; brightens on hover. */}
-      <Html
-        position={[0, 20, 0]}
-        center
-        distanceFactor={520}
-        zIndexRange={[20, 0]}
-        style={{ pointerEvents: "none", userSelect: "none" }}
-        raycast={() => null}
-      >
-        <div
-          style={{
-            whiteSpace: "nowrap",
-            fontFamily:
-              "ui-sans-serif, system-ui, -apple-system, Segoe UI, sans-serif",
-            fontSize: "16px",
-            fontWeight: 600,
-            letterSpacing: "0.02em",
-            color,
-            textShadow: "0 0 6px rgba(0,0,0,0.9), 0 1px 2px rgba(0,0,0,0.9)",
-            opacity: hover ? 1 : 0.85,
-          }}
-        >
-          {label}
-        </div>
-      </Html>
+      {/* In-world reticle, floated off the surface along the local normal and
+          billboarded so the diamond + label always face the camera. Real depth:
+          it occludes behind the Moon's limb naturally (no depthTest override). */}
+      <Billboard position={[0, 14, 0]} raycast={() => null}>
+        <group ref={reticleRef}>
+          {/* Thin emissive line-diamond on the celestial bloom layer. */}
+          <Line
+            ref={diamondRef as never}
+            points={DIAMOND_POINTS}
+            color={color}
+            lineWidth={lineWidth}
+            transparent
+            opacity={hover ? 1 : 0.9}
+            toneMapped={false}
+            raycast={() => null}
+          />
+          {/* Hover lock-on corner brackets (faded in by the useFrame). */}
+          <Line
+            ref={bracketRef as never}
+            points={BRACKET_POINTS}
+            segments
+            color={color}
+            lineWidth={hover ? 2 : 1.4}
+            transparent
+            opacity={0}
+            toneMapped={false}
+            raycast={() => null}
+          />
+          {/* SDF label under the diamond: line 1 = site name, line 2 = status. */}
+          <Text
+            position={[0, -RETICLE_RADIUS - 4.5, 0]}
+            fontSize={3.4}
+            color={color}
+            anchorX="center"
+            anchorY="top"
+            textAlign="center"
+            lineHeight={1.25}
+            letterSpacing={0.08}
+            outlineWidth={0.12}
+            outlineColor="#000000"
+            outlineOpacity={0.85}
+            fillOpacity={hover ? 1 : 0.92}
+            material-toneMapped={false}
+            raycast={() => null}
+          >
+            {`${name}\n${status}`}
+          </Text>
+        </group>
+      </Billboard>
     </group>
   );
 }
@@ -1349,14 +1456,16 @@ function SiteMarkers({
         position={lunarSeat.position}
         quaternion={lunarSeat.quaternion}
         color={SITE_MARKERS.lunar.color}
-        label={SITE_MARKERS.lunar.label}
+        name={SITE_MARKERS.lunar.name}
+        status={SITE_MARKERS.lunar.status}
         onSelect={() => onSelectSite("lunar")}
       />
       <SiteMarker
         position={shackletonSeat.position}
         quaternion={shackletonSeat.quaternion}
         color={SITE_MARKERS.shackleton.color}
-        label={SITE_MARKERS.shackleton.label}
+        name={SITE_MARKERS.shackleton.name}
+        status={SITE_MARKERS.shackleton.status}
         onSelect={() => onSelectSite("shackleton")}
       />
     </>
@@ -1507,6 +1616,7 @@ export function SkyBodies({
         position={inOrbit ? ORBIT_SUN_POSITION : SUN_POSITION}
         coreRef={sunRef}
         showStreak={inOrbit}
+        occludeBehindMoon={inOrbit}
       />
       <MoonGlobe visible={inOrbit} />
       <NebulaHero visible={inOrbit} />

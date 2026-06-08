@@ -122,36 +122,72 @@ export const LUNAR_SET_PIECES: SetPiece[] = [
   },
 ];
 
-// The SHACKLETON (lunar south pole) complex. REUSES the SAME GLBs as lunar (NO new
-// assets), but RECOMPOSED + RETINTED for the pole: pieces pushed wider/farther and
-// darkened/cooled so the rim outpost reads as a sparser, colder forward base under
-// the grazing pole sun. The pole base is supplied (not a launch site), so the
-// heavy launch towers (launcher/gantry) are dropped for a leaner outpost
-// silhouette — reusing the base station, lander, crawler, and astronaut GLBs.
+// The SHACKLETON (lunar south pole) outpost. UNLIKE the lunar LAUNCH complex
+// (crawler / mobile launcher / gantry / lander), this is a DISTINCT set of
+// structures — a permanent research + ISRU (water-ice) base nestled on the carved
+// crater FLOOR (every piece inside CRATER_FLOOR_RADIUS so it sits in the bowl, not
+// on the rim): two NASA habitat demonstration modules, a science radome, an ISRU
+// processing plant, a comms dish aimed at Earth, a rim-edge solar array, and an
+// astronaut for scale. Cooled fallback tints for the dim pole light. All models are
+// already-licensed GLBs from the catalog (see public/assets/CREDITS.md); none are
+// shared with the lunar set, so the two sites render genuinely different hardware.
 export const SHACKLETON_SET_PIECES: SetPiece[] = [
   {
-    key: "shk-base-station",
-    modelRef: "/assets/models/base-station.glb",
-    position: [-10, 0, -16],
-    rotation: [0, Math.PI / 4, 0],
-    realMeters: REAL_METERS.baseStation,
-    fallbackColor: "#5a5e66",
+    key: "shk-habitat-1",
+    modelRef: "/assets/models/habitat-demo-unit-1.glb",
+    position: [-8, 0, -9],
+    rotation: [0, Math.PI / 5, 0],
+    realMeters: 22,
+    fallbackColor: "#6b7280",
   },
   {
-    key: "shk-lander",
-    modelRef: "/assets/models/nasa_lunar_module.glb",
-    position: [14, 0, -18],
-    rotation: [0, -Math.PI / 3, 0],
-    realMeters: REAL_METERS.lander,
-    fallbackColor: "#7d7466",
+    key: "shk-habitat-2",
+    modelRef: "/assets/models/habitat-demo-unit-2.glb",
+    position: [-1, 0, -13],
+    rotation: [0, -Math.PI / 6, 0],
+    realMeters: 20,
+    fallbackColor: "#646b78",
   },
   {
-    key: "shk-crawler",
-    modelRef: "/assets/models/nasa_crawler.glb",
-    position: [-26, 0, -30],
+    key: "shk-radome",
+    modelRef: "/assets/models/radome.glb",
+    position: [11, 0, -9],
+    rotation: [0, -Math.PI / 4, 0],
+    realMeters: 14,
+    fallbackColor: "#5a626e",
+  },
+  {
+    key: "shk-isru",
+    modelRef: "/assets/models/machine_generator.glb",
+    position: [7, 0, 2],
     rotation: [0, Math.PI / 3, 0],
-    realMeters: REAL_METERS.crawler,
-    fallbackColor: "#43464d",
+    realMeters: 12,
+    fallbackColor: "#5e6672",
+  },
+  {
+    key: "shk-comms-dish",
+    modelRef: "/assets/models/comms-dish.glb",
+    position: [-13, 0, 2],
+    rotation: [0, Math.PI / 2.5, 0],
+    realMeters: 10,
+    fallbackColor: "#69707c",
+  },
+  {
+    key: "shk-solar",
+    modelRef: "/assets/models/solar-panel.glb",
+    position: [12, 0, -13],
+    rotation: [0, -Math.PI / 6, 0],
+    realMeters: 14,
+    fallbackColor: "#4f5662",
+  },
+  {
+    key: "shk-astronaut",
+    modelRef: "/assets/models/astronaut.glb",
+    position: [2, 0, -5],
+    rotation: [0, -Math.PI / 3, 0],
+    realMeters: REAL_METERS.astronaut,
+    fallbackColor: "#c8ccd4",
+    fallbackShape: "capsule",
   },
 ];
 
@@ -204,7 +240,7 @@ export const SITE_FRAMES: Record<"lunar" | "shackleton", SiteFrame> = {
     rot: 0.3,
     worksiteUnitsToMeters: 2.5,
     sunDir: [6490, 90, -2300],
-    sunIntensity: 1.25,
+    sunIntensity: 1.7,
     terrainTint: "#6f6a66",
     fog: ["#05060a", 120, 520],
     pieces: SHACKLETON_SET_PIECES,
@@ -431,6 +467,55 @@ export function siteMap(
       return { X: dx + cx, Y: dy + cy };
     },
   };
+}
+
+// ---- Shackleton crater profile (Epic 04 follow-up) -------------------------
+//
+// A stylized, art-directed crater carved into the SHACKLETON terrain so the pole
+// outpost reads as a genuinely distinct PLACE (nestled on a shadowed crater floor
+// under a sunlit rim) rather than the lunar worksite merely retinted. Reference
+// look: NASA SVS 4716 — a ~21 km × 4 km bowl with a permanently shadowed floor and
+// rim points caught by the grazing pole sun. We do NOT model that literal scale (a
+// 21 km bowl would be ~2520 scene units; the whole plane is 700); this is an
+// art-directed bowl, consistent with the already art-directed framing.
+//
+// CRUCIAL: the floor stays at scene-y ≈ 0, with the rim raised AROUND it. Every
+// worksite object (rover/task/scenery) is seated at y=0 via siteMap (height=0), so
+// keeping the floor at 0 means NOTHING in the worksite has to move — only the
+// surrounding terrain rises into a rim. The floor radius is chosen to sit OUTSIDE
+// the farthest Shackleton set-piece (the crawler at scene-radius ≈ 40) so the whole
+// outpost rests on the flat floor and the rim crests beyond it.
+// Scaled to the WORKSITE, not to a literal 21 km bowl: at 0.12 units/m the outpost
+// structures are only ~1 unit each, so a giant crater would dwarf them into specks.
+// The floor holds the tight worksite + ringed structures (all within FLOOR_RADIUS),
+// the rim cradles it just beyond, and the bowl is shallow enough that the base and
+// its containing rim both read in one frame — "nestled in a crater".
+export const CRATER_FLOOR_RADIUS = 18; // flat floor (worksite + structures sit here, y≈0)
+export const CRATER_RIM_RADIUS = 34; // rim crest (the peak of the bowl wall)
+export const CRATER_OUTER_RADIUS = 70; // crest eases back to the open plain by here
+export const CRATER_RIM_HEIGHT = 7; // crest height above the floor (the sunlit ridge)
+
+// Clamped smoothstep (a→b), C1-continuous, used to shape the crater wall/flank so
+// the bowl has no hard creases. Kept local (scene.ts is three-free + node-testable).
+function smoothstep01(a: number, b: number, x: number): number {
+  if (a === b) return x < a ? 0 : 1;
+  const t = Math.min(1, Math.max(0, (x - a) / (b - a)));
+  return t * t * (3 - 2 * t);
+}
+
+// The crater's radial elevation delta (scene-y) at scene-radius r (units) from the
+// worksite origin: a flat floor (0) out to CRATER_FLOOR_RADIUS, an inner wall that
+// rises to CRATER_RIM_HEIGHT at the rim crest, then an outer flank that eases the
+// crest back down to the surrounding plain (0). ADDED on top of the terrain's
+// procedural noise displacement by LunarTerrain (Shackleton only). Pure ⇒ unit-
+// tested in scene.test.ts.
+export function craterProfile(r: number): number {
+  if (r <= CRATER_FLOOR_RADIUS) return 0;
+  if (r <= CRATER_RIM_RADIUS)
+    return CRATER_RIM_HEIGHT * smoothstep01(CRATER_FLOOR_RADIUS, CRATER_RIM_RADIUS, r);
+  if (r <= CRATER_OUTER_RADIUS)
+    return CRATER_RIM_HEIGHT * (1 - smoothstep01(CRATER_RIM_RADIUS, CRATER_OUTER_RADIUS, r));
+  return 0;
 }
 
 // ---- habitat dome: rising-by-completion ordering ---------------------------

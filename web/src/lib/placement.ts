@@ -152,6 +152,20 @@ export function placementValid(
   return null;
 }
 
+// ROTATE_RADIANS_PER_PIXEL maps a horizontal pixel drag to a rotation rate for the
+// in-scene right-drag-rotate gesture (Epic 06 P1, #151). Tuned so a full screen-width
+// drag (~800px) sweeps a little over a full turn — fine enough for precise aiming but
+// quick enough to spin a blueprint with a short flick.
+export const ROTATE_RADIANS_PER_PIXEL = 0.008;
+
+// dragDeltaToRadians converts a horizontal pointer-drag delta (in pixels, dragged-right
+// = positive) into a rotation delta in radians, to add to a base rotation. Pure so the
+// gesture maths is unit-testable and the scene just wires the live drag to it. Dragging
+// right rotates clockwise (positive radians), matching the on-screen footprint sweep.
+export function dragDeltaToRadians(dxPixels: number): number {
+  return dxPixels * ROTATE_RADIANS_PER_PIXEL;
+}
+
 // placeBlueprintControl builds the placeBlueprint control frame the dashboard
 // sends on confirm (bh-05 + bh-08c). It threads the per-placement build MODE
 // alongside the blueprint id, origin and rotation, mirroring wire.go's Control

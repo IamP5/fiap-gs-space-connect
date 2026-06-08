@@ -5,6 +5,10 @@
 
 import { describe, expect, it } from "vitest";
 import {
+  CRATER_FLOOR_RADIUS,
+  CRATER_OUTER_RADIUS,
+  CRATER_RIM_HEIGHT,
+  CRATER_RIM_RADIUS,
   DEFAULT_SITE_FRAME,
   MOON_POSITION,
   MOON_RADIUS,
@@ -12,6 +16,7 @@ import {
   SCENE_UNITS_PER_METER,
   SITE_FRAMES,
   computeBounds,
+  craterProfile,
   isBuilt,
   latLonToGlobeNormal,
   latLonToGlobePoint,
@@ -162,14 +167,22 @@ describe("SITE_FRAMES (two-site surface, Epic 04 P2)", () => {
     expect(s[1]).toBeLessThan(Math.abs(s[2]));
   });
 
-  it("each site carries its own scenery pieces (reusing GLBs, no empties)", () => {
+  it("each site carries DISTINCT scenery hardware (different structures per site, no empties)", () => {
     expect(SITE_FRAMES.lunar.pieces.length).toBeGreaterThan(0);
     expect(SITE_FRAMES.shackleton.pieces.length).toBeGreaterThan(0);
-    // Same GLBs reused across sites (no new assets) — every Shackleton modelRef
-    // also appears in the lunar set.
+    // The two sites render genuinely different hardware: Shackleton is a research /
+    // ISRU outpost, NOT the lunar launch complex — so no Shackleton modelRef appears
+    // in the lunar set (and vice versa). This is the deliberate reversal of the old
+    // "reuse the same GLBs" rule.
     const lunarRefs = new Set(SITE_FRAMES.lunar.pieces.map((p) => p.modelRef));
     for (const p of SITE_FRAMES.shackleton.pieces) {
-      expect(lunarRefs.has(p.modelRef)).toBe(true);
+      expect(lunarRefs.has(p.modelRef)).toBe(false);
+    }
+    // No empty modelRefs, and each site's piece keys are unique.
+    for (const key of ["lunar", "shackleton"] as const) {
+      const pieces = SITE_FRAMES[key].pieces;
+      for (const p of pieces) expect(p.modelRef.length).toBeGreaterThan(0);
+      expect(new Set(pieces.map((p) => p.key)).size).toBe(pieces.length);
     }
   });
 });
@@ -263,5 +276,52 @@ describe("isBuilt", () => {
     expect(isBuilt({ status: "DONE" })).toBe(true);
     expect(isBuilt({ status: "LEASED" })).toBe(false);
     expect(isBuilt({ status: "UNCLAIMED" })).toBe(false);
+  });
+});
+
+describe("craterProfile (Shackleton carved crater)", () => {
+  it("keeps the floor flat at y=0 so no worksite object (seated at y=0) moves", () => {
+    expect(craterProfile(0)).toBe(0);
+    expect(craterProfile(CRATER_FLOOR_RADIUS / 2)).toBe(0);
+    expect(craterProfile(CRATER_FLOOR_RADIUS)).toBe(0);
+  });
+
+  it("seats every Shackleton structure on the flat floor (within the floor radius)", () => {
+    for (const p of SITE_FRAMES.shackleton.pieces) {
+      const r = Math.hypot(p.position[0], p.position[2]);
+      expect(r).toBeLessThanOrEqual(CRATER_FLOOR_RADIUS);
+    }
+  });
+
+  it("rises to the rim crest height at the rim radius (the peak), and is continuous at the boundaries", () => {
+    expect(craterProfile(CRATER_RIM_RADIUS)).toBeCloseTo(CRATER_RIM_HEIGHT, 5);
+    // The flank eases the crest back to the open plain (0) by the outer radius.
+    expect(craterProfile(CRATER_OUTER_RADIUS)).toBeCloseTo(0, 5);
+    expect(craterProfile(300)).toBe(0); // far field is the flat plain
+  });
+
+  it("rises monotonically up the inner wall (floor → rim)", () => {
+    let prev = -1;
+    for (let r = CRATER_FLOOR_RADIUS; r <= CRATER_RIM_RADIUS; r += 2) {
+      const h = craterProfile(r);
+      expect(h).toBeGreaterThanOrEqual(prev - 1e-9);
+      prev = h;
+    }
+  });
+
+  it("falls monotonically down the outer flank (rim → outer)", () => {
+    let prev = CRATER_RIM_HEIGHT + 1;
+    for (let r = CRATER_RIM_RADIUS; r <= CRATER_OUTER_RADIUS; r += 2) {
+      const h = craterProfile(r);
+      expect(h).toBeLessThanOrEqual(prev + 1e-9);
+      prev = h;
+    }
+  });
+
+  it("never lifts the terrain above the rim crest height anywhere", () => {
+    for (let r = 0; r <= 400; r += 1) {
+      expect(craterProfile(r)).toBeLessThanOrEqual(CRATER_RIM_HEIGHT + 1e-9);
+      expect(craterProfile(r)).toBeGreaterThanOrEqual(0);
+    }
   });
 });
