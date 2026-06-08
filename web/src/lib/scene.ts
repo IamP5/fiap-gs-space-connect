@@ -230,7 +230,11 @@ export const SITE_FRAMES: Record<"lunar" | "shackleton", SiteFrame> = {
     worksiteUnitsToMeters: 2.5,
     sunDir: [2300, 1265, -6490],
     sunIntensity: 1.9,
-    terrainTint: "#9a948c",
+    // WS-4 (#170): neutral grey, NOT warm brown. The old #9a948c (r>g>b) tinted the
+    // regolith map toward dirt/Mars — the single biggest "this looks like dirt" tell.
+    // Real lunar regolith is a near-neutral, faintly cool grey; this multiplies the
+    // Moon 01 diffuse to that. Brightness ~unchanged so the lighting pass reads the same.
+    terrainTint: "#969798",
     fog: ["#000000", 180, 680],
     pieces: LUNAR_SET_PIECES,
   },
@@ -241,7 +245,10 @@ export const SITE_FRAMES: Record<"lunar" | "shackleton", SiteFrame> = {
     worksiteUnitsToMeters: 2.5,
     sunDir: [6490, 90, -2300],
     sunIntensity: 1.7,
-    terrainTint: "#6f6a66",
+    // Shackleton keeps a DISTINCT identity from the lunar hero site (#170): darker
+    // (deep polar shadow) and cooler (the old #6f6a66 read faintly warm) — a cold
+    // blue-grey pole crater, set apart from the neutral lunar plain above.
+    terrainTint: "#64676d",
     fog: ["#05060a", 120, 520],
     pieces: SHACKLETON_SET_PIECES,
   },

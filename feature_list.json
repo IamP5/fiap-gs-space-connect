@@ -1724,7 +1724,7 @@
       "area": "surface-immersion",
       "title": "Regolith overhaul — grey color + 1K/2K maps + anti-tiling (08-P2)",
       "user_visible_behavior": "The ground reads as neutral grey lunar regolith (not brown dirt), with no visible texture tiling at working distance, upgraded >=1K CC0 PBR maps, and crisp near-field foreground detail.",
-      "status": "not_started",
+      "status": "passing",
       "issue": 170,
       "milestone": 3,
       "depends_on": [],
@@ -1732,7 +1732,7 @@
         "cd web && npm run build && npm test",
         "manual: grey (not brown) regolith; no tiling at working distance; new CC0 textures credited in public/assets/CREDITS.md; no frame-time regression"
       ],
-      "evidence": "",
+      "evidence": "feat/08-surface-immersion: lunar tint #9a948c->#969798 (neutral grey), Shackleton #6f6a66->#64676d (cooler/darker); regolith maps 512->true 2K Moon01 (normal/AO re-encoded q68, ~5MB set); REGOLITH_REPEAT factor 0.3->0.22; macro-variation onBeforeCompile shader (world-space 2-octave value noise modulates albedo+roughness) kills the ~150x tiling grid. Verified: tsc clean, eslint 0 err, 239 vitest pass; chrome-mcp surface render = grey + de-tiled, no shader-compile errors (only benign mock-404 + pre-existing ANGLE glBlitFramebuffer warn).",
       "notes": "Milestone 08. Plan WS-4 (ground). Poly Haven CC0 lunar maps; Draco/KTX2 if VRAM tight."
     },
     {

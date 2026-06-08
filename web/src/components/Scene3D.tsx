@@ -1517,18 +1517,23 @@ export const REGOLITH_MAPS: {
   key: "map" | "normalMap" | "roughnessMap" | "aoMap";
   colorSpace: THREE.ColorSpace;
 }[] = [
-  { url: "/assets/textures/regolith_diff_512.jpg", key: "map", colorSpace: THREE.SRGBColorSpace },
+  // WS-4 (#170): upgraded 512 → 2K (Poly Haven Moon 01, CC0). The heavy normal/AO
+  // maps are re-encoded at jpg q68 so the full set lands ≈5 MB (vs ~10 MB raw) while
+  // keeping true 2048² near-field crunch. Tiled grain is broken by the macro-variation
+  // shader below, not by resolution. (Small spec-primitive blocks still use the 512
+  // set via mocks — they don't need 2K.)
+  { url: "/assets/textures/regolith_diff_2k.jpg", key: "map", colorSpace: THREE.SRGBColorSpace },
   {
-    url: "/assets/textures/regolith_nor_gl_512.jpg",
+    url: "/assets/textures/regolith_nor_gl_2k.jpg",
     key: "normalMap",
     colorSpace: THREE.NoColorSpace,
   },
   {
-    url: "/assets/textures/regolith_rough_512.jpg",
+    url: "/assets/textures/regolith_rough_2k.jpg",
     key: "roughnessMap",
     colorSpace: THREE.NoColorSpace,
   },
-  { url: "/assets/textures/regolith_ao_512.jpg", key: "aoMap", colorSpace: THREE.NoColorSpace },
+  { url: "/assets/textures/regolith_ao_2k.jpg", key: "aoMap", colorSpace: THREE.NoColorSpace },
 ];
 
 // The VISIBLE ground extends FAR past the worksite so its edge falls beyond the
@@ -1538,11 +1543,38 @@ export const REGOLITH_MAPS: {
 // is unchanged. Worksite detail lives in the central ~±16 units; the rest is plain.
 const GROUND_VISUAL = 700;
 
-// Tile count across the visible ground. Scaled WITH the ground size (~0.3 tiles
-// per world unit) so the regolith grain stays the same size whether the plane is
-// 32 or 700 units (Moon 01 is authored to tile). Tune the factor if grain reads
-// too large/small.
-const REGOLITH_REPEAT = Math.round(GROUND_VISUAL * 0.3);
+// Tile count across the visible ground. Scaled WITH the ground size so the regolith
+// grain stays the same size whether the plane is 32 or 700 units (Moon 01 is authored
+// to tile). WS-4 (#170): factor 0.3 → 0.22 — with the new 2K maps each tile can cover
+// more ground (larger, more natural boulder-field grain) and still stay crisp, and the
+// lower repeat frequency is easier for the macro-variation shader to hide. Tune if
+// grain reads too large/small.
+const REGOLITH_REPEAT = Math.round(GROUND_VISUAL * 0.22);
+
+// WS-4 (#170) anti-tiling. A regolith map tiled ~150× over the ground reads as an
+// obvious repeating grid — the classic "this is a tiled texture" tell. We break it
+// with a MACRO-VARIATION pass injected into the MeshStandard shader: a large-scale
+// (tens-of-units) procedural value-noise modulates the albedo brightness + a touch of
+// roughness, so meter-scale light/dark blotches drift across the surface and the tile
+// seams stop reading as a lattice. Pure shader math — no extra texture, no draw call,
+// runs entirely on the GPU. World-space sampled so the variation is stable as the
+// camera moves (it's "painted on the ground", not screen-space).
+const REGOLITH_MACRO_VERT_DECL = `varying vec3 vRegoWPos;`;
+const REGOLITH_MACRO_VERT_ASSIGN = `vRegoWPos = (modelMatrix * vec4(transformed, 1.0)).xyz;`;
+const REGOLITH_MACRO_FRAG_DECL = `
+varying vec3 vRegoWPos;
+float regoHash(vec2 p){ p = fract(p * vec2(123.34, 456.21)); p += dot(p, p + 45.32); return fract(p.x * p.y); }
+float regoVN(vec2 p){
+  vec2 i = floor(p); vec2 f = fract(p); vec2 u = f * f * (3.0 - 2.0 * f);
+  float a = regoHash(i), b = regoHash(i + vec2(1.0, 0.0));
+  float c = regoHash(i + vec2(0.0, 1.0)), d = regoHash(i + vec2(1.0, 1.0));
+  return mix(mix(a, b, u.x), mix(c, d, u.x), u.y);
+}
+// Two octaves of low-frequency world-space noise → broad blotches (~30 u) plus a
+// finer drift (~12 u). Returns ~[0,1] centred near 0.5.
+float regoMacro(vec2 wxz){
+  return regoVN(wxz * 0.034) * 0.62 + regoVN(wxz * 0.11 + 17.3) * 0.38;
+}`;
 
 // Deterministic 2D value noise (#105): a cheap integer-lattice hash plus
 // bilinear interpolation with a smoothstep fade. No asset, no RNG state — the
@@ -1577,6 +1609,29 @@ function valueNoise2(x: number, y: number): number {
 // by the snapshot. Subtle deterministic vertex displacement gives a regolith
 // feel, and a tiling CC0 regolith PBR set (issue #53) clothes it. A missing/
 // failed texture leaves the flat fallback color, so the scene never breaks.
+// Inject the WS-4 macro-variation into a MeshStandardMaterial's compiled shader.
+// Hooks the stock chunks: declare a world-pos varying, fill it in begin_vertex, then
+// after map_fragment modulate albedo and after roughnessmap_fragment nudge roughness.
+// Average multiplier ≈1.0 (centred), so it adds texture without darkening the surface.
+function applyRegolithMacro(shader: THREE.WebGLProgramParametersWithUniforms) {
+  shader.vertexShader = shader.vertexShader
+    .replace("#include <common>", `#include <common>\n${REGOLITH_MACRO_VERT_DECL}`)
+    .replace(
+      "#include <begin_vertex>",
+      `#include <begin_vertex>\n  ${REGOLITH_MACRO_VERT_ASSIGN}`,
+    );
+  shader.fragmentShader = shader.fragmentShader
+    .replace("#include <common>", `#include <common>\n${REGOLITH_MACRO_FRAG_DECL}`)
+    .replace(
+      "#include <map_fragment>",
+      `#include <map_fragment>\n  { float m = regoMacro(vRegoWPos.xz); diffuseColor.rgb *= mix(0.82, 1.18, m); }`,
+    )
+    .replace(
+      "#include <roughnessmap_fragment>",
+      `#include <roughnessmap_fragment>\n  roughnessFactor *= mix(0.94, 1.06, regoMacro(vRegoWPos.xz));`,
+    );
+}
+
 function LunarTerrain({ terrainTint, crater = false }: { terrainTint: string; crater?: boolean }) {
   const matRef = useRef<THREE.MeshStandardMaterial>(null);
   const gl = useThree((s) => s.gl);
@@ -1668,7 +1723,13 @@ function LunarTerrain({ terrainTint, crater = false }: { terrainTint: string; cr
       {/* Per-site tint (Epic 04 P2): multiplies the regolith map once loaded (and
           is the flat fallback colour before/if it fails) — lunar reads warm grey,
           Shackleton darker/cooler. */}
-      <meshStandardMaterial ref={matRef} color={terrainTint} roughness={1} metalness={0} />
+      <meshStandardMaterial
+        ref={matRef}
+        color={terrainTint}
+        roughness={1}
+        metalness={0}
+        onBeforeCompile={applyRegolithMacro}
+      />
     </mesh>
   );
 }

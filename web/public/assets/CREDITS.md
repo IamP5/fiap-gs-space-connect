@@ -111,24 +111,31 @@ https://www.nasa.gov/nasa-brand-center/images-and-media/.
 
 ## PBR texture sets — regolith (CC0)
 
-The lunar terrain (and the PBR `SpecPrimitive` slot) is clothed with Poly Haven's
-**Moon 01** set (issue #53): the full diffuse / normal (OpenGL) / roughness / AO
-maps, downloaded as 1K jpg and **resized to 512×512** for bundle size (otherwise
-unmodified). The jpg `nor_gl` normal map is used (no EXR dependency).
+The lunar terrain is clothed with Poly Haven's **Moon 01** set (issue #53; upgraded
+to 2K in milestone 08 / #170): the full diffuse / normal (OpenGL) / roughness / AO
+maps. WS-4 (#170) upgraded the terrain set from 512 to **true 2048×2048**; the heavy
+normal + AO maps are **re-encoded at jpg quality ≈68** (resolution unchanged) so the
+full set lands ≈5 MB instead of ~10 MB. The jpg `nor_gl` normal map is used (no EXR
+dependency). The small 512 set below is retained for the low-detail `SpecPrimitive`
+block slot (mock scene), which does not need 2K.
 
 | File | Source map | Authors | Source URL | License |
 |------|-----------|---------|-----------|---------|
+| `textures/regolith_diff_2k.jpg` | "Moon 01" — 2K diffuse | Greg Zaal, Rico Cilliers, Jenelle van Heerden (photography), Dario Barresi (processing) | https://polyhaven.com/a/moon_01 | CC0 1.0 |
+| `textures/regolith_nor_gl_2k.jpg` | "Moon 01" — 2K normal (OpenGL), re-encoded jpg q≈68 | Greg Zaal, Rico Cilliers, Jenelle van Heerden (photography), Dario Barresi (processing) | https://polyhaven.com/a/moon_01 | CC0 1.0 |
+| `textures/regolith_rough_2k.jpg` | "Moon 01" — 2K roughness | Greg Zaal, Rico Cilliers, Jenelle van Heerden (photography), Dario Barresi (processing) | https://polyhaven.com/a/moon_01 | CC0 1.0 |
+| `textures/regolith_ao_2k.jpg` | "Moon 01" — 2K ambient occlusion, re-encoded jpg q≈68 | Greg Zaal, Rico Cilliers, Jenelle van Heerden (photography), Dario Barresi (processing) | https://polyhaven.com/a/moon_01 | CC0 1.0 |
 | `textures/regolith_diff_512.jpg` | "Moon 01" — 1K diffuse, resized to 512 | Greg Zaal, Rico Cilliers, Jenelle van Heerden (photography), Dario Barresi (processing) | https://polyhaven.com/a/moon_01 | CC0 1.0 |
 | `textures/regolith_nor_gl_512.jpg` | "Moon 01" — 1K normal (OpenGL), resized to 512 | Greg Zaal, Rico Cilliers, Jenelle van Heerden (photography), Dario Barresi (processing) | https://polyhaven.com/a/moon_01 | CC0 1.0 |
 | `textures/regolith_rough_512.jpg` | "Moon 01" — 1K roughness, resized to 512 | Greg Zaal, Rico Cilliers, Jenelle van Heerden (photography), Dario Barresi (processing) | https://polyhaven.com/a/moon_01 | CC0 1.0 |
 | `textures/regolith_ao_512.jpg` | "Moon 01" — 1K ambient occlusion, resized to 512 | Greg Zaal, Rico Cilliers, Jenelle van Heerden (photography), Dario Barresi (processing) | https://polyhaven.com/a/moon_01 | CC0 1.0 |
 
-Original 1K downloads (resized down to 512; otherwise unmodified):
+Original 2K downloads (normal + AO re-encoded at jpg q≈68; otherwise unmodified):
 
-- `https://dl.polyhaven.org/file/ph-assets/Textures/jpg/1k/moon_01/moon_01_diff_1k.jpg`
-- `https://dl.polyhaven.org/file/ph-assets/Textures/jpg/1k/moon_01/moon_01_nor_gl_1k.jpg`
-- `https://dl.polyhaven.org/file/ph-assets/Textures/jpg/1k/moon_01/moon_01_rough_1k.jpg`
-- `https://dl.polyhaven.org/file/ph-assets/Textures/jpg/1k/moon_01/moon_01_ao_1k.jpg`
+- `https://dl.polyhaven.org/file/ph-assets/Textures/jpg/2k/moon_01/moon_01_diff_2k.jpg`
+- `https://dl.polyhaven.org/file/ph-assets/Textures/jpg/2k/moon_01/moon_01_nor_gl_2k.jpg`
+- `https://dl.polyhaven.org/file/ph-assets/Textures/jpg/2k/moon_01/moon_01_rough_2k.jpg`
+- `https://dl.polyhaven.org/file/ph-assets/Textures/jpg/2k/moon_01/moon_01_ao_2k.jpg`
 
 Poly Haven publishes all of its assets under CC0 1.0
 (https://polyhaven.com/license); the set's authors are confirmed via the Poly
