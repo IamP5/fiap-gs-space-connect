@@ -48,6 +48,7 @@ import {
   isMarkerLockOn,
   type MarkerSite,
 } from "./lib/reel/markerCue";
+import { isOpenCue } from "./lib/reel/openArc";
 import type { BuildMode, Vec2 } from "./types/wire";
 import "./styles/dashboard.css";
 
@@ -152,6 +153,18 @@ export default function App() {
   const [lockedSite, setLockedSite] = useState<MarkerSite | null>(null);
   const [markerFlip, setMarkerFlip] = useState(false);
 
+  // The orbit-open camera-arc cue (Epic 07 S5 · #158, Beats 1–2). One more ADDITIVE
+  // client-only UI flag (the ADR-0004 carve-out) — it invents ZERO snapshot/wire
+  // fields and only DRIVES Scenery the Scene3D <CinematicOpen> rig owns: while true
+  // the camera drifts the dark lunar limb then ARCS so the *fixed* sun's godrays
+  // crest in, easing into ORBIT_POSE ("lost in the dark, found by the sun"). `O`
+  // toggles it (mnemonic: open) — press once to run the open; pressing again cancels
+  // mid-arc (the rig settles cleanly into ORBIT_POSE). The SUN never moves (camera-
+  // arc, not sun-arc). Only mutated while armed; disarm never resets it. FALLBACK-
+  // READY: if never fired, the orbit is byte-for-byte unchanged (a cold ORBIT_POSE
+  // hold + the descent glare carries "found by light"), so the cue never blocks.
+  const [cinematicOpen, setCinematicOpen] = useState(false);
+
   // The single cinematic cue this slice owns: the climax kill. While armed, one
   // `K` press emits exactly `{cmd:"cueKill"}` once (the keydown handler ignores
   // OS key-repeat via `e.repeat`, so holding the key still fires only once per
@@ -202,6 +215,15 @@ export default function App() {
       }
       if (cinematic && isMarkerFlip(e)) {
         setMarkerFlip((v) => !v);
+        return;
+      }
+      // Orbit-open camera-arc (#158): `O` toggles the open cue — armed-only, so a
+      // disarmed press is a no-op (normal app unchanged). Pure Scenery: it drives
+      // the Scene3D <CinematicOpen> rig (camera-arc, the sun never moves), touches
+      // no World Model. The rig itself only runs in orbit; firing it on the surface
+      // is inert. Fallback-ready: never firing it leaves the orbit unchanged.
+      if (cinematic && isOpenCue(e)) {
+        setCinematicOpen((v) => !v);
         return;
       }
     };
@@ -583,6 +605,10 @@ export default function App() {
               // null ⇒ undefined (no cue, manual hover only).
               lockedSite={lockedSite ?? undefined}
               statusOverride={markerFlip}
+              // Orbit-open camera-arc (#158) — only ever true while armed + cued.
+              // The Scene3D rig runs it in orbit only; false ⇒ the orbit is unchanged
+              // (the cold-hold fallback). Additive Scenery, zero snapshot fields.
+              cinematicOpen={cinematicOpen}
             />
           </Suspense>
         ) : null}

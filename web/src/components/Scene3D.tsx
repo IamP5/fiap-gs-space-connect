@@ -36,7 +36,7 @@
 //   - No custom physics; only LICENSED art (CC0/CC-BY/NASA-PD), each with a
 //     mandatory primitive fallback.
 
-import { memo, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
+import { memo, useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
 import { Canvas, useFrame, useThree, type ThreeEvent } from "@react-three/fiber";
 import { ContactShadows, Html, Instance, Instances, Line, OrbitControls } from "@react-three/drei";
 import { SpaceEnvironment, STARFIELD_PARALLAX_NAME } from "./SpaceEnvironment";
@@ -107,6 +107,7 @@ import {
   idleSwayOffset,
   zoomExposure,
 } from "../lib/cameraFeel";
+import { OPEN_MS, openAzimuthOffset } from "../lib/reel/openArc";
 import { LaunchScenery } from "./LaunchScenery";
 import { DecorRocks } from "./DecorRocks";
 
@@ -2043,6 +2044,15 @@ type Scene3DProps = {
   //   · `statusOverride` flips the Shackleton marker to cyan/"operational" (Beat 15).
   lockedSite?: SiteId;
   statusOverride?: boolean;
+  // Orbit-open camera-arc cue (Epic 07 S5 · #158, Beats 1–2). While true the
+  // <CinematicOpen> rig (mounted alongside CameraFeel) drifts the camera along the
+  // dark lunar limb then ARCS it so the *fixed* sun's godrays/bloom crest in,
+  // easing into ORBIT_POSE — "lost in the dark, found by the sun". Additive Scenery
+  // gated upstream on the `cinematic` arm flag (it invents ZERO snapshot/wire
+  // fields). Omitted/false ⇒ the orbit behaves exactly as today (the script-
+  // sanctioned cold-hold fallback): the rig NEVER blocks anything. Only meaningful
+  // in orbit view; the rig itself no-ops on the surface.
+  cinematicOpen?: boolean;
 };
 
 // Per-mode OrbitControls clamps + target. Both presets are clamped (ADR-0004):
@@ -3206,6 +3216,142 @@ function CameraFeel({ active, onSurface }: { active: boolean; onSurface: boolean
   return null;
 }
 
+// CinematicOpen — the orbit-open camera-arc rig (Epic 07 S5 · #158, Beats 1–2
+// "WANDERING" + "SUN REVEAL"). The film's opening Scenery beat: "lost in the dark,
+// found by the sun." A scene-mounted rig driven by a PROP FLAG (the same pattern as
+// CameraFeel above — NOT an imperative camera handle), so it respects the one-effect-
+// owns-the-camera invariant.
+//
+// While `active`, it drifts the camera laterally along the Moon's dark limb (sun
+// off-frame) and then ARCS the CAMERA so the *fixed* sun's GodRays + celestial bloom
+// crest into frame, easing into ORBIT_POSE. The motion is a CAMERA azimuth offset
+// (lib/reel/openArc.openAzimuthOffset) applied by rotating the settled ORBIT_POSE
+// offset around the target's up-axis — CAMERA-ARC, NOT SUN-ARC (grilling outcome 5):
+// the sun STAYS at ORBIT_SUN_POSITION (moving it would be physically wrong + snapshot-
+// independent motion). It runs under frameloop="always" (ADR-0004 Wave-4) and invents
+// ZERO snapshot/wire fields (pure decorative Scenery, ADR-0004 purity intact).
+//
+// Transition discipline: while running it calls `onTransition(true)` so Scene3D sets
+// `transitioning` — which deactivates CameraFeel (its idle sway can't fight the arc)
+// and disables OrbitControls rotate. It ALSO owns `controls.enabled=false` directly
+// (mirrors runDescent). On completion OR cancel (prop flips false / unmount), it
+// settles EXACTLY on ORBIT_POSE, re-enables controls, and calls `onTransition(false)`
+// so CameraFeel re-arms and idle drift eases back in — no stuck-disabled controls, no
+// leaked state. The cleanup runs on EVERY teardown, so cancelling mid-arc restores
+// cleanly to the framed orbit pose (never a half-rotated camera).
+//
+// FALLBACK (script-sanctioned, Beats 1–2): if this cue is never fired, the orbit
+// behaves EXACTLY as today — a cold static ORBIT_POSE hold + idle sway, and the
+// "found by light" read moves to the descent glare (Beat 4). The rig is inert when
+// `active` is false, so it NEVER blocks the rest of the film. Only meaningful in
+// orbit; on the surface it no-ops (the open is an orbit vista beat).
+function CinematicOpen({
+  active,
+  onSurface,
+  onTransition,
+}: {
+  active: boolean;
+  onSurface: boolean;
+  onTransition: (running: boolean) => void;
+}) {
+  const controls = useThree((s) => s.controls) as FeelControls | null;
+  const camera = useThree((s) => s.camera);
+  const invalidate = useThree((s) => s.invalidate);
+
+  useEffect(() => {
+    // Inert unless armed-and-triggered AND in orbit (the open is an orbit vista
+    // beat). On the surface or when not cued, do nothing — the orbit is untouched
+    // (the cold-hold fallback) and controls/CameraFeel keep their current state.
+    if (!active || onSurface || !controls || !camera) return;
+
+    // The settled ORBIT_POSE offset (position − target) and its azimuth; the arc
+    // rotates a CLONE of this offset around the target's up-axis so the radius +
+    // pitch are preserved and only the azimuth swings (CAMERA-ARC, not sun-arc).
+    const restOffset = ORBIT_POSE.position.clone().sub(ORBIT_POSE.target);
+    const up = camera.up.clone(); // world-up (0,1,0) in orbit — the azimuth axis
+    const tmpOffset = new THREE.Vector3();
+    const tmpQuat = new THREE.Quaternion();
+
+    // We own the camera for the duration: disable controls and tell Scene3D we're
+    // transitioning (deactivates CameraFeel, disables OrbitControls rotate). Mirrors
+    // runDescent's discipline so the two rigs never fight over the camera.
+    controls.enabled = false;
+    onTransition(true);
+
+    let raf = 0;
+    let start = 0;
+    let cancelled = false;
+    // True once the arc has run to completion and handed the camera back. Guards the
+    // cleanup from re-snapping the camera to ORBIT_POSE on a LATER teardown (e.g. the
+    // operator toggles the cue off, or orbits away then unmounts) — after a natural
+    // finish there is nothing to cancel, so the cleanup must not yank the camera.
+    let finished = false;
+
+    const apply = (t: number) => {
+      const azOffset = openAzimuthOffset(t);
+      tmpOffset.copy(restOffset).applyQuaternion(tmpQuat.setFromAxisAngle(up, azOffset));
+      camera.position.copy(ORBIT_POSE.target).add(tmpOffset);
+      camera.up.set(0, 1, 0);
+      camera.lookAt(ORBIT_POSE.target);
+      // Keep OrbitControls' target on the Moon so it resumes from the framed pose.
+      controls.target.copy(ORBIT_POSE.target);
+      invalidate();
+    };
+
+    const step = (now: number) => {
+      if (cancelled) return;
+      if (!start) start = now;
+      const t = Math.min(1, (now - start) / OPEN_MS);
+      apply(t);
+      if (t < 1) {
+        raf = requestAnimationFrame(step);
+      } else {
+        // Settle EXACTLY on ORBIT_POSE (openAzimuthOffset(1) === 0, but snap to the
+        // canon pose so there is zero residual), re-enable controls, and hand the
+        // camera back to CameraFeel via onTransition(false) — idle drift eases in.
+        finish();
+      }
+    };
+
+    const finish = () => {
+      finished = true;
+      camera.position.copy(ORBIT_POSE.position);
+      camera.up.set(0, 1, 0);
+      camera.lookAt(ORBIT_POSE.target);
+      controls.target.copy(ORBIT_POSE.target);
+      controls.enabled = true;
+      onTransition(false);
+      invalidate();
+    };
+
+    raf = requestAnimationFrame(step);
+
+    return () => {
+      cancelled = true;
+      cancelAnimationFrame(raf);
+      // If the arc already finished naturally, `finish()` settled + handed the camera
+      // back to CameraFeel/OrbitControls — there is nothing to cancel, so DON'T touch
+      // the camera (the operator may have orbited away since). Only an INTERRUPTED arc
+      // (prop flips false / unmount mid-run) needs the restore: settle to the framed
+      // ORBIT_POSE and re-enable controls so nothing is left stuck-disabled or
+      // half-rotated.
+      if (!finished) {
+        if (controls) {
+          camera.position.copy(ORBIT_POSE.position);
+          camera.up.set(0, 1, 0);
+          camera.lookAt(ORBIT_POSE.target);
+          controls.target.copy(ORBIT_POSE.target);
+          controls.enabled = true;
+        }
+        onTransition(false);
+        invalidate();
+      }
+    };
+  }, [active, onSurface, controls, camera, invalidate, onTransition]);
+
+  return null;
+}
+
 // The canonical settled pose for a (view, site) pair — the start/end of every
 // transition. Orbit is site-agnostic (one Moon vista for both markers); the
 // surface picks the active site's framing (Epic 04 P4: Shackleton lower/back).
@@ -3233,6 +3379,7 @@ export function Scene3D({
   onActiveSiteChange,
   lockedSite,
   statusOverride,
+  cinematicOpen,
 }: Scene3DProps) {
   // Initial camera pose, seeded to the DEFAULT view so the app opens already
   // framed on it. The Canvas `camera` prop is applied ONCE on mount, so this is
@@ -3267,6 +3414,15 @@ export function Scene3D({
   const [shownSite, setShownSite] = useState<SiteId>(activeSite);
   const shownSiteRef = useRef<SiteId>(activeSite);
   const [transitioning, setTransitioning] = useState(false);
+
+  // The orbit-open rig (#158) reuses the SAME `transitioning` discipline as the
+  // descent/traverse runners: while it owns the camera it flips `transitioning` so
+  // CameraFeel stands down and OrbitControls rotate is disabled, then clears it on
+  // settle so idle drift eases back in (one-effect-owns-the-camera). Memoised so the
+  // rig's effect (which depends on it) doesn't re-run on unrelated re-renders.
+  const runOpenTransition = useCallback((running: boolean) => {
+    setTransitioning(running);
+  }, []);
 
   // Live handles to the in-Canvas camera/controls/invalidate, captured by RigBridge.
   const cameraRef = useRef<THREE.Camera | null>(null);
@@ -3714,6 +3870,18 @@ export function Scene3D({
             never reads the snapshot. Orbit exposure is scaled down so deep space
             reads darker (the sunlit limb + celestial bloom stop blowing out). */}
         <CameraFeel active={!placing && !transitioning} onSurface={shown === "surface"} />
+        {/* Orbit-open camera-arc (#158): the film's opening Scenery beat. Driven by
+            the `cinematicOpen` prop (gated upstream on the cinematic arm flag); while
+            running it sets `transitioning` (via runOpenTransition) so CameraFeel +
+            OrbitControls stand down, then settles into ORBIT_POSE and hands the camera
+            back. The SUN never moves (camera-arc, not sun-arc). Inert + non-blocking
+            when the cue isn't fired — the orbit then behaves exactly as today (the
+            script-sanctioned cold-hold fallback). Orbit-only; no-ops on the surface. */}
+        <CinematicOpen
+          active={cinematicOpen === true && shown === "orbit" && !placing}
+          onSurface={shown === "surface"}
+          onTransition={runOpenTransition}
+        />
       </Canvas>
       {/* Glare overlay for the descent transition. A child of .stage (position:
           relative), so it fills the stage; pointer-events:none keeps clicks going
