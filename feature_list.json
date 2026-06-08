@@ -1749,8 +1749,8 @@
         "cd web && npm run build && npm test",
         "manual: confirm rassor_rover.glb loads (no primitive fallback); hit-proxy scales with body (no missed clicks); rover reads as metal robot with idle motion; structures unchanged"
       ],
-      "evidence": "feat/08-surface-immersion: GLB load confirmed (was a featureless rassor shrinkwrap, not the primitive fallback); swapped active rover to CC0 Quaternius 6-wheel explorer (rover_robot.glb, 26KB Draco, insignia-clean, via Poly Pizza). ROVER_HERO_SCALE 2.7x (0.3u->~0.81u; hit-proxy scales with body, no-missed-click held). Rover material branch in polishGltfMaterials (metalness .85 / roughness .5 / clearcoat) so it reads as machined metal. Idle yaw+bob articulation on alive rovers (ref-mutation, no re-render). Added self-shim to condition-asset.mjs. Verified: tsc clean, eslint 0 err, 239 vitest pass; chrome-mcp surface = chassis+mast silhouette, no GLB load errors.",
-      "notes": "Milestone 08. Plan WS-3. Decision locked: rover scale breaks realism (~2.5-3x); structures stay real (realMeters x 0.12). Document the break next to scale constants."
+      "evidence": "feat/08-surface-immersion: active rover = real NASA Mars 2020 Perseverance (rover_nasa.glb, 1.47MB, 44 meshes/~126k verts, real white/tan livery KEPT via mars_2020 atlases; US flag + NASA meatball + JPL logo painted out per astronaut.glb method — insignia-clean, NASA-PD). ROVER_HERO_SCALE 5.5x; whole group scales (hit-proxy held, no-missed-click). Idle yaw+bob on alive rovers. condition-asset.mjs self-shim added. (Superseded the stop-gap Quaternius CC0 rover which read as a toy; rover_robot.glb removed.) Verified: tsc clean, 239 vitest pass; chrome-mcp close-up = recognizable rover (chassis+camera mast+wheels) in white livery, no GLB load errors.",
+      "notes": "Milestone 08. Plan WS-3. Decision locked: rover scale breaks realism (~2.5-3x); structures stay real (realMeters x 0.12). Document the break next to scale constants. Operator rejected flat-grey + toy looks; landed textured NASA Perseverance at 4.0x."
     },
     {
       "id": "r3d-172",

@@ -134,11 +134,6 @@ export function polishGltfMaterials<T extends THREE.Object3D>(
   opts: PolishOpts,
 ): T {
   const isSolar = !!opts.url && /solar|panel/i.test(opts.url);
-  // WS-3 (#171): the rover GLB ships a flat low-poly PBR (the Quaternius atlas is
-  // pruned in conditioning → a single untextured material). Left as-is it reads as
-  // matte plastic. Pull roughness down + keep it metallic so the hard lunar sun
-  // glints off the chassis as machined metal. (Matches both rover_robot + rassor.)
-  const isRover = !!opts.url && /rover|rassor/i.test(opts.url);
   // A material can be SHARED across submeshes; upgrade each unique instance once,
   // reuse the result everywhere, and dispose the replaced originals once at the end
   // (dispose() frees only the material program — never the shared textures).
@@ -172,11 +167,6 @@ export function polishGltfMaterials<T extends THREE.Object3D>(
       phys.roughness = 0.3;
       phys.anisotropy = 0.6;
       phys.anisotropyRotation = 0; // rows run along U → a horizontal specular streak
-    } else if (isRover && phys.isMeshPhysicalMaterial) {
-      phys.metalness = 0.85;
-      phys.roughness = 0.5; // was glTF-default 1.0 (matte) → now a machined-metal sheen
-      phys.clearcoat = 0.6;
-      phys.clearcoatRoughness = 0.35;
     } else if (metalish && phys.isMeshPhysicalMaterial) {
       phys.clearcoat = 0.5;
       phys.clearcoatRoughness = 0.4;

@@ -350,13 +350,14 @@ function roverHaloColor(r: RoverView): string {
 // The one configured rover model. Self-hosted, conditioned + Draco-compressed by
 // scripts/condition-asset.mjs (recentered, fit-to-unit). A missing file just
 // keeps the primitive fallback below.
-// WS-3 (#171): swapped from the featureless `rassor_rover.glb` shrinkwrap hull to a
-// CC0 Quaternius 6-wheel explorer (body + 6 wheels + sensor mast) so the swarm reads
-// as ACTUAL ROBOTS, not smooth pods. CC0 via Poly Pizza (see CREDITS.md), insignia-
-// clean, ~26 KB Draco.
+// WS-3 (#171): the active rover is NASA's iconic Mars 2020 Perseverance — a real
+// NASA-PD asset (detailed chassis + rocker-bogie 6-wheel suspension + Mastcam-Z/NavCam
+// mast + robotic arm), 17 meshes / ~120k verts, insignia-clean, 604 KB Draco. Replaces
+// the earlier featureless `rassor_rover.glb` shrinkwrap (read as a pod) and a stop-gap
+// CC0 low-poly rover (read as a toy). Source + provenance in CREDITS.md.
 // Exported so the preload manifest (lib/assets.ts) references the SAME URL the
 // renderer uses — the manifest can't drift from the component (Epic 05 P1).
-export const ROVER_MODEL_REF = "/assets/models/rover_robot.glb";
+export const ROVER_MODEL_REF = "/assets/models/rover_nasa.glb";
 // The native (authored) size the rover body, primitive fallback, hit-proxy, and
 // halos were all laid out at — the model's LARGEST bbox dim fits to this, and the
 // primitive box/mast/wheels + hit sphere + halo rings are all proportioned around
@@ -380,7 +381,11 @@ const ROVER_SCENE_SIZE = REAL_METERS.rover * SCENE_UNITS_PER_METER;
 // NOT "fix" this back. The whole rover group (body + hit-proxy + halos) scales by
 // ROVER_SCALE together, so the invisible pick sphere grows with the body — the
 // no-missed-click invariant (ADR-0004) is preserved.
-const ROVER_HERO_SCALE = 2.7;
+// 5.5× (operator: at 4× the 6-wheel rocker-bogie smeared into "two wheels" — too
+// small + softened by the surface DoF to resolve the wheels). The Perseverance bbox
+// is long+low (length 1.0 vs height 0.59 of a unit), so it reads lower than a tall
+// pod; this lands it as a clearly-present hero machine with its wheels legible.
+const ROVER_HERO_SCALE = 5.5;
 const ROVER_SCALE = (ROVER_SCENE_SIZE / ROVER_BASE_SIZE) * ROVER_HERO_SCALE;
 
 // fitAndSeatRover normalizes a loaded model in place (mirrors LaunchScenery's
@@ -2058,7 +2063,7 @@ const CinematicFX = memo(function CinematicFX({
         <DepthOfField
           focusDistance={0.0}
           focalLength={0.02}
-          bokehScale={2.2}
+          bokehScale={1.6}
           height={480}
         />
       ) : (

@@ -301,7 +301,7 @@ ESA/Hubble publishes its images under **CC-BY 4.0**
 here verbatim. **Attribution:** NASA, ESA, and the Hubble Heritage
 (STScI/AURA)-ESA/Hubble Collaboration. Acknowledgment: J. Hester (ASU).
 
-## Rover model (CC0 — milestone 08 / #171; was NASA-PD RASSOR)
+## Rover model (NASA-PD — milestone 08 / #171)
 
 Used by `<Rover3D>` (issue #54) as the realistic worker-entity render — every
 rover swaps its primitive box body for this one configured glTF. It is NOT a
@@ -312,16 +312,19 @@ Draco-compressed by `scripts/condition-asset.mjs` (recentered, fit-to-unit);
 fitted + ground-seated at load. The loaded tree is raycast-suppressed so the
 rover's invisible hit-proxy sphere stays the SOLE pickable surface.
 
-WS-3 (#171) swapped the **active** rover from the NASA-PD `rassor_rover.glb`
-(a featureless single-mesh "shrinkwrap" hull that read as a smooth pod) to a
-CC0 Quaternius 6-wheel explorer — visible body + 6 wheels + sensor mast, so the
-swarm reads as actual robots. The RASSOR row is retained below for provenance
-(file still present, no longer referenced by the renderer).
+WS-3 (#171) swapped the **active** rover to NASA's iconic **Mars 2020
+Perseverance** — the featureless `rassor_rover.glb` "shrinkwrap" hull read as a
+smooth pod, and a stop-gap low-poly CC0 rover read as a toy, so neither sold
+"real rover." Perseverance is the genuine NASA rover silhouette. The RASSOR row
+is retained below for provenance (file still present, no longer referenced).
 
 | File | Source asset | Author | Source URL | License |
 |------|--------------|--------|-----------|---------|
-| `models/rover_robot.glb` | "Rover" — 6-wheel low-poly explorer (body + 6 wheels + sensor mast) from Quaternius's Space Kit, via Poly Pizza. up=y + recenter + fit-to-unit + `gltf-transform optimize --compress draco` (the optimize `join` flattens the named parts into one mesh — all geometry preserved; the baseColor atlas is pruned → flat PBR, shaded by the rover material pass). 356 KB → 25.9 KB. Poly Pizza shows the per-model license as "Public Domain (CC0)". | Quaternius (quaternius.com) | https://poly.pizza/m/WRd1piJOfh | CC0 1.0 |
+| `models/rover_nasa.glb` | "Mars 2020 Perseverance Rover" — NASA's iconic 6-wheel rover (detailed chassis + rocker-bogie suspension + Mastcam-Z/NavCam camera mast + robotic arm + antennas). **Body PBR textures KEPT** (real white/tan livery via the `mars_2020_*` atlases). Draco-decoded, then `gltf-transform optimize --compress draco --texture-compress webp --texture-size 1024` (Y-up, no recenter/fit — the renderer's `fitAndSeatRover` fits + seats at load): 4.76 MB source → 1.47 MB. 44 meshes / ~126k verts, 22 webp textures embedded — NOT a flat-grey blob. **Insignia painted out (ImageMagick, astronaut.glb method):** the `blade` atlas's US flag + NASA meatball + JPL logo and the `arm_graphics` atlas's NASA meatball + JPL logo were flat-filled with the surrounding panel colour before re-packing; science calibration targets/fiducials and the "MARS 2020/PERSEVERANCE" mission text retained. No insignia/worm/seal/flag in the shipped `.glb` (re-verified post-encode). | NASA / Brian Kumanchik, NASA/JPL-Caltech | https://science.nasa.gov/3d-resources/mars-2020-perseverance-rover/ | NASA-PD |
 | `models/rassor_rover.glb` | "Regolith Advanced Surface Systems Operations Robot (RASSOR)" — NASA's lunar regolith excavation/construction robot. Draco-decompressed, decimated (~2.1M → render-light), conditioned (Y-up, recentered, fit-to-unit), then Draco-recompressed (6.3 MB → 2.0 MB). _Retained for provenance; no longer the active rover (#171)._ | NASA | https://github.com/nasa/NASA-3D-Resources/tree/master/3D%20Models/Regolith%20Advanced%20Surface%20Systems%20Operations%20Robot%20(RASSOR) | NASA-PD |
+
+Original download (Perseverance; conditioned, not committed as-is):
+`https://assets.science.nasa.gov/content/dam/science/cds/3d/resources/model/mars-2020-perseverance-rover/Mars%202020%20Perseverance%20Rover.glb`
 
 NASA's 3D Resources are released into the public domain (NASA-PD); see
 https://github.com/nasa/NASA-3D-Resources (Usage Guidelines). No NASA insignia
