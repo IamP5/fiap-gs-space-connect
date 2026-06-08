@@ -3,15 +3,16 @@
 // The SAME projection drives both the 3D render AND the click raycast hit-proxy,
 // so a click can never drift off the rover the user sees (ADR-0004's hardened
 // click-to-kill). Kept DOM-free / three-free so it is unit-testable in vitest's
-// node env, mirroring hitTest.ts's "no missed clicks" ethos for the 2D canvas.
+// node env, with a "no missed clicks" ethos.
 //
 // The server's world coordinates are domain.Vec2 with capital X/Y (no JSON tags;
 // see types/wire.ts). We map that 2D worksite onto the ground plane of a 3D
 // scene: world X → scene x, world Y → scene -z (so +Y world reads as "into the
 // screen / away from camera", the natural top-down→isometric reading). World
-// units are scaled uniformly so the whole worksite fits a fixed ground span,
-// regardless of how spread out the rovers/tasks are — nothing here invents world
-// state; it only positions authoritative snapshot points in the scene.
+// units are scaled by a FIXED real-meters→scene-units factor (Epic 04 P0), so
+// every object reads at its true relative size and the framing is stable across
+// snapshots — nothing here invents world state; it only positions authoritative
+// snapshot points in the scene.
 
 import type { TaskView, Vec2 } from "../types/wire";
 
@@ -20,6 +21,238 @@ import type { TaskView, Vec2 } from "../types/wire";
 // span with a margin, so the camera framing is stable across snapshots.
 export const GROUND_SPAN = 20;
 export const GROUND_MARGIN = 2.5; // scene units of padding around the worksite
+
+// ---- real-world scale (Epic 04 P0) -----------------------------------------
+//
+// The single fixed world→scene scale: 1 real meter = SCENE_UNITS_PER_METER scene
+// units (so 1 scene unit ≈ 8.3 m). This REPLACES the old per-snapshot autoscale
+// (sceneMap fit-the-bbox-into-GROUND_SPAN), which silently rescaled the whole
+// worksite as the swarm spread/moved — making sizes meaningless and the framing
+// jitter. With a fixed scale every object is drawn at its true relative size and
+// the camera composition is stable across snapshots. Tune on screen.
+export const SCENE_UNITS_PER_METER = 0.12;
+
+// Real-world sizes (meters) of every scene object — the single source of truth
+// for believable relative scale. A scene size is REAL_METERS[k] *
+// SCENE_UNITS_PER_METER, so e.g. the mobile launcher (120 m · 0.12 = 14.4 u)
+// towers ~60:1 over an astronaut (2 m · 0.12 = 0.24 u) — real proportions, not
+// hand-tuned guesses.
+export const REAL_METERS = {
+  rover: 2.5,
+  astronaut: 2.0,
+  habitat: 6.0,
+  baseStation: 4.0,
+  crawler: 40,
+  mobileLauncher: 120,
+  gantry: 90,
+  lander: 7.0,
+  solarPanel: 10,
+  commsMast: 12,
+  commsDish: 6,
+  radome: 5,
+} as const;
+
+// A SCENERY set-piece — static, snapshot-INDEPENDENT launch-infrastructure
+// decoration (a crawler, launcher, gantry, lander, base station, astronaut).
+// Lives here (pure data, no three) so BOTH SITE_FRAMES (below) and LaunchScenery
+// share one definition: each SiteFrame carries its OWN `pieces` list, so the two
+// sites can reuse the same GLBs but reposition/retint them (Epic 04 P2). The
+// LaunchScenery component reads these and loads/renders the active site's pieces.
+export type SetPiece = {
+  key: string;
+  modelRef: string;
+  position: [number, number, number];
+  rotation?: [number, number, number];
+  // Real-world size (meters) of the model's LARGEST dimension. The NASA glTFs have
+  // arbitrary native units + off-origin pivots, so a fixed scale scalar is
+  // meaningless; LaunchScenery fits each to realMeters · SCENE_UNITS_PER_METER.
+  realMeters: number;
+  // Tint for the primitive fallback shown until/if the glTF loads.
+  fallbackColor: string;
+  // Primitive used for the ADR-0004 fallback. "box" (default) suits structures;
+  // "capsule" gives the astronaut a human-ish silhouette.
+  fallbackShape?: "box" | "capsule";
+};
+
+// The LUNAR launch complex (the original SET_PIECES). The mobile launcher
+// (120 m → 14.4 u) + gantry (90 m → 10.8 u) tower over the ~2.5 m rovers; the
+// crawler sits low/wide; the human-scale base station + astronaut anchor the
+// scale. POSITIONS are art-directed for the literal scale (literal sizes, staged
+// layout — what every NASA press render does).
+export const LUNAR_SET_PIECES: SetPiece[] = [
+  {
+    key: "crawler",
+    modelRef: "/assets/models/nasa_crawler.glb",
+    position: [-22, 0, -26],
+    rotation: [0, Math.PI / 5, 0],
+    realMeters: REAL_METERS.crawler,
+    fallbackColor: "#5a5a4e",
+  },
+  {
+    key: "mobile-launcher",
+    modelRef: "/assets/models/nasa_mobile_launcher.glb",
+    position: [-9, 0, -34],
+    rotation: [0, 0, 0],
+    realMeters: REAL_METERS.mobileLauncher,
+    fallbackColor: "#6b6b72",
+  },
+  {
+    key: "gantry",
+    modelRef: "/assets/models/nasa_gantry.glb",
+    position: [12, 0, -32],
+    rotation: [0, -Math.PI / 8, 0],
+    realMeters: REAL_METERS.gantry,
+    fallbackColor: "#7a4a3a",
+  },
+  {
+    key: "lander",
+    modelRef: "/assets/models/nasa_lunar_module.glb",
+    position: [22, 0, -22],
+    rotation: [0, -Math.PI / 4, 0],
+    realMeters: REAL_METERS.lander,
+    fallbackColor: "#b8a070",
+  },
+  {
+    key: "base-station",
+    modelRef: "/assets/models/base-station.glb",
+    position: [4, 0, -6],
+    rotation: [0, Math.PI / 6, 0],
+    realMeters: REAL_METERS.baseStation,
+    fallbackColor: "#8c8c84",
+  },
+];
+
+// The SHACKLETON (lunar south pole) outpost. UNLIKE the lunar LAUNCH complex
+// (crawler / mobile launcher / gantry / lander), this is a DISTINCT set of
+// structures — a permanent research + ISRU (water-ice) base nestled on the carved
+// crater FLOOR (every piece inside CRATER_FLOOR_RADIUS so it sits in the bowl, not
+// on the rim): two NASA habitat demonstration modules, a science radome, an ISRU
+// processing plant, a comms dish aimed at Earth, a rim-edge solar array, and an
+// astronaut for scale. Cooled fallback tints for the dim pole light. All models are
+// already-licensed GLBs from the catalog (see public/assets/CREDITS.md); none are
+// shared with the lunar set, so the two sites render genuinely different hardware.
+export const SHACKLETON_SET_PIECES: SetPiece[] = [
+  {
+    key: "shk-habitat-1",
+    modelRef: "/assets/models/habitat-demo-unit-1.glb",
+    position: [-8, 0, -9],
+    rotation: [0, Math.PI / 5, 0],
+    realMeters: 22,
+    fallbackColor: "#6b7280",
+  },
+  {
+    key: "shk-habitat-2",
+    modelRef: "/assets/models/habitat-demo-unit-2.glb",
+    position: [-1, 0, -13],
+    rotation: [0, -Math.PI / 6, 0],
+    realMeters: 20,
+    fallbackColor: "#646b78",
+  },
+  {
+    key: "shk-radome",
+    modelRef: "/assets/models/radome.glb",
+    position: [11, 0, -9],
+    rotation: [0, -Math.PI / 4, 0],
+    realMeters: 14,
+    fallbackColor: "#5a626e",
+  },
+  {
+    key: "shk-isru",
+    modelRef: "/assets/models/machine_generator.glb",
+    position: [7, 0, 2],
+    rotation: [0, Math.PI / 3, 0],
+    realMeters: 12,
+    fallbackColor: "#5e6672",
+  },
+  {
+    key: "shk-comms-dish",
+    modelRef: "/assets/models/comms-dish.glb",
+    position: [-13, 0, 2],
+    rotation: [0, Math.PI / 2.5, 0],
+    realMeters: 10,
+    fallbackColor: "#69707c",
+  },
+  {
+    key: "shk-solar",
+    modelRef: "/assets/models/solar-panel.glb",
+    position: [12, 0, -13],
+    rotation: [0, -Math.PI / 6, 0],
+    realMeters: 14,
+    fallbackColor: "#4f5662",
+  },
+  {
+    key: "shk-astronaut",
+    modelRef: "/assets/models/astronaut.glb",
+    position: [2, 0, -5],
+    rotation: [0, -Math.PI / 3, 0],
+    realMeters: REAL_METERS.astronaut,
+    fallbackColor: "#c8ccd4",
+    fallbackShape: "capsule",
+  },
+];
+
+// A per-site framing transform. The fixed scale is uniform across sites; each
+// site recenters its worksite (cx,cy in world coords) onto the scene origin and
+// rotates it (rot, radians) so the hero composition is art-directed per site.
+// `worksiteUnitsToMeters` converts the (abstract) worksite units into meters —
+// the single remaining free knob for a site's overall footprint. Per-site LIGHTING
+// (sunDir/sunIntensity), terrain TINT, FOG, and the SCENERY `pieces` list ride
+// here too (Epic 04 P2) so SceneContents reads everything for the active site from
+// one record.
+export type SiteFrame = {
+  cx: number;
+  cy: number;
+  rot: number;
+  worksiteUnitsToMeters: number;
+  // Off-screen directional sun direction for the SURFACE view (the surface uses a
+  // directional light only; the orbit Sun *body* stays at the global SUN_POSITION).
+  // Lunar: high key light. Shackleton: low grazing pole sun (small Y vs large X|Z).
+  sunDir: [number, number, number];
+  // Surface key-light intensity. Shackleton reads dimmer (the grazing pole sun).
+  sunIntensity: number;
+  // Base color tint of the regolith terrain for this site.
+  terrainTint: string;
+  // Surface horizon fog: [color, near, far].
+  fog: [string, number, number];
+  // The static scenery set-pieces rendered at this site.
+  pieces: SetPiece[];
+};
+
+// The full per-site framing + lighting + scenery table (Epic 04 P2). `siteMap`
+// takes one of these to project that site's worksite; SceneContents reads
+// lighting/tint/fog/pieces from the active site's entry. worksiteUnitsToMeters is
+// kept at the tuned 2.5 (from #134's DEFAULT_SITE_FRAME), NOT the plan's stale 1.0.
+export const SITE_FRAMES: Record<"lunar" | "shackleton", SiteFrame> = {
+  lunar: {
+    cx: 0,
+    cy: 0,
+    rot: 0,
+    worksiteUnitsToMeters: 2.5,
+    sunDir: [2300, 1265, -6490],
+    sunIntensity: 1.9,
+    terrainTint: "#9a948c",
+    fog: ["#000000", 180, 680],
+    pieces: LUNAR_SET_PIECES,
+  },
+  shackleton: {
+    cx: 400,
+    cy: 0,
+    rot: 0.3,
+    worksiteUnitsToMeters: 2.5,
+    sunDir: [6490, 90, -2300],
+    sunIntensity: 1.7,
+    terrainTint: "#6f6a66",
+    fog: ["#05060a", 120, 520],
+    pieces: SHACKLETON_SET_PIECES,
+  },
+};
+
+// The default (single-site) frame — points at the lunar site for back-compat (the
+// pre-P2 single-site renderer + tests use this). The dome ring radii (24/46) are
+// ABSTRACT worksite units, not meters (see worksiteUnitsToMeters), read as ~2.5 m
+// each so the worksite renders at a readable footprint while the literally-sized
+// launch complex still towers over it.
+export const DEFAULT_SITE_FRAME: SiteFrame = SITE_FRAMES.lunar;
 
 // The Moon globe's berth + radius (orbit-view hero). Lives here, not in the
 // SkyBodies component, so BOTH the renderer (SkyBodies) and the camera framing
@@ -98,14 +331,70 @@ export const EARTH_RADIUS = Math.round(MOON_RADIUS * 3.67); // ≈ 330, proporti
 // a clean day/night marble just off the Moon's sunlit limb.
 export const EARTH_POSITION: [number, number, number] = [-3993, -460, -2427];
 
+// ---- lat/lon → globe point (Epic 04 P3, orbit site markers) ----------------
+//
+// Maps a real lunar latitude/longitude onto the orbit Moon globe — a sphere of
+// MOON_RADIUS centred at MOON_POSITION — returning the world-space surface point
+// AND the outward surface normal there (so a marker can be seated flat on the
+// globe, oriented to the local up). Kept three-free (plain vectors) so it stays
+// unit-testable in node and shares one source of truth with the renderer.
+//
+// Parameterisation: latitude φ measured from the equator (+90 = north pole, +y),
+// longitude λ around the equator. A GLOBAL longitude offset (MARKER_LON_OFFSET)
+// rotates the whole lat/lon grid about the polar (y) axis so the two site markers
+// can be swung onto the camera-facing AND sunlit near hemisphere of the orbit
+// globe (the #131 lit-hemisphere requirement) and aligned to the Moon texture
+// seam — tuned by eye in the visual E2E.
+//
+// At offset 0 the (lat 0, lon 0) point sits on +z (toward the orbit camera-ish
+// near face). The offset below was tuned so both sites read on the lit near face
+// under ORBIT_SUN_POSITION for the default orbit camera. (The Shackleton MARKER
+// is art-directed to a southern — not literal-pole — seat; see SkyBodies.tsx,
+// since the literal south pole is back-facing AND unlit on the orbit globe.)
+export const MARKER_LON_OFFSET = 108; // degrees, tuned by eye (see SkyBodies P3)
+
+// The outward surface normal at (lat, lon) — a unit vector. Exposed alongside the
+// point so the marker math (quaternion to the surface up) need not recompute it.
+export function latLonToGlobeNormal(
+  lat: number,
+  lon: number,
+  lonOffset = MARKER_LON_OFFSET,
+): [number, number, number] {
+  const DEG = Math.PI / 180;
+  const phi = lat * DEG; // from equator; +90 = north pole
+  const lambda = (lon + lonOffset) * DEG;
+  const cosPhi = Math.cos(phi);
+  // x/z on the equatorial circle, y up the polar axis. At lambda=0 → +z.
+  const nx = cosPhi * Math.sin(lambda);
+  const ny = Math.sin(phi);
+  const nz = cosPhi * Math.cos(lambda);
+  return [nx, ny, nz];
+}
+
+// The world-space surface point at (lat, lon) on the orbit Moon globe.
+export function latLonToGlobePoint(
+  lat: number,
+  lon: number,
+  lonOffset = MARKER_LON_OFFSET,
+): [number, number, number] {
+  const [nx, ny, nz] = latLonToGlobeNormal(lat, lon, lonOffset);
+  return [
+    MOON_POSITION[0] + nx * MOON_RADIUS,
+    MOON_POSITION[1] + ny * MOON_RADIUS,
+    MOON_POSITION[2] + nz * MOON_RADIUS,
+  ];
+}
+
 export type Bounds = { minX: number; minY: number; maxX: number; maxY: number };
 
 // A 3D point on/above the ground plane (y is "up").
 export type ScenePoint = { x: number; y: number; z: number };
 
 // Bounding box over all worksite points. A zero-size span (single point /
-// colinear worksite) is nudged out by 1 world unit so the fit never divides by
-// zero — identical guard to hitTest.computeBounds, kept local to avoid coupling.
+// colinear worksite) is nudged out by 1 world unit so a consumer never divides by
+// zero — a guard kept local to avoid coupling.
+// NB (Epic 04 P0): this NO LONGER drives the scene scale (the scale is now fixed);
+// it is retained, exported, for tests and any bbox consumer.
 export function computeBounds(points: Vec2[]): Bounds {
   if (points.length === 0) return { minX: 0, minY: 0, maxX: 1, maxY: 1 };
   let minX = Infinity,
@@ -131,8 +420,9 @@ export function computeBounds(points: Vec2[]): Bounds {
 
 // A world→scene mapper. `at(pos, height)` projects a world Vec2 onto the ground
 // plane (height = y, the elevation above the ground, default 0). `scale` is the
-// uniform world→scene factor, exposed so callers can size meshes consistently
-// (e.g. a rover's hit-proxy in scene units).
+// fixed world→scene factor (SCENE_UNITS_PER_METER · worksiteUnitsToMeters),
+// exposed so callers can size worksite-relative meshes consistently (e.g. the
+// placement-ghost footprint in scene units).
 export type SceneMap = {
   scale: number;
   at: (pos: Vec2, height?: number) => ScenePoint;
@@ -143,34 +433,89 @@ export type SceneMap = {
   invert: (x: number, z: number) => Vec2;
 };
 
-// Build the world→scene mapper from ALL worksite points (rovers + tasks), so the
-// framing is shared and stable. Uniform scale fits the worksite bounding box
-// inside (GROUND_SPAN - 2*GROUND_MARGIN); the box is centered on the origin.
-// World X maps to scene +x; world Y maps to scene -z (so +Y heads away from a
-// camera placed on the +z side). This is the single source of truth used for
-// BOTH rendering and the raycast hit-proxy — they can never disagree.
-export function sceneMap(rovers: Vec2[], tasks: Vec2[]): SceneMap {
-  const b = computeBounds([...rovers, ...tasks]);
-  const spanX = b.maxX - b.minX;
-  const spanY = b.maxY - b.minY;
-  const usable = GROUND_SPAN - GROUND_MARGIN * 2;
-  const scale = Math.min(usable / spanX, usable / spanY);
-
-  const cx = (b.minX + b.maxX) / 2;
-  const cy = (b.minY + b.maxY) / 2;
-
+// Build the world→scene mapper from a per-site framing transform. The scale is
+// FIXED (SCENE_UNITS_PER_METER · worksiteUnitsToMeters), NOT fit-to-bbox — so
+// every object renders at its true relative size and the framing never jitters as
+// the swarm moves (Epic 04 P0). The frame recenters the site's worksite onto the
+// scene origin (cx,cy) and rotates it (rot). World X maps to scene +x, world Y to
+// scene -z (so +Y heads away from a camera on the +z side). This is the single
+// source of truth used for BOTH rendering and the raycast hit-proxy — they can
+// never disagree, and `at`/`invert` stay exact inverses (drag-to-place + the
+// hit-proxy depend on it). It reads ONLY the framing fields, so it accepts any
+// object carrying them (a full SiteFrame, or a bare framing literal in tests).
+export function siteMap(
+  site: Pick<SiteFrame, "cx" | "cy" | "rot" | "worksiteUnitsToMeters">,
+): SceneMap {
+  const s = SCENE_UNITS_PER_METER * site.worksiteUnitsToMeters;
+  const { cx, cy, rot } = site;
+  const cos = Math.cos(rot),
+    sin = Math.sin(rot);
   return {
-    scale,
-    at: (pos: Vec2, height = 0): ScenePoint => ({
-      x: (pos.X - cx) * scale,
-      y: height,
-      z: -(pos.Y - cy) * scale,
-    }),
-    invert: (x: number, z: number): Vec2 => ({
-      X: x / scale + cx,
-      Y: -z / scale + cy,
-    }),
+    scale: s,
+    at: (p: Vec2, height = 0): ScenePoint => {
+      const dx = p.X - cx,
+        dy = p.Y - cy;
+      const rx = dx * cos - dy * sin,
+        ry = dx * sin + dy * cos;
+      return { x: rx * s, y: height, z: -ry * s };
+    },
+    invert: (x: number, z: number): Vec2 => {
+      const rx = x / s,
+        ry = -z / s;
+      const dx = rx * cos + ry * sin,
+        dy = -rx * sin + ry * cos;
+      return { X: dx + cx, Y: dy + cy };
+    },
   };
+}
+
+// ---- Shackleton crater profile (Epic 04 follow-up) -------------------------
+//
+// A stylized, art-directed crater carved into the SHACKLETON terrain so the pole
+// outpost reads as a genuinely distinct PLACE (nestled on a shadowed crater floor
+// under a sunlit rim) rather than the lunar worksite merely retinted. Reference
+// look: NASA SVS 4716 — a ~21 km × 4 km bowl with a permanently shadowed floor and
+// rim points caught by the grazing pole sun. We do NOT model that literal scale (a
+// 21 km bowl would be ~2520 scene units; the whole plane is 700); this is an
+// art-directed bowl, consistent with the already art-directed framing.
+//
+// CRUCIAL: the floor stays at scene-y ≈ 0, with the rim raised AROUND it. Every
+// worksite object (rover/task/scenery) is seated at y=0 via siteMap (height=0), so
+// keeping the floor at 0 means NOTHING in the worksite has to move — only the
+// surrounding terrain rises into a rim. The floor radius is chosen to sit OUTSIDE
+// the farthest Shackleton set-piece (the crawler at scene-radius ≈ 40) so the whole
+// outpost rests on the flat floor and the rim crests beyond it.
+// Scaled to the WORKSITE, not to a literal 21 km bowl: at 0.12 units/m the outpost
+// structures are only ~1 unit each, so a giant crater would dwarf them into specks.
+// The floor holds the tight worksite + ringed structures (all within FLOOR_RADIUS),
+// the rim cradles it just beyond, and the bowl is shallow enough that the base and
+// its containing rim both read in one frame — "nestled in a crater".
+export const CRATER_FLOOR_RADIUS = 18; // flat floor (worksite + structures sit here, y≈0)
+export const CRATER_RIM_RADIUS = 34; // rim crest (the peak of the bowl wall)
+export const CRATER_OUTER_RADIUS = 70; // crest eases back to the open plain by here
+export const CRATER_RIM_HEIGHT = 7; // crest height above the floor (the sunlit ridge)
+
+// Clamped smoothstep (a→b), C1-continuous, used to shape the crater wall/flank so
+// the bowl has no hard creases. Kept local (scene.ts is three-free + node-testable).
+function smoothstep01(a: number, b: number, x: number): number {
+  if (a === b) return x < a ? 0 : 1;
+  const t = Math.min(1, Math.max(0, (x - a) / (b - a)));
+  return t * t * (3 - 2 * t);
+}
+
+// The crater's radial elevation delta (scene-y) at scene-radius r (units) from the
+// worksite origin: a flat floor (0) out to CRATER_FLOOR_RADIUS, an inner wall that
+// rises to CRATER_RIM_HEIGHT at the rim crest, then an outer flank that eases the
+// crest back down to the surrounding plain (0). ADDED on top of the terrain's
+// procedural noise displacement by LunarTerrain (Shackleton only). Pure ⇒ unit-
+// tested in scene.test.ts.
+export function craterProfile(r: number): number {
+  if (r <= CRATER_FLOOR_RADIUS) return 0;
+  if (r <= CRATER_RIM_RADIUS)
+    return CRATER_RIM_HEIGHT * smoothstep01(CRATER_FLOOR_RADIUS, CRATER_RIM_RADIUS, r);
+  if (r <= CRATER_OUTER_RADIUS)
+    return CRATER_RIM_HEIGHT * (1 - smoothstep01(CRATER_RIM_RADIUS, CRATER_OUTER_RADIUS, r));
+  return 0;
 }
 
 // ---- habitat dome: rising-by-completion ordering ---------------------------

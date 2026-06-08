@@ -76,7 +76,12 @@ type Announce struct {
 	// stream (the default). Carried on the Announce so a bidder could surface it,
 	// though the binding decision rides the Award. A plain string, never the
 	// agent.Mode type, so wire stays model-free. Omitted when empty (back-compat).
-	Mode    string         `json:"mode,omitempty"`
+	Mode string `json:"mode,omitempty"`
+	// SiteID gates the auction by worksite (two-site lunar surface, epic 04): a
+	// rover only bids on an Announce whose SiteID matches its own Config.SiteID, so
+	// the two sites' auctions never cross. Omitted when empty ⇒ the single default
+	// site, so an old single-site coordinator/agent is byte-for-byte unchanged.
+	SiteID  string         `json:"site,omitempty"`
 	Version domain.Lamport `json:"version"`
 }
 
@@ -173,6 +178,11 @@ type Telemetry struct {
 	Alive   bool           `json:"alive"`
 	Load    int            `json:"load"`
 	At      domain.Tick    `json:"at"`
+	// Site is the worksite the rover is stationed at (two-site lunar surface, epic
+	// 04): the agent stamps it from its Config.SiteID so publishSnapshot can tag
+	// each RoverView with its site WITHOUT the coordinator tracking a rover→site
+	// map. Omitted when empty ⇒ the single default site (back-compat).
+	Site string `json:"site,omitempty"`
 }
 
 // --- WebSocket snapshot (server → browser, ~10 Hz) ---
@@ -188,6 +198,11 @@ type RoverView struct {
 	Alive   bool           `json:"alive"`
 	Load    int            `json:"load"`
 	Task    domain.TaskID  `json:"task,omitempty"` // task the rover currently holds, if any
+	// Site is the worksite this rover is stationed at (two-site lunar surface, epic
+	// 04), reported by the rover via Telemetry.Site. The dashboard slices rovers by
+	// site so each surface view shows only its own swarm. Omitted when empty ⇒ the
+	// single default site, so an old frontend reads everything as one site.
+	Site string `json:"site,omitempty"`
 }
 
 // TaskView is a task record as the dashboard sees it.
@@ -200,6 +215,10 @@ type TaskView struct {
 	LeaseExpiry domain.Tick     `json:"lease_expiry,omitempty"`
 	Version     domain.Lamport  `json:"version"`
 	Deps        []domain.TaskID `json:"deps,omitempty"`
+	// Site is the worksite this task belongs to (two-site lunar surface, epic 04).
+	// The dashboard slices tasks by site so each surface view shows only its own
+	// structure. Omitted when empty ⇒ the single default site (back-compat).
+	Site string `json:"site,omitempty"`
 	// BuildSpec is the Task's accumulated, ordered Build spec (TECHSPEC §4,
 	// ADR-0006): declarative geometry the renderer INTERPRETS, never executes.
 	// Absent ⇒ the renderer falls back to the deterministic `tierOf` primitive,

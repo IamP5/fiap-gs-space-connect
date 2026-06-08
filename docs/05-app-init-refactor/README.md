@@ -58,26 +58,26 @@ Full design, exact file/field edits, and verification: see
 
 ## Acceptance criteria
 
-- [ ] **P0** 2D scene fully removed — no `WorldCanvas`/`hitTest` references, no
+- [x] **P0** 2D scene fully removed — no `WorldCanvas`/`hitTest` references, no
       3D/2D toggle in the header; `npm run build` TS-clean and tests green.
-- [ ] **P1** Loading screen shows a filling progress bar on boot; the Canvas mounts
+- [x] **P1** Loading screen shows a filling progress bar on boot; the Canvas mounts
       only after preload completes (or the safety timeout fires).
-- [ ] **P2** App opens in the **orbit** Moon vista with the **idle camera drift
+- [x] **P2** App opens in the **orbit** Moon vista with the **idle camera drift
       already moving** — no 4 s wait, no auto push-in.
-- [ ] **P3** Clicking the base marker descends to the surface and the worksite
+- [x] **P3** Clicking the base marker descends to the surface and the worksite
       renders **crisp with no box/placeholder pop-in** (caches warmed by preload).
-- [ ] **P4** The base marker sits on the Moon's **sunlit** hemisphere in orbit and
+- [x] **P4** The base marker sits on the Moon's **sunlit** hemisphere in orbit and
       is clickable.
-- [ ] Docs/harness truthful: ADR-0004 / `AGENTS.md` note the 2D fallback retired;
+- [x] Docs/harness truthful: ADR-0004 / `AGENTS.md` note the 2D fallback retired;
       `feature_list.json` / `PROGRESS.md` updated.
 - [x] Broken into vertical slices via `/to-issues` (epic #127).
 
 ## Slices (dependency-ordered)
 
-- [ ] **#128** — Remove the 2D scene (3D-only) · `r3d-128` · _no blockers_ (P0)
-- [ ] **#129** — Loading screen + preload-everything · `r3d-129` · blocked by #128 (P1)
-- [ ] **#130** — Orbit default + immediate idle drift · `r3d-130` · blocked by #129 (P2)
-- [ ] **#131** — Base mark on the sunlit hemisphere · `r3d-131` · blocked by #130 (P3/P4)
+- [x] **#128** — Remove the 2D scene (3D-only) · `r3d-128` · _no blockers_ (P0)
+- [x] **#129** — Loading screen + preload-everything · `r3d-129` · blocked by #128 (P1)
+- [x] **#130** — Orbit default + immediate idle drift · `r3d-130` · blocked by #129 (P2)
+- [x] **#131** — Base mark on the sunlit hemisphere · `r3d-131` · blocked by #130 (P3/P4)
 
 ## Scope-balloon flags (OUT of v1)
 

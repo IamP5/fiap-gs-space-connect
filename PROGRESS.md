@@ -32,6 +32,32 @@ stop. `feature_list.json` is the per-feature source of truth; this file is the n
 
 ## Session Log
 
+### Session 010 — 2026-06-07 — Epic 04 (two-site lunar surface) + Epic 05 (app-init refactor), parallel batch
+- **Goal:** Implement BOTH epics and converge them onto one testable feature branch,
+  `feat/two-site-and-app-init` (cut from `main`). No human review until done; user tests
+  locally at the end. Orchestrated as a wave/DAG (the two epics co-edit App.tsx/Scene3D.tsx/
+  SkyBodies.tsx/scene.ts and their plans mandate a landing order — a flat parallel fan-out
+  would conflict).
+- **Execution:** Wave 1 = 3 independent beachheads in parallel worktrees — **#134** scale
+  unification (PR #141), **#135** backend SiteID (PR #140), **#128** remove 2D scene
+  (PR #139). Then a sequential frontend spine, each rebased on the growing integration tip —
+  **#129** loading screen + preload (PR #142), **#130** orbit default + immediate idle
+  (PR #143), **#136** two-site surface (PR #144), **#137** orbit markers + descend, supersedes
+  **#131** (PR #145), **#138** surface↔surface transition + Shackleton polish (PR #146).
+- **State:** all 8 PRs target and are merged into `feat/two-site-and-app-init` (NOT `main`).
+  Verified on the integration tip: `go build ./... && go test ./...` green; `cd web &&
+  npm run build` TS-clean, `npm run lint` 0 errors, **178 vitest tests pass**;
+  `grep -rn "WorldCanvas|hitTest" web/src` clean. Integration smoke via chrome-devtools MCP
+  (VITE_MOCK): boot → splash → orbit default with two lit labeled markers + idle drift →
+  marker descent → surface site toggle plays the ~900ms match-cut and settles. Console clean
+  (only the benign mock-WS 404 + pre-existing ANGLE glBlitFramebuffer warning).
+- **`feature_list.json`:** r3d-128/129/130/134/135/136/137/138 → `passing` with evidence;
+  r3d-131 → `passing` (SUPERSEDED by r3d-137). Epic 04 entries (r3d-134..138, epic 133) added.
+- **Note:** GitHub issues #128 and #131 were already CLOSED but their code was never written —
+  implemented here. **Next:** user tests `feat/two-site-and-app-init` locally, then merges to
+  `main`; on merge, re-close #128/#131 as appropriate and close epics #127/#133. Branch base
+  for all 8 PRs is the feature branch, so the user can land the whole batch as one.
+
 ### Session 009 — 2026-06-07
 - **Goal:** Implement the last two open Wave-3 slices under epic #46 — **#110 Sun GodRays + lens flare** and **#111 Material tier polish** — now unblocked (#99 merged). Branch `wave3/godrays-material-polish`.
 - **Completed:**
@@ -115,3 +141,12 @@ stop. `feature_list.json` is the per-feature source of truth; this file is the n
 - **Files/artifacts updated:** see PRs #4–#10; `feature_list.json` (bh-01..07 → passing w/ evidence), this `PROGRESS.md`.
 - **Known risk / unresolved:** user's visual quality review of generated geometry is deferred (per plan); the 7 stacked PRs await merge (or fast-track `bh/integration`).
 - **Next best step:** visual review on stage; merge the stack (or `bh/integration`) to `main`.
+
+### Session 009 — 2026-06-07
+- **Goal:** Implement Epic 06 (floating game-like HUD, `docs/06-hud-redesign/`) via a subagent swarm, then visual-polish, commit, and merge the stack to `main`.
+- **Completed:** All 6 slices via orchestrated subagents (Wave 1: #147 foundation ‖ #148 NMS markers; then #149 hotbar → #150 Mission HUD → #151 placement gestures → #152 motion+polish — five serialize through `App.tsx`/`dashboard.css`). New: `TopBar`, `Hotbar`, `StressControls`, `MissionHud` + `lib/footprintGlyph`, `lib/missionStats`; deleted `BlueprintPalette`/`ControlsPanel`/`TaskLedger`. Declarative camera-lock (`enableRotate={!placing}`). Then an operator visual-polish pass: floating transparent top bar (no header plate), dropped "dashboard" sublabel, removed Mission HUD scrollbars (compact + expanded-list x-scroll), text-pill LLM toggle (no checkbox, `:has` fill), diamond site glyph tinted by site. `feature_list.json` `r3d-147..152` added → `passing`.
+- **Verification run:** `cd web && npx tsc -b --noEmit` clean + `npx vitest run` **195 tests** (16 files; +13 new) + `vite build` green. **Live screenshot pass deferred** — the chrome-devtools MCP is blocked locally by the open-Chrome profile lock (8-shot checklist in `docs/06-hud-redesign/VERIFICATION.md`).
+- **Merge:** `feat/06-hud-redesign` → `main` carried the full unmerged stack (Epic 04 #128/#134-138, Epic 05 #129/#130, Epic 07 docs, camera fixes, HUD #147-152) — the HUD depends on that stack and can't be cherry-picked alone (operator chose "merge full stack").
+- **Files/artifacts updated:** `web/src/**` (HUD components + `dashboard.css`/`index.css`), `docs/06-hud-redesign/{README,VERIFICATION}.md`, `feature_list.json`, `PROGRESS.md`. Commit also carried pre-existing surface-camera/scene WIP (`scene.ts`, `LaunchScenery`, `transition`/`scene` tests) entangled in shared files.
+- **Known risk / unresolved:** screenshot artifacts not captured (visual verification pending); in-world orbit-marker fade-in deferred; `#134` (Epic 04 scale) still OPEN on GitHub though its work is now on `main`.
+- **Next best step:** capture the 8 verification screenshots on a clean browser; decide on `#134` closure.

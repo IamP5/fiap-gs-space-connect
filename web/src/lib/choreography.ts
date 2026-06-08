@@ -3,7 +3,7 @@
 // Two concerns live here, both pure so they're unit-testable in vitest's node
 // env (no canvas, no rAF): the TTL drain-ring math (derived from durable task
 // state) and the transient beat lifetime/filtering (derived from server
-// events). The actual drawing happens in WorldCanvas; this is just the numbers.
+// events). The actual drawing happens in Scene3D; this is just the numbers.
 //
 // IMPORTANT: nothing here invents world state. The ring is a function of a
 // task's lease_expiry vs. the snapshot clock; beats are a function of the
@@ -15,7 +15,7 @@ import type { WorldEvent } from "../types/wire";
 
 // Fraction of a lease's TTL still remaining, clamped to [0, 1]. `fullSpan` is
 // the inferred TTL (the largest (expiry - at) seen for this task while leased);
-// see taskRingBase tracking in WorldCanvas. A non-positive span means we can't
+// see taskRingBase tracking in Scene3D. A non-positive span means we can't
 // tell, so we treat the ring as full (1) rather than dividing by zero.
 export function ringFraction(expiry: number, at: number, fullSpan: number): number {
   if (!(fullSpan > 0)) return 1;
@@ -109,7 +109,7 @@ export function earthriseEnvelope(
 
 // A beat enriched with the wall-clock time it was received (performance.now()),
 // so its age — and thus its animation progress — is independent of snapshot
-// cadence. Kept here (not just in WorldCanvas) so activeBeats is testable.
+// cadence. Kept here (not just in Scene3D) so activeBeats is testable.
 export type ActiveBeat = WorldEvent & { spawn: number };
 
 // Drop beats whose age has exceeded their per-kind lifetime; keep the fresh

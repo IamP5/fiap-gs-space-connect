@@ -85,6 +85,9 @@ docker compose -f deploy/docker-compose.yml up --build   # dashboard at :5173
     animation is **unrestricted** (Wave 4 "living orbit" — ADR-0004 invariant (3)'s
     demand-loop / 0-idle-fps budget was dropped). Keep `dpr ≤ ~1.5` + bounded draw
     calls as hygiene; ADR-0004's snapshot-purity + primitive-fallback invariants still hold.
+  - **3D-only (Epic 05):** the 2D rehearsed-fallback renderer is **retired**
+    (`WorldCanvas`/`hitTest` removed); `Scene3D` is the sole renderer. The in-scene
+    primitive/box fallbacks remain the resilience story (ADR-0004 invariant 2).
 ## Definition of Done
 
 A feature is done only when these pass **in order** (don't proceed to a level if the prior

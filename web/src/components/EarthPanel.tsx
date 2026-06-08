@@ -20,7 +20,7 @@ export const EarthPanel = memo(function EarthPanel({
 }) {
   if (earth === null) {
     return (
-      <aside className="earth-panel">
+      <aside className="earth-panel panel hud-surface-panel">
         <div className="earth-eyebrow">Earth uplink</div>
         <p className="earth-empty">awaiting earth uplink</p>
       </aside>
@@ -33,7 +33,7 @@ export const EarthPanel = memo(function EarthPanel({
   const aliveRovers = earth.rovers.reduce((n, r) => (r.alive ? n + 1 : n), 0);
 
   return (
-    <aside className="earth-panel">
+    <aside className="earth-panel panel hud-surface-panel">
       <div className="earth-eyebrow">Earth uplink</div>
       <div className={`earth-lag ${live ? "is-live" : "is-lagging"}`}>{formatLag(lag)}</div>
       <dl className="earth-stats">

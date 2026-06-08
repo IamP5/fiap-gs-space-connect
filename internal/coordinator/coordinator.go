@@ -40,6 +40,12 @@ import (
 type BlueprintTask struct {
 	Task domain.Task
 	Pos  domain.Vec2
+	// SiteID tags the worksite this task belongs to (two-site lunar surface, epic
+	// 04). It is folded into the coordinator's taskSite map at Run so the auction
+	// announces it (wire.Announce.SiteID) and the snapshot tags it (TaskView.Site).
+	// Empty ⇒ the single default site, so a single-site Blueprint is byte-for-byte
+	// unchanged.
+	SiteID string
 }
 
 // Config configures one coordinator run: where NATS lives, the blueprint to
@@ -222,6 +228,7 @@ type state struct {
 	model    *world.Model
 	leases   *lease.Manager
 	pos      map[domain.TaskID]domain.Vec2 // worksite geometry per task
+	taskSite map[domain.TaskID]string      // worksite (site) per task (two-site lunar surface, epic 04)
 	auctions map[domain.TaskID]*auction    // open auctions, keyed by task
 
 	rovers map[domain.RobotID]wire.Telemetry // latest telemetry per rover
@@ -311,9 +318,15 @@ func Run(ctx context.Context, cfg Config) error {
 	// --- Load the blueprint into the Planner and seed the World Model. ---
 	tasks := make([]domain.Task, len(cfg.Blueprint))
 	posByTask := make(map[domain.TaskID]domain.Vec2, len(cfg.Blueprint))
+	siteByTask := make(map[domain.TaskID]string, len(cfg.Blueprint))
 	for i, bt := range cfg.Blueprint {
+		// Fold the BlueprintTask's site tag onto its domain.Task so the World Model
+		// record carries it too (two-site lunar surface, epic 04). The taskSite map is
+		// the coordinator's authoritative lookup the auction + snapshot read from.
+		bt.Task.SiteID = bt.SiteID
 		tasks[i] = bt.Task
 		posByTask[bt.Task.ID] = bt.Pos
+		siteByTask[bt.Task.ID] = bt.SiteID
 	}
 	plan, err := planner.Load(tasks)
 	if err != nil {
@@ -348,6 +361,7 @@ func Run(ctx context.Context, cfg Config) error {
 		model:    model,
 		leases:   lease.NewManager(clk, ttl),
 		pos:      posByTask,
+		taskSite: siteByTask,
 		auctions: make(map[domain.TaskID]*auction),
 		rovers:   make(map[domain.RobotID]wire.Telemetry),
 		conn:     conn,
@@ -896,7 +910,7 @@ func (st *state) openAuction(t domain.Task) {
 		bids:     make(map[domain.RobotID]float64),
 		closesAt: time.Now().Add(st.window),
 	}
-	ann := wire.Announce{TaskID: t.ID, Type: t.Type, Pos: pos, Mode: t.Mode, Version: t.Version}
+	ann := wire.Announce{TaskID: t.ID, Type: t.Type, Pos: pos, Mode: t.Mode, SiteID: st.taskSite[t.ID], Version: t.Version}
 	_ = st.conn.PublishJSON(wire.SubjTaskAnnounce, ann)
 	slog.Info("announce", "task", ann.TaskID, "type", ann.Type, "version", ann.Version)
 }
@@ -1087,6 +1101,7 @@ func (st *state) onReload(ctx context.Context) {
 			st.mirror(ctx, done)
 		}
 		delete(st.pos, p.Task.ID)
+		delete(st.taskSite, p.Task.ID) // forget the placed task's site too (epic 04)
 	}
 	st.placedTasks = nil
 
@@ -1197,6 +1212,7 @@ func (st *state) publishSnapshot() {
 			LeaseExpiry: t.LeaseExpiry,
 			Version:     t.Version,
 			Deps:        t.Deps,
+			Site:        st.taskSite[t.ID], // tag the task's site (two-site lunar surface, epic 04)
 			// Attach the Task's pre-validated Build spec, if any, with every Asset KEY
 			// resolved to its self-hosted model_ref (ADR-0010): the browser receives
 			// only resolved URLs, never raw catalog keys. ResolveSpec copies (never
@@ -1230,6 +1246,7 @@ func (st *state) publishSnapshot() {
 			Alive:   tm.Alive,
 			Load:    tm.Load,
 			Task:    heldBy[id],
+			Site:    tm.Site, // the rover reports its site via Telemetry.Site (epic 04)
 		})
 	}
 

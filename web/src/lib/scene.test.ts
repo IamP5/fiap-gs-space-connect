@@ -5,17 +5,36 @@
 
 import { describe, expect, it } from "vitest";
 import {
-  GROUND_MARGIN,
-  GROUND_SPAN,
+  CRATER_FLOOR_RADIUS,
+  CRATER_OUTER_RADIUS,
+  CRATER_RIM_HEIGHT,
+  CRATER_RIM_RADIUS,
+  DEFAULT_SITE_FRAME,
+  MOON_POSITION,
+  MOON_RADIUS,
+  REAL_METERS,
+  SCENE_UNITS_PER_METER,
+  SITE_FRAMES,
   computeBounds,
+  craterProfile,
   isBuilt,
-  sceneMap,
+  latLonToGlobeNormal,
+  latLonToGlobePoint,
+  siteMap,
   tierHeight,
   tierOf,
 } from "./scene";
 import type { Vec2 } from "../types/wire";
 
 const v = (X: number, Y: number): Vec2 => ({ X, Y });
+
+// Small vector helpers for the globe-marker visibility assertions below.
+const unit = (a: readonly number[]): number[] => {
+  const m = Math.hypot(a[0], a[1], a[2]);
+  return [a[0] / m, a[1] / m, a[2] / m];
+};
+const dot = (a: readonly number[], b: readonly number[]): number =>
+  a[0] * b[0] + a[1] * b[1] + a[2] * b[2];
 
 describe("computeBounds", () => {
   it("returns a unit box for no points", () => {
@@ -37,34 +56,51 @@ describe("computeBounds", () => {
   });
 });
 
-describe("sceneMap", () => {
-  it("centers the worksite on the origin", () => {
-    const rovers = [v(0, 0), v(10, 10)];
-    const m = sceneMap(rovers, []);
-    // The midpoint (5,5) must map to the scene origin on the ground plane.
+describe("siteMap", () => {
+  it("recenters the site origin (cx,cy) onto the scene origin", () => {
+    const site = { cx: 5, cy: 5, rot: 0, worksiteUnitsToMeters: 1 };
+    const m = siteMap(site);
     const mid = m.at(v(5, 5));
-    expect(mid.x).toBeCloseTo(0, 6);
-    expect(mid.z).toBeCloseTo(0, 6);
+    expect(mid.x).toBeCloseTo(0, 9);
+    expect(mid.z).toBeCloseTo(0, 9);
     expect(mid.y).toBe(0);
   });
 
   it("maps world +Y to scene -z (away from a +z camera)", () => {
-    const m = sceneMap([v(0, 0), v(0, 10)], []);
+    const m = siteMap(DEFAULT_SITE_FRAME);
     const near = m.at(v(0, 0));
     const far = m.at(v(0, 10));
     expect(far.z).toBeLessThan(near.z);
   });
 
-  it("fits the worksite inside the ground span with margin", () => {
-    const m = sceneMap([v(0, 0), v(100, 0)], []);
+  it("uses the FIXED real-meters scale, NOT a fit-to-bbox autoscale", () => {
+    // worksiteUnitsToMeters=1 ⇒ scale is exactly SCENE_UNITS_PER_METER, the same
+    // regardless of how spread out the worksite is (no autoscale).
+    const m = siteMap({ cx: 0, cy: 0, rot: 0, worksiteUnitsToMeters: 1 });
+    expect(m.scale).toBeCloseTo(SCENE_UNITS_PER_METER, 9);
+    // A 100-unit world span projects to 100·scale scene units (fixed), not capped.
     const a = m.at(v(0, 0));
     const b = m.at(v(100, 0));
-    const widthUsed = Math.abs(b.x - a.x);
-    expect(widthUsed).toBeLessThanOrEqual(GROUND_SPAN - GROUND_MARGIN * 2 + 1e-6);
+    expect(Math.abs(b.x - a.x)).toBeCloseTo(100 * SCENE_UNITS_PER_METER, 6);
+  });
+
+  it("DEFAULT_SITE_FRAME scale is SCENE_UNITS_PER_METER · worksiteUnitsToMeters", () => {
+    const m = siteMap(DEFAULT_SITE_FRAME);
+    expect(m.scale).toBeCloseTo(
+      SCENE_UNITS_PER_METER * DEFAULT_SITE_FRAME.worksiteUnitsToMeters,
+      9,
+    );
+  });
+
+  it("worksiteUnitsToMeters scales the whole site uniformly", () => {
+    const half = siteMap({ ...DEFAULT_SITE_FRAME, worksiteUnitsToMeters: 0.5 });
+    expect(half.scale).toBeCloseTo(SCENE_UNITS_PER_METER * 0.5, 9);
+    const p = half.at(v(10, 0));
+    expect(p.x).toBeCloseTo(10 * SCENE_UNITS_PER_METER * 0.5, 6);
   });
 
   it("uses one uniform scale shared by render and hit-proxy", () => {
-    const m = sceneMap([v(0, 0), v(10, 20)], []);
+    const m = siteMap(DEFAULT_SITE_FRAME);
     // A point and the same point at a height differ ONLY in y — same x/z, proving
     // the rendered mesh and an elevated hit-proxy stay vertically aligned.
     const ground = m.at(v(7, 3), 0);
@@ -76,7 +112,9 @@ describe("sceneMap", () => {
   });
 
   it("invert is the exact inverse of at on the ground plane (round-trip)", () => {
-    const m = sceneMap([v(0, 0), v(10, 20)], [v(-5, 8)]);
+    // Round-trips even with a non-trivial frame (offset center + rotation), which
+    // is exactly what drag-to-place + the raycast hit-proxy depend on.
+    const m = siteMap({ cx: 3, cy: -4, rot: 0.3, worksiteUnitsToMeters: 0.8 });
     for (const p of [v(3, 7), v(-4, 12), v(0, 0), v(10, 20)]) {
       const s = m.at(p);
       const back = m.invert(s.x, s.z);
@@ -85,14 +123,137 @@ describe("sceneMap", () => {
     }
   });
 
-  it("includes both rovers and tasks in the framing", () => {
-    // A task far out widens the box, so a rover at the old edge is no longer at
-    // the scene edge — proving tasks participate in the shared framing.
-    const roversOnly = sceneMap([v(0, 0), v(10, 0)], []);
-    const withTask = sceneMap([v(0, 0), v(10, 0)], [v(50, 0)]);
-    const edgeOnly = roversOnly.at(v(10, 0)).x;
-    const edgeWith = withTask.at(v(10, 0)).x;
-    expect(Math.abs(edgeWith)).toBeLessThan(Math.abs(edgeOnly));
+  it("believable relative sizes — launcher towers ~60:1 over an astronaut", () => {
+    const launcher = REAL_METERS.mobileLauncher * SCENE_UNITS_PER_METER;
+    const astronaut = REAL_METERS.astronaut * SCENE_UNITS_PER_METER;
+    expect(launcher / astronaut).toBeCloseTo(60, 6);
+    expect(astronaut).toBeLessThan(launcher); // no giant astronaut
+  });
+});
+
+describe("SITE_FRAMES (two-site surface, Epic 04 P2)", () => {
+  it("DEFAULT_SITE_FRAME aliases the lunar site (back-compat)", () => {
+    expect(DEFAULT_SITE_FRAME).toBe(SITE_FRAMES.lunar);
+  });
+
+  it("keeps the tuned worksiteUnitsToMeters (2.5) on both sites, not the stale 1.0", () => {
+    expect(SITE_FRAMES.lunar.worksiteUnitsToMeters).toBeCloseTo(2.5, 9);
+    expect(SITE_FRAMES.shackleton.worksiteUnitsToMeters).toBeCloseTo(2.5, 9);
+  });
+
+  it("recenters each site's own origin to the scene origin", () => {
+    // siteMap(frame) projects the frame's (cx,cy) world point to the scene origin,
+    // so each site composes to the same hero spot regardless of its world coords.
+    for (const key of ["lunar", "shackleton"] as const) {
+      const f = SITE_FRAMES[key];
+      const center = siteMap(f).at({ X: f.cx, Y: f.cy });
+      expect(center.x).toBeCloseTo(0, 6);
+      expect(center.z).toBeCloseTo(0, 6);
+    }
+  });
+
+  it("shackleton sits at a distinct world origin (cx≈400) from lunar", () => {
+    expect(SITE_FRAMES.lunar.cx).toBe(0);
+    expect(SITE_FRAMES.shackleton.cx).toBe(400);
+  });
+
+  it("shackleton reads dimmer + lower (grazing pole sun) than lunar", () => {
+    expect(SITE_FRAMES.shackleton.sunIntensity).toBeLessThan(
+      SITE_FRAMES.lunar.sunIntensity,
+    );
+    // Pole sun: low elevation (small Y vs large |X|,|Z|) → long raking light.
+    const s = SITE_FRAMES.shackleton.sunDir;
+    expect(s[1]).toBeLessThan(Math.abs(s[0]));
+    expect(s[1]).toBeLessThan(Math.abs(s[2]));
+  });
+
+  it("each site carries DISTINCT scenery hardware (different structures per site, no empties)", () => {
+    expect(SITE_FRAMES.lunar.pieces.length).toBeGreaterThan(0);
+    expect(SITE_FRAMES.shackleton.pieces.length).toBeGreaterThan(0);
+    // The two sites render genuinely different hardware: Shackleton is a research /
+    // ISRU outpost, NOT the lunar launch complex — so no Shackleton modelRef appears
+    // in the lunar set (and vice versa). This is the deliberate reversal of the old
+    // "reuse the same GLBs" rule.
+    const lunarRefs = new Set(SITE_FRAMES.lunar.pieces.map((p) => p.modelRef));
+    for (const p of SITE_FRAMES.shackleton.pieces) {
+      expect(lunarRefs.has(p.modelRef)).toBe(false);
+    }
+    // No empty modelRefs, and each site's piece keys are unique.
+    for (const key of ["lunar", "shackleton"] as const) {
+      const pieces = SITE_FRAMES[key].pieces;
+      for (const p of pieces) expect(p.modelRef.length).toBeGreaterThan(0);
+      expect(new Set(pieces.map((p) => p.key)).size).toBe(pieces.length);
+    }
+  });
+});
+
+describe("latLonToGlobePoint / latLonToGlobeNormal (orbit site markers, Epic 04 P3)", () => {
+  const dist = (p: readonly number[], q: readonly number[]) =>
+    Math.hypot(p[0] - q[0], p[1] - q[1], p[2] - q[2]);
+
+  it("seats every point exactly on the globe surface (radius from MOON_POSITION)", () => {
+    for (const [lat, lon] of [
+      [0, 0],
+      [0.7, 23.5],
+      [-35, 20],
+      [45, -120],
+      [89, 200],
+    ] as const) {
+      const p = latLonToGlobePoint(lat, lon);
+      expect(dist(p, MOON_POSITION)).toBeCloseTo(MOON_RADIUS, 6);
+    }
+  });
+
+  it("normal is a unit vector pointing from the globe centre to the point", () => {
+    const lat = -35,
+      lon = 20;
+    const n = latLonToGlobeNormal(lat, lon);
+    expect(Math.hypot(n[0], n[1], n[2])).toBeCloseTo(1, 9);
+    const p = latLonToGlobePoint(lat, lon);
+    // point = centre + normal * radius (exact inverse relation).
+    expect(p[0]).toBeCloseTo(MOON_POSITION[0] + n[0] * MOON_RADIUS, 6);
+    expect(p[1]).toBeCloseTo(MOON_POSITION[1] + n[1] * MOON_RADIUS, 6);
+    expect(p[2]).toBeCloseTo(MOON_POSITION[2] + n[2] * MOON_RADIUS, 6);
+  });
+
+  it("maps the poles to the polar (y) axis regardless of longitude/offset", () => {
+    const north = latLonToGlobeNormal(90, 137);
+    expect(north[1]).toBeCloseTo(1, 9);
+    expect(north[0]).toBeCloseTo(0, 9);
+    expect(north[2]).toBeCloseTo(0, 9);
+    const south = latLonToGlobeNormal(-90, -42);
+    expect(south[1]).toBeCloseTo(-1, 9);
+  });
+
+  it("the global longitude offset rotates points about the polar axis (y fixed)", () => {
+    const a = latLonToGlobeNormal(10, 0, 0);
+    const b = latLonToGlobeNormal(10, 0, 90);
+    // Same latitude → same y; longitude offset only swings x/z.
+    expect(b[1]).toBeCloseTo(a[1], 9);
+    expect(b[0]).not.toBeCloseTo(a[0], 3);
+  });
+
+  it("seats BOTH site markers on the lit AND camera-facing near hemisphere (#131)", () => {
+    // The orbit camera berths up-and-right of the Moon; the decoupled orbit sun is
+    // forward/up. A marker is visible+lit only if its normal has a positive dot with
+    // BOTH the camera direction and the sun direction. This is the #131 lit-
+    // hemisphere requirement, carried forward to both markers (this slice supersedes
+    // the single-marker #131 reseat).
+    const camDir = unit([264, 85, 26]); // ORBIT_POSE offset off MOON_POSITION
+    const sunDir = unit([
+      806 - MOON_POSITION[0],
+      795 - MOON_POSITION[1],
+      -6929 - MOON_POSITION[2],
+    ]); // ORBIT_SUN_POSITION − MOON_POSITION
+    const sites: [number, number][] = [
+      [0.7, 23.5], // Lunar Base
+      [-35, 20], // Shackleton (art-directed southern seat)
+    ];
+    for (const [lat, lon] of sites) {
+      const n = latLonToGlobeNormal(lat, lon);
+      expect(dot(n, camDir)).toBeGreaterThan(0.1); // camera-facing
+      expect(dot(n, sunDir)).toBeGreaterThan(0.05); // lit
+    }
   });
 });
 
@@ -115,5 +276,52 @@ describe("isBuilt", () => {
     expect(isBuilt({ status: "DONE" })).toBe(true);
     expect(isBuilt({ status: "LEASED" })).toBe(false);
     expect(isBuilt({ status: "UNCLAIMED" })).toBe(false);
+  });
+});
+
+describe("craterProfile (Shackleton carved crater)", () => {
+  it("keeps the floor flat at y=0 so no worksite object (seated at y=0) moves", () => {
+    expect(craterProfile(0)).toBe(0);
+    expect(craterProfile(CRATER_FLOOR_RADIUS / 2)).toBe(0);
+    expect(craterProfile(CRATER_FLOOR_RADIUS)).toBe(0);
+  });
+
+  it("seats every Shackleton structure on the flat floor (within the floor radius)", () => {
+    for (const p of SITE_FRAMES.shackleton.pieces) {
+      const r = Math.hypot(p.position[0], p.position[2]);
+      expect(r).toBeLessThanOrEqual(CRATER_FLOOR_RADIUS);
+    }
+  });
+
+  it("rises to the rim crest height at the rim radius (the peak), and is continuous at the boundaries", () => {
+    expect(craterProfile(CRATER_RIM_RADIUS)).toBeCloseTo(CRATER_RIM_HEIGHT, 5);
+    // The flank eases the crest back to the open plain (0) by the outer radius.
+    expect(craterProfile(CRATER_OUTER_RADIUS)).toBeCloseTo(0, 5);
+    expect(craterProfile(300)).toBe(0); // far field is the flat plain
+  });
+
+  it("rises monotonically up the inner wall (floor → rim)", () => {
+    let prev = -1;
+    for (let r = CRATER_FLOOR_RADIUS; r <= CRATER_RIM_RADIUS; r += 2) {
+      const h = craterProfile(r);
+      expect(h).toBeGreaterThanOrEqual(prev - 1e-9);
+      prev = h;
+    }
+  });
+
+  it("falls monotonically down the outer flank (rim → outer)", () => {
+    let prev = CRATER_RIM_HEIGHT + 1;
+    for (let r = CRATER_RIM_RADIUS; r <= CRATER_OUTER_RADIUS; r += 2) {
+      const h = craterProfile(r);
+      expect(h).toBeLessThanOrEqual(prev + 1e-9);
+      prev = h;
+    }
+  });
+
+  it("never lifts the terrain above the rim crest height anywhere", () => {
+    for (let r = 0; r <= 400; r += 1) {
+      expect(craterProfile(r)).toBeLessThanOrEqual(CRATER_RIM_HEIGHT + 1e-9);
+      expect(craterProfile(r)).toBeGreaterThanOrEqual(0);
+    }
   });
 });

@@ -6,8 +6,12 @@ import (
 	"testing"
 )
 
-// testBlueprint is the blueprint id the replay tests bake/replay under.
-const testBlueprint = "dome"
+// testBlueprint is the blueprint id the replay tests bake/replay under;
+// taskFoundation1 is the local task id they look up under it.
+const (
+	testBlueprint   = "dome"
+	taskFoundation1 = domain.TaskID("foundation-1")
+)
 
 // cachedOps is a distinctive baked spec a forced cache HIT replays: a single
 // cylinder, which neither the foundation nor wall primitive streams start with, so
@@ -29,13 +33,13 @@ func TestOpsFor_CacheHitReplays(t *testing.T) {
 	cfg := Config{
 		BlueprintID: testBlueprint,
 		ReplaySpec: func(blueprint, task domain.TaskID) ([]wire.BuildOp, bool) {
-			if blueprint == testBlueprint && task == "foundation-1" {
+			if blueprint == testBlueprint && task == taskFoundation1 {
 				return cachedOps(), true
 			}
 			return nil, false
 		},
 	}
-	ops := cfg.opsFor("foundation-1", "foundation")
+	ops := cfg.opsFor(taskFoundation1, "foundation")
 	if len(ops) != 1 || ops[0].Shape != wire.ShapeCylinder {
 		t.Fatalf("cache hit must replay the baked spec, got %#v", ops)
 	}
@@ -50,7 +54,7 @@ func TestOpsFor_CacheMissFallsBackToPrimitive(t *testing.T) {
 			return nil, false // forced miss
 		},
 	}
-	ops := cfg.opsFor("foundation-1", "foundation")
+	ops := cfg.opsFor(taskFoundation1, "foundation")
 	want := buildOpsFor("foundation")
 	if len(ops) != len(want) {
 		t.Fatalf("cache miss must fall back to the primitive stream: got %d ops, want %d", len(ops), len(want))
@@ -71,7 +75,7 @@ func TestOpsFor_NoBlueprintNeverConsultsCache(t *testing.T) {
 			return cachedOps(), true
 		},
 	}
-	ops := cfg.opsFor("foundation-1", "foundation")
+	ops := cfg.opsFor(taskFoundation1, "foundation")
 	if called {
 		t.Fatal("opsFor must not consult the cache when BlueprintID is empty")
 	}
@@ -91,7 +95,48 @@ func TestOpsFor_ConfigOverrideBeatsCache(t *testing.T) {
 			return cachedOps(), true
 		},
 	}
-	if ops := cfg.opsFor("foundation-1", "foundation"); len(ops) != 0 {
+	if ops := cfg.opsFor(taskFoundation1, "foundation"); len(ops) != 0 {
 		t.Fatalf("forced-empty BuildOps override must beat the cache, got %#v", ops)
+	}
+}
+
+// TestLocalTaskID strips the instance/site prefix blueprint.Place adds (two-site
+// lunar surface, epic 04) so the baked cache — keyed by the bare local id — still
+// resolves a prefixed task id. An unprefixed id passes through unchanged.
+func TestLocalTaskID(t *testing.T) {
+	cases := map[domain.TaskID]string{
+		"foundation-1":           "foundation-1", // single-site: unchanged
+		"lunar/foundation-1":     "foundation-1", // two-site prefix stripped
+		"shackleton/wall-3":      "wall-3",
+		"bp1/dome-cap":           "dome-cap", // drag-placed instance prefix
+		"lunar/foundation-1/odd": "odd",      // only the last segment is the local id
+		"":                       "",
+	}
+	for in, want := range cases {
+		if got := localTaskID(in); got != want {
+			t.Fatalf("localTaskID(%q) = %q, want %q", in, got, want)
+		}
+	}
+}
+
+// TestReplayOps_TwoSitePrefixedIDHitsEmbeddedCache is the regression guard for the
+// epic-04 site prefixing: a demo rover (BlueprintID="dome") building a SITE-PREFIXED
+// task id ("lunar/foundation-1") must still replay the SAME committed baked spec the
+// bare local id resolves — otherwise the two-site board silently loses the
+// deterministic no-model-call replay headline and falls back to the primitive
+// stream. SKIPPED if the dome has not been baked, so the suite stays green either way.
+func TestReplayOps_TwoSitePrefixedIDHitsEmbeddedCache(t *testing.T) {
+	cfg := Config{BlueprintID: testBlueprint} // embedded cache, no resolver
+
+	local, localHit := cfg.replayOps(taskFoundation1)
+	if !localHit {
+		t.Skip("dome foundation-1 not baked into the embedded cache; nothing to regress")
+	}
+	prefixed, prefHit := cfg.replayOps("lunar/foundation-1")
+	if !prefHit {
+		t.Fatal("a site-prefixed task id must hit the same baked spec as its local id (epic 04)")
+	}
+	if len(prefixed) != len(local) {
+		t.Fatalf("prefixed replay returned %d ops, want %d (same baked spec as the local id)", len(prefixed), len(local))
 	}
 }

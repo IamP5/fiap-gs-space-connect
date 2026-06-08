@@ -21,11 +21,11 @@
 // flips at the glare peak of the descent transition — so the Moon appearing/
 // vanishing is hidden behind the flash, never seen as a pop.
 //
-// DEMAND-LOOP SAFETY (non-negotiable): NO useFrame of our own. Textures load
-// imperatively via THREE.TextureLoader (NOT a Suspense that can throw); each
-// successful load calls invalidate() once so the demand loop paints it, then
-// returns to 0 idle fps. We also invalidate() whenever the visible body swaps on
-// a view-mode change, or the LOD/visibility would stick under the demand loop.
+// DEMAND-LOOP SAFETY (historical): the bodies still load textures imperatively via
+// THREE.TextureLoader (NOT a Suspense that can throw) and invalidate() once on load
+// / on a visible-body swap — cheap and harmless. NB: the demand loop was DROPPED
+// (the scene runs frameloop="always", see AGENTS.md), so a continuous useFrame is
+// now allowed: the orbit SiteMarker reticles use one for their subtle pulse.
 //
 // MANDATORY FALLBACK (ADR-0004): a missing/failed texture leaves the sphere
 // rendered with its flat material color — never blank, never thrown. Geometry +
@@ -36,22 +36,32 @@
 // unaffected.
 
 import { useEffect, useMemo, useRef, useState } from "react";
-import { Detailed } from "@react-three/drei";
+import { Billboard, Detailed, Line, Text } from "@react-three/drei";
 import { useFrame, useThree } from "@react-three/fiber";
 import * as THREE from "three";
 
 import type { ThreeEvent } from "@react-three/fiber";
 
 import { CELESTIAL_BLOOM_LAYER, type ViewMode } from "./Scene3D";
+// Shared URL-keyed cache: preload and the bodies share ONE decoded texture per URL
+// (no pop-in). Aliased — this module already has a local `loadTexture` helper that
+// applies a texture to a material SLOT (a different concern). Epic 05 P1.
+import {
+  loadTexture as loadCachedTexture,
+  preloadTexture,
+} from "../lib/textureCache";
 import {
   EARTH_POSITION,
   EARTH_RADIUS,
+  latLonToGlobeNormal,
+  latLonToGlobePoint,
   MOON_POSITION,
   MOON_RADIUS,
   ORBIT_SUN_POSITION,
   SUN_POSITION,
   SUN_RADIUS,
 } from "../lib/scene";
+import type { SiteId } from "./Scene3D";
 
 // Self-hosted textures (see public/assets/CREDITS.md). Downscaled jpgs.
 //   • Moon  — NASA CGI Moon Kit (SVS 4720): LROC WAC colour mosaic + a normal map
@@ -59,13 +69,15 @@ import {
 //   • Earth — NASA Blue Marble (day) + Black Marble (city lights, night) (NASA-PD).
 //   • Sun   — Solar System Scope colour map (CC-BY 4.0).
 //   • Nebula — ESA/Hubble Veil Nebula "Witch's Broom" (heic0712a) (CC-BY 4.0).
-const MOON_COLOR = "/assets/textures/moon_color_4096.jpg";
-const MOON_NORMAL = "/assets/textures/moon_normal_4096.jpg";
-const EARTH_DAY = "/assets/textures/earth_day_2048.jpg";
-const EARTH_NIGHT = "/assets/textures/earth_night_2048.jpg";
-const EARTH_CLOUDS = "/assets/textures/earth_clouds_2048.jpg";
-const SUN_COLOR = "/assets/textures/sun_color_1024.jpg";
-const NEBULA_VEIL = "/assets/textures/nebula_veil_1024.jpg";
+// Exported so the preload manifest (lib/assets.ts) references the SAME URLs these
+// bodies render — the manifest can't drift from the component (Epic 05 P1).
+export const MOON_COLOR = "/assets/textures/moon_color_4096.jpg";
+export const MOON_NORMAL = "/assets/textures/moon_normal_4096.jpg";
+export const EARTH_DAY = "/assets/textures/earth_day_2048.jpg";
+export const EARTH_NIGHT = "/assets/textures/earth_night_2048.jpg";
+export const EARTH_CLOUDS = "/assets/textures/earth_clouds_2048.jpg";
+export const SUN_COLOR = "/assets/textures/sun_color_1024.jpg";
+export const NEBULA_VEIL = "/assets/textures/nebula_veil_1024.jpg";
 
 // --- Moon globe (orbit view) ------------------------------------------------
 // Placement + size: the orbit preset TARGETS this berth and frames the globe as
@@ -320,33 +332,26 @@ function loadUniformTexture(
   anisotropy: number,
 ): () => void {
   let disposed = false;
-  let texture: THREE.Texture | null = null;
-  new THREE.TextureLoader().load(
-    url,
-    (t) => {
-      if (disposed) {
-        t.dispose();
-        return;
-      }
-      t.colorSpace = THREE.NoColorSpace;
-      t.anisotropy = anisotropy;
-      t.wrapS = THREE.RepeatWrapping; // equirectangular maps wrap horizontally
-      t.wrapT = THREE.ClampToEdgeWrapping;
-      // Mipmaps ON (default) with max anisotropy minify the equirect cleanly at the
-      // grazing limb; the surface limb-fade in EARTH_FRAGMENT handles the residual
-      // foreshortening streak.
-      texture = t;
-      uniform.value = t;
-      invalidate();
-    },
-    undefined,
-    () => {
-      // Missing/failed ⇒ keep the solid fallback already in the uniform (ADR-0004).
-    },
-  );
+  // Shared cache: one decoded texture per URL (warm from preload). The cache OWNS
+  // it — never disposed. Per-URL config (colorSpace/wrap/anisotropy) applied here.
+  const t = loadCachedTexture(url);
+  void preloadTexture(url).then(() => {
+    if (disposed || !t.image) return; // failed ⇒ keep the solid fallback (ADR-0004)
+    t.colorSpace = THREE.NoColorSpace;
+    t.anisotropy = anisotropy;
+    t.wrapS = THREE.RepeatWrapping; // equirectangular maps wrap horizontally
+    t.wrapT = THREE.ClampToEdgeWrapping;
+    // Mipmaps ON (default) with max anisotropy minify the equirect cleanly at the
+    // grazing limb; the surface limb-fade in EARTH_FRAGMENT handles the residual
+    // foreshortening streak.
+    t.needsUpdate = true;
+    uniform.value = t;
+    invalidate();
+  });
   return () => {
     disposed = true;
-    texture?.dispose();
+    // The cache owns the texture — do NOT dispose. Leave the uniform pointing at
+    // the shared texture; a remount re-reads the same object.
   };
 }
 
@@ -372,33 +377,23 @@ function loadTexture(
   anisotropy = 4,
 ): () => void {
   let disposed = false;
-  let texture: THREE.Texture | null = null;
-  const loader = new THREE.TextureLoader();
-  loader.load(
-    url,
-    (t) => {
-      if (disposed) {
-        t.dispose();
-        return;
-      }
-      t.colorSpace = colorSpace;
-      t.anisotropy = anisotropy;
-      texture = t;
-      material[key] = t;
-      material.needsUpdate = true;
-      invalidate(); // wake the demand loop so the texture shows, then idle again
-    },
-    undefined,
-    () => {
-      // Missing/failed ⇒ keep the flat color for this channel (never crash).
-    },
-  );
+  // Shared cache: one decoded texture per URL (warm from preload). The cache OWNS
+  // it — never disposed. colorSpace/anisotropy is per-URL config applied here.
+  const t = loadCachedTexture(url);
+  void preloadTexture(url).then(() => {
+    if (disposed || !t.image) return; // failed ⇒ keep the flat colour (ADR-0004)
+    t.colorSpace = colorSpace;
+    t.anisotropy = anisotropy;
+    t.needsUpdate = true;
+    material[key] = t;
+    material.needsUpdate = true;
+    invalidate(); // wake the demand loop so the texture shows, then idle again
+  });
   return () => {
     disposed = true;
-    if (texture) {
-      if (material[key] === texture) material[key] = null;
-      texture.dispose();
-    }
+    // The cache owns the texture — do NOT dispose. Detach from the slot so a
+    // disposed material never references a shared texture meant for other bodies.
+    if (material[key] === t) material[key] = null;
   };
 }
 
@@ -802,6 +797,11 @@ function EarthBody({ visible, viewMode }: { visible: boolean; viewMode: ViewMode
 // unmount. No per-frame work — the flare is static (a spinning flare would force
 // the demand loop to render forever).
 
+// The Sun core's base emissive intensity. Pulled out as a constant so the
+// behind-Moon bloom mask (SunBody's useFrame) can fade FROM this value back to it
+// without re-encoding the literal in two places.
+const SUN_CORE_EMISSIVE = 1.7;
+
 // Build a soft round radial-gradient glow texture (white centre → transparent).
 function makeGlowTexture(): THREE.Texture | null {
   if (typeof document === "undefined") return null;
@@ -961,6 +961,7 @@ function SunBody({
   position,
   coreRef: externalCoreRef,
   showStreak,
+  occludeBehindMoon,
 }: {
   position: [number, number, number];
   // Shared ref to the core disc mesh, so the post-FX GodRays pass (#110) can use
@@ -968,8 +969,13 @@ function SunBody({
   coreRef?: React.RefObject<THREE.Mesh>;
   // Orbit-gates the anamorphic lens-flare streak (#110): the Sun is the orbit hero.
   showStreak?: boolean;
+  // Orbit-gates the behind-Moon bloom mask: in orbit the Moon globe is rendered and
+  // can sit between camera and Sun, so we fade the core's bloom as the Moon covers
+  // it (see the useFrame below). The surface view has no Moon, so it stays off.
+  occludeBehindMoon?: boolean;
 }) {
   const invalidate = useThree((s) => s.invalidate);
+  const camera = useThree((s) => s.camera);
   // The Sun core mesh glows in the celestial bloom pass (#99) and is the GodRays
   // light source (#110). Use the shared ref when given, else a local one.
   const localCoreRef = useRef<THREE.Mesh>(null);
@@ -982,7 +988,7 @@ function SunBody({
     const material = new THREE.MeshStandardMaterial({
       color: "#fff8f0",
       emissive: "#ffffff",
-      emissiveIntensity: 1.7,
+      emissiveIntensity: SUN_CORE_EMISSIVE,
       roughness: 1,
       metalness: 0,
       toneMapped: false,
@@ -1045,6 +1051,52 @@ function SunBody({
   useEffect(() => {
     coreRef.current?.layers.enable(CELESTIAL_BLOOM_LAYER);
   }, [coreRef]);
+
+  // --- Behind-Moon occlusion (orbit) ----------------------------------------
+  // The celestial SelectiveBloom (Scene3D) re-renders the Sun core into its OWN
+  // buffer, which has NO Moon in it, then SCREEN-blends the blurred glow back over
+  // the frame — so the core's soft halo leaked straight THROUGH the Moon globe
+  // whenever the Sun sat behind it (the "sun getting through the moon" the user
+  // saw). The in-scene additive glow/ray sprites are depth-tested and already clip
+  // cleanly to the Moon's silhouette; only the post-process bloom (and the bloom-
+  // layer core it keys off) ignore that depth. So we HIDE the core whenever the
+  // camera→Sun ray passes through the Moon sphere — replicating exactly what depth-
+  // testing already does in the main render, but extending it to the bloom + GodRays
+  // passes (a hidden mesh is skipped in every pass, so its glow can't leak). The
+  // surrounding sprites stay mounted; they keep their correct depth-clipped spill
+  // around the limb. Analytic ray–sphere test against the known Moon berth
+  // (MOON_POSITION/MOON_RADIUS) — no raycaster, no Moon ref. Gated to orbit (the
+  // surface view has no Moon). frameloop="always", so this runs every frame.
+  const occScratch = useMemo(
+    () => ({ cam: new THREE.Vector3(), dir: new THREE.Vector3(), m: new THREE.Vector3() }),
+    [],
+  );
+  useFrame(() => {
+    const core = coreRef.current;
+    if (!core) return;
+    let occluded = false;
+    if (occludeBehindMoon) {
+      const cam = camera.getWorldPosition(occScratch.cam);
+      // Ray camera→Sun (the group sits at `position` with no parent transform).
+      const dir = occScratch.dir.set(position[0], position[1], position[2]).sub(cam);
+      const L = dir.length();
+      if (L > 1e-3) {
+        dir.divideScalar(L);
+        const m = occScratch.m
+          .set(MOON_POSITION[0], MOON_POSITION[1], MOON_POSITION[2])
+          .sub(cam);
+        const tca = m.dot(dir); // Moon-centre projection onto the ray
+        // The Moon must be BETWEEN the camera and the Sun (0 < tca < L), and the ray
+        // must pass within the Moon's disc (perpendicular distance < its radius). The
+        // far Sun is angularly tiny, so this hard silhouette edge needs no soft band.
+        if (tca > 0 && tca < L) {
+          const perp2 = m.lengthSq() - tca * tca;
+          occluded = perp2 < MOON_RADIUS * MOON_RADIUS;
+        }
+      }
+    }
+    if (core.visible === occluded) core.visible = !occluded;
+  });
 
   return (
     <group position={position} raycast={() => null}>
@@ -1151,41 +1203,140 @@ function SunBody({
   );
 }
 
-// --- Lunar base marker (orbit view only) — the clickable "objective" ---------
-// A game-style location marker pinned to the Moon globe at the worksite's berth,
-// shown ONLY in orbit. Clicking it (its invisible hit-proxy) calls onSelect,
-// which flips the app to surface view → the existing glare-masked descent flies
-// the camera down to the base. This is an INTENTIONAL second pickable surface,
-// admissible because it exists only in orbit, where NO rover/worksite is rendered
-// — so it never competes with the rover hit-proxies that own click-to-kill on the
-// surface (#48). Demand-loop safe: no useFrame; hover just brightens/scales via
-// React state, waking exactly one frame.
+// --- Site markers (orbit view only) — the clickable "objectives" -------------
+// Game-style location markers pinned to the Moon globe at each site's real
+// lat/lon, shown ONLY in orbit. Clicking a marker (its invisible hit-proxy) calls
+// onSelect with that site's id, which sets BOTH the active site AND surface view
+// → the existing glare-masked descent flies the camera down to that base. These
+// are INTENTIONAL second pickable surfaces, admissible because they exist only in
+// orbit, where NO rover/worksite is rendered — so they never compete with the
+// rover hit-proxies that own click-to-kill on the surface (#48). No useFrame;
+// hover just brightens/scales via React state, waking exactly one frame.
 //
-// It is seated on the Moon's near face (the point of the globe pointing back at
-// the orbit camera) and oriented to the surface normal there, so the ring lies
-// flat on the globe and the beacon rises straight up off the surface.
-const MARKER_COLOR = "#38e1ff"; // brand telemetry cyan (matches selection/revive)
+// Each marker is seated on the globe at latLonToGlobePoint(lat, lon) and oriented
+// to the local surface normal there (latLonToGlobeNormal), so the ring lies flat
+// on the globe and the beacon rises straight up off the surface. The shared
+// global longitude offset (MARKER_LON_OFFSET in lib/scene.ts) swings both sites
+// onto the camera-facing AND sunlit near hemisphere of the orbit globe — carrying
+// the #131 lit-hemisphere lesson forward to BOTH markers (this slice supersedes
+// the single-marker #131 reseat).
 
-function LunarBaseMarker({ onSelect }: { onSelect: () => void }) {
-  const invalidate = useThree((s) => s.invalidate);
+// Marker coordinates of the two sites (degrees). Lunar Base sits at its real
+// equatorial coords. Shackleton's REAL coords are the south pole (lat −89.9), but
+// the literal pole sits on the FAR, UNLIT bottom of the orbit globe (its normal is
+// −y; under ORBIT_SUN_POSITION + the up-and-right orbit camera it is both
+// back-facing and in shadow — Risk #6 in the plan). Rather than tilt the globe
+// (out of scope), the Shackleton MARKER is art-directed to a southern seat that
+// still reads as "low / south" yet stays on the visible AND lit near hemisphere —
+// honoring the #131 lit-hemisphere requirement for BOTH markers. (Set-piece /
+// marker positions are art-directed; only sizes are literal — see the plan.)
+const SITE_COORDS: Record<SiteId, { lat: number; lon: number }> = {
+  lunar: { lat: 0.7, lon: 23.5 },
+  shackleton: { lat: -35, lon: 20 },
+};
+
+// Per-site marker styling. Cyan = the live Lunar Base (brand telemetry cyan,
+// matches selection/revive); amber = Shackleton, still "in construction".
+// `name` + `status` are the two in-world reticle label lines (NO build counts —
+// that payoff is reserved for the surface view); `label` is kept for any legacy
+// consumer but the NMS reticle uses the split fields.
+const SITE_MARKERS: Record<
+  SiteId,
+  { color: string; label: string; name: string; status: string }
+> = {
+  lunar: {
+    color: "#38e1ff",
+    label: "Lunar Base",
+    name: "LUNAR BASE",
+    status: "operational",
+  },
+  shackleton: {
+    color: "#ffb347",
+    label: "Shackleton — in construction",
+    name: "SHACKLETON",
+    status: "in construction",
+  },
+};
+
+// --- NMS-style reticle geometry --------------------------------------------
+// A thin line-DIAMOND (4 outer points + a closing point) in the billboard's local
+// XY plane. Radius in WORLD units (the marker group carries no scale beyond the
+// subtle pulse), tuned to read at the orbit zoom band.
+const RETICLE_RADIUS = 6;
+const DIAMOND_POINTS: [number, number, number][] = [
+  [0, RETICLE_RADIUS, 0], // top
+  [RETICLE_RADIUS, 0, 0], // right
+  [0, -RETICLE_RADIUS, 0], // bottom
+  [-RETICLE_RADIUS, 0, 0], // left
+  [0, RETICLE_RADIUS, 0], // close the loop
+];
+// Hover "lock-on" corner brackets — four short L's hugging the diamond's outer
+// points, drawn as a SEGMENTS line (pairs of endpoints) just outside the diamond.
+const TICK = 2.4; // bracket arm length
+const BR = RETICLE_RADIUS + 2.4; // bracket reach (sits just outside the diamond)
+const BRACKET_POINTS: [number, number, number][] = [
+  // top bracket (apex up)
+  [-TICK, BR - TICK, 0], [0, BR, 0], [0, BR, 0], [TICK, BR - TICK, 0],
+  // right
+  [BR - TICK, TICK, 0], [BR, 0, 0], [BR, 0, 0], [BR - TICK, -TICK, 0],
+  // bottom
+  [TICK, -BR + TICK, 0], [0, -BR, 0], [0, -BR, 0], [-TICK, -BR + TICK, 0],
+  // left
+  [-BR + TICK, -TICK, 0], [-BR, 0, 0], [-BR, 0, 0], [-BR + TICK, TICK, 0],
+];
+
+// One clickable site marker, seated + oriented by the caller (SiteMarkers). The
+// pickable part is an invisible cylinder hit-proxy seated along the local surface
+// normal; the visible part is an in-world, billboarded NMS-style line-diamond
+// reticle + SDF label that floats slightly off the globe and OCCLUDES naturally
+// behind the Moon's limb (it lives on the celestial bloom layer, real depth — no
+// depthTest:false). A subtle continuous pulse breathes the reticle (free under
+// frameloop="always"); hover brightens + locks on with corner brackets.
+function SiteMarker({
+  position,
+  quaternion,
+  color,
+  name,
+  status,
+  onSelect,
+}: {
+  position: [number, number, number];
+  quaternion: [number, number, number, number];
+  color: string;
+  name: string;
+  status: string;
+  onSelect: () => void;
+}) {
   const [hover, setHover] = useState(false);
+  // The reticle content (diamond + brackets + label) — pulsed/scaled per frame.
+  const reticleRef = useRef<THREE.Group>(null);
+  const diamondRef = useRef<THREE.Object3D>(null);
+  const bracketRef = useRef<THREE.Object3D>(null);
 
-  // Seat on the globe's near face + orient to the surface normal there. The orbit
-  // camera berths along +z/+y off the Moon (see ORBIT_POSE), so the near face
-  // normal points roughly that way; the marker is therefore camera-facing.
-  const { position, quaternion } = useMemo(() => {
-    const n = new THREE.Vector3(0, 80, 410).normalize(); // ≈ orbit camera dir off the Moon
-    const base = new THREE.Vector3(...MOON_POSITION).addScaledVector(n, MOON_RADIUS);
-    const q = new THREE.Quaternion().setFromUnitVectors(new THREE.Vector3(0, 1, 0), n);
-    return {
-      position: base.toArray() as [number, number, number],
-      quaternion: q.toArray() as [number, number, number, number],
-    };
-  }, []);
-
+  // Put the reticle lines on the celestial bloom layer so they pick up the
+  // existing selective-bloom halo (#99) — same pattern as the Sun/Earth cores.
   useEffect(() => {
-    invalidate();
-  }, [hover, invalidate]);
+    diamondRef.current?.layers.enable(CELESTIAL_BLOOM_LAYER);
+    bracketRef.current?.layers.enable(CELESTIAL_BLOOM_LAYER);
+  }, [hover]);
+
+  // Subtle continuous breathe + hover lock-on tighten. frameloop="always", so a
+  // per-frame pulse is free (no invalidate gymnastics). Hover snaps the diamond a
+  // touch tighter (lock-on) and reveals the corner brackets.
+  useFrame((state) => {
+    const t = state.clock.elapsedTime;
+    const breathe = 1 + Math.sin(t * 2) * 0.04; // ±4% gentle breathe
+    const lock = hover ? 0.9 : 1; // tighten on lock-on
+    if (reticleRef.current) {
+      reticleRef.current.scale.setScalar(breathe * lock);
+    }
+    if (bracketRef.current) {
+      // brackets fade/pop in on hover (opacity lives on the Line2 material)
+      const mat = (bracketRef.current as THREE.Mesh)
+        .material as THREE.Material & { opacity: number };
+      if (mat) mat.opacity = THREE.MathUtils.lerp(mat.opacity, hover ? 1 : 0, 0.2);
+    }
+  });
 
   const onOver = (e: ThreeEvent<PointerEvent>) => {
     e.stopPropagation();
@@ -1197,13 +1348,15 @@ function LunarBaseMarker({ onSelect }: { onSelect: () => void }) {
     document.body.style.cursor = "default";
   };
 
-  const intensity = hover ? 2.4 : 1.5;
-  const scale = hover ? 1.14 : 1;
+  // Brighter when hovered (lock-on). Lines are toneMapped:false so the bloom pass
+  // reads the raw color; we boost the line width slightly on hover too.
+  const lineWidth = hover ? 2.4 : 1.6;
 
   return (
-    <group position={position} quaternion={quaternion} scale={scale}>
-      {/* Invisible, generous hit-proxy — the SOLE pickable part. A click flips to
-          surface view, triggering the descent. */}
+    <group position={position} quaternion={quaternion}>
+      {/* Invisible, generous hit-proxy — the SOLE pickable part. A click sets the
+          site + surface view, triggering the descent (contract unchanged). Seated
+          along the local surface normal, same as before. */}
       <mesh
         position={[0, 11, 0]}
         onClick={(e: ThreeEvent<MouseEvent>) => {
@@ -1217,51 +1370,105 @@ function LunarBaseMarker({ onSelect }: { onSelect: () => void }) {
         <meshBasicMaterial transparent opacity={0} depthWrite={false} />
       </mesh>
 
-      {/* Pulsing-style ring flat on the surface (static — no per-frame work). */}
-      <mesh rotation={[-Math.PI / 2, 0, 0]} position={[0, 0.4, 0]} raycast={() => null}>
-        <ringGeometry args={[7, 10, 40]} />
-        <meshStandardMaterial
-          color={MARKER_COLOR}
-          emissive={MARKER_COLOR}
-          emissiveIntensity={intensity}
-          toneMapped={false}
-          transparent
-          opacity={0.95}
-          side={THREE.DoubleSide}
-        />
-      </mesh>
-
-      {/* A bright core disc inside the ring. */}
-      <mesh rotation={[-Math.PI / 2, 0, 0]} position={[0, 0.5, 0]} raycast={() => null}>
-        <circleGeometry args={[6.2, 32]} />
-        <meshStandardMaterial
-          color={MARKER_COLOR}
-          emissive={MARKER_COLOR}
-          emissiveIntensity={intensity * 0.5}
-          toneMapped={false}
-          transparent
-          opacity={0.28}
-          side={THREE.DoubleSide}
-        />
-      </mesh>
-
-      {/* Vertical beacon — a short tapering glow column rising off the surface, the
-          "you are here / land here" signal. Additive so it reads as light. Kept
-          SHORT (was 36u, which foreshortened into a streak across the disc at the
-          orbit angle) and dim so it reads as a beacon dot, not a line. */}
-      <mesh position={[0, 8, 0]} raycast={() => null}>
-        <cylinderGeometry args={[0.4, 2.6, 16, 16, 1, true]} />
-        <meshBasicMaterial
-          color={MARKER_COLOR}
-          transparent
-          opacity={hover ? 0.32 : 0.18}
-          side={THREE.DoubleSide}
-          depthWrite={false}
-          blending={THREE.AdditiveBlending}
-          toneMapped={false}
-        />
-      </mesh>
+      {/* In-world reticle, floated off the surface along the local normal and
+          billboarded so the diamond + label always face the camera. Real depth:
+          it occludes behind the Moon's limb naturally (no depthTest override). */}
+      <Billboard position={[0, 14, 0]} raycast={() => null}>
+        <group ref={reticleRef}>
+          {/* Thin emissive line-diamond on the celestial bloom layer. */}
+          <Line
+            ref={diamondRef as never}
+            points={DIAMOND_POINTS}
+            color={color}
+            lineWidth={lineWidth}
+            transparent
+            opacity={hover ? 1 : 0.9}
+            toneMapped={false}
+            raycast={() => null}
+          />
+          {/* Hover lock-on corner brackets (faded in by the useFrame). */}
+          <Line
+            ref={bracketRef as never}
+            points={BRACKET_POINTS}
+            segments
+            color={color}
+            lineWidth={hover ? 2 : 1.4}
+            transparent
+            opacity={0}
+            toneMapped={false}
+            raycast={() => null}
+          />
+          {/* SDF label under the diamond: line 1 = site name, line 2 = status. */}
+          <Text
+            position={[0, -RETICLE_RADIUS - 4.5, 0]}
+            fontSize={3.4}
+            color={color}
+            anchorX="center"
+            anchorY="top"
+            textAlign="center"
+            lineHeight={1.25}
+            letterSpacing={0.08}
+            outlineWidth={0.12}
+            outlineColor="#000000"
+            outlineOpacity={0.85}
+            fillOpacity={hover ? 1 : 0.92}
+            material-toneMapped={false}
+            raycast={() => null}
+          >
+            {`${name}\n${status}`}
+          </Text>
+        </group>
+      </Billboard>
     </group>
+  );
+}
+
+// Build the seated position + surface-normal quaternion for a site's marker from
+// its real lat/lon (shared globe param in lib/scene.ts). Memo-keyed on the site.
+function useSiteMarkerSeat(site: SiteId) {
+  return useMemo(() => {
+    const { lat, lon } = SITE_COORDS[site];
+    const position = latLonToGlobePoint(lat, lon);
+    const n = new THREE.Vector3(...latLonToGlobeNormal(lat, lon));
+    const q = new THREE.Quaternion().setFromUnitVectors(
+      new THREE.Vector3(0, 1, 0),
+      n,
+    );
+    return {
+      position,
+      quaternion: q.toArray() as [number, number, number, number],
+    };
+  }, [site]);
+}
+
+// Renders both site markers on the orbit globe. `onSelectSite(siteId)` sets the
+// active site AND surface view (the descent) for the clicked site.
+function SiteMarkers({
+  onSelectSite,
+}: {
+  onSelectSite: (site: SiteId) => void;
+}) {
+  const lunarSeat = useSiteMarkerSeat("lunar");
+  const shackletonSeat = useSiteMarkerSeat("shackleton");
+  return (
+    <>
+      <SiteMarker
+        position={lunarSeat.position}
+        quaternion={lunarSeat.quaternion}
+        color={SITE_MARKERS.lunar.color}
+        name={SITE_MARKERS.lunar.name}
+        status={SITE_MARKERS.lunar.status}
+        onSelect={() => onSelectSite("lunar")}
+      />
+      <SiteMarker
+        position={shackletonSeat.position}
+        quaternion={shackletonSeat.quaternion}
+        color={SITE_MARKERS.shackleton.color}
+        name={SITE_MARKERS.shackleton.name}
+        status={SITE_MARKERS.shackleton.status}
+        onSelect={() => onSelectSite("shackleton")}
+      />
+    </>
   );
 }
 
@@ -1317,36 +1524,27 @@ function NebulaHero({ visible }: { visible: boolean }) {
   const fallbackTex = useMemo(() => makeNebulaFallbackTexture(), []);
   const [tex, setTex] = useState<THREE.Texture | null>(fallbackTex);
 
-  // Load the Veil image imperatively (no Suspense throw). On success, swap in the
-  // image and invalidate once; on failure keep the fallback.
+  // Load the Veil image from the shared cache (warm from preload, no Suspense
+  // throw). On success swap in the image and invalidate once; on failure keep the
+  // procedural fallback. The cache OWNS the image — we never dispose it.
   useEffect(() => {
     let disposed = false;
-    let loaded: THREE.Texture | null = null;
-    new THREE.TextureLoader().load(
-      NEBULA_VEIL,
-      (t) => {
-        if (disposed) {
-          t.dispose();
-          return;
-        }
-        t.colorSpace = THREE.SRGBColorSpace;
-        loaded = t;
-        setTex(t);
-        invalidate();
-      },
-      undefined,
-      () => {
-        // Load failed → keep the procedural fallback (ADR-0004).
-      },
-    );
+    const t = loadCachedTexture(NEBULA_VEIL);
+    void preloadTexture(NEBULA_VEIL).then(() => {
+      if (disposed || !t.image) return; // failed ⇒ keep the procedural fallback
+      t.colorSpace = THREE.SRGBColorSpace;
+      t.needsUpdate = true;
+      setTex(t);
+      invalidate();
+    });
     return () => {
       disposed = true;
-      loaded?.dispose();
+      // The cache owns the Veil image — do NOT dispose it here.
     };
   }, [invalidate]);
 
-  // Dispose the procedural fallback on unmount (the loaded image is disposed by the
-  // loader effect's cleanup above).
+  // Dispose the procedural fallback we OWN on unmount (the Veil image is owned by
+  // the shared texture cache, which keeps it for the session).
   useEffect(() => () => fallbackTex?.dispose(), [fallbackTex]);
 
   // Toggling visibility under the demand loop must wake one frame so the change is
@@ -1394,17 +1592,17 @@ function NebulaHero({ visible }: { visible: boolean }) {
 
 // SkyBodies — the Sun (light emitter, both views) + the Moon globe (orbit-only,
 // the space-vista hero) + Earth (a distant marble, both views) + the clickable
-// lunar-base marker (orbit-only) + the nebula hero accent (orbit-only). The
+// site markers (orbit-only) + the nebula hero accent (orbit-only). The
 // starfield (SpaceEnvironment) shows in both.
-// `onBaseClick`, when provided, flips the app to surface view (the descent) when
-// the marker is clicked.
+// `onSelectSite`, when provided, selects that site AND flips to surface view (the
+// descent) when its orbit marker is clicked — the primary entry into the surface.
 export function SkyBodies({
   viewMode,
-  onBaseClick,
+  onSelectSite,
   sunRef,
 }: {
   viewMode: ViewMode;
-  onBaseClick?: () => void;
+  onSelectSite?: (site: SiteId) => void;
   // Shared ref to the Sun core disc, surfaced for the post-FX GodRays pass (#110).
   sunRef?: React.RefObject<THREE.Mesh>;
 }) {
@@ -1418,11 +1616,12 @@ export function SkyBodies({
         position={inOrbit ? ORBIT_SUN_POSITION : SUN_POSITION}
         coreRef={sunRef}
         showStreak={inOrbit}
+        occludeBehindMoon={inOrbit}
       />
       <MoonGlobe visible={inOrbit} />
       <NebulaHero visible={inOrbit} />
       <EarthBody visible viewMode={viewMode} />
-      {inOrbit && onBaseClick ? <LunarBaseMarker onSelect={onBaseClick} /> : null}
+      {inOrbit && onSelectSite ? <SiteMarkers onSelectSite={onSelectSite} /> : null}
     </>
   );
 }

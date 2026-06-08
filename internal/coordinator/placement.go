@@ -142,6 +142,10 @@ func (st *state) injectPlacement(ctx context.Context, placed []blueprint.PlacedT
 	st.placedTasks = append(st.placedTasks, placed...)
 	for _, p := range placed {
 		st.pos[p.Task.ID] = p.Pos
+		// Track the placed task's site (two-site lunar surface, epic 04) so its
+		// auction announces it and its TaskView is tagged, exactly like a startup
+		// task. A dragged placement carries no site today (empty ⇒ default site).
+		st.taskSite[p.Task.ID] = p.Task.SiteID
 	}
 
 	// Rebuild the Planner over the full task set (startup blueprint + all placed

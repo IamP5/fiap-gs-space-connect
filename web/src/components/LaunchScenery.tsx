@@ -27,6 +27,12 @@ import { MeshoptDecoder } from "three/examples/jsm/libs/meshopt_decoder.module.j
 import { mergeGeometries } from "three/examples/jsm/utils/BufferGeometryUtils.js";
 import { suppressRaycast } from "../lib/suppressRaycast";
 import { applyGltfTextureFidelity, polishGltfMaterials } from "../lib/textureFidelity";
+import {
+  LUNAR_SET_PIECES,
+  SCENE_UNITS_PER_METER,
+  SHACKLETON_SET_PIECES,
+  type SetPiece,
+} from "../lib/scene";
 import { CELESTIAL_BLOOM_LAYER } from "./Scene3D";
 
 // Self-contained loader + cache (mirrors Scene3D's loadGLTF): N references to the
@@ -47,7 +53,10 @@ sceneryLoader.setDRACOLoader(sceneryDraco);
 sceneryLoader.setMeshoptDecoder(MeshoptDecoder);
 const sceneryCache = new Map<string, Promise<THREE.Group>>();
 
-function loadScenery(url: string): Promise<THREE.Group> {
+// Exported so the preload pass (lib/assets.ts) can WARM this exact module-level
+// cache — preloading a set-piece GLB through here means the surface reuses the
+// already-decoded model with zero rework (Epic 05 P1).
+export function loadScenery(url: string): Promise<THREE.Group> {
   let p = sceneryCache.get(url);
   if (!p) {
     p = new Promise<THREE.Group>((resolve, reject) => {
@@ -72,88 +81,19 @@ function loadScenery(url: string): Promise<THREE.Group> {
 
 type Vec3 = [number, number, number];
 
-type SetPiece = {
-  key: string;
-  modelRef: string;
-  position: Vec3;
-  rotation?: Vec3;
-  // Target for the model's LARGEST bounding-box dimension, in world units. The
-  // NASA glTFs have arbitrary native units + off-origin pivots, so a fixed scale
-  // scalar is meaningless (one model fills the sky, another is a speck). We fit
-  // each model to this size at load (see fitAndSeat) so presence is predictable
-  // regardless of the source units. The fallback box uses the same number.
-  fit: number;
-  // Tint for the primitive fallback shown until/if the glTF loads.
-  fallbackColor: string;
-  // Primitive used for the ADR-0004 fallback, both sized to the model's `fit`
-  // bbox. "box" (default) suits structures; "capsule" gives the astronaut a
-  // human-ish silhouette while the glTF loads (or forever, if it fails).
-  fallbackShape?: "box" | "capsule";
-};
+// SetPiece + the per-site arrays (LUNAR_SET_PIECES / SHACKLETON_SET_PIECES) now
+// live in lib/scene (pure data, no three) so SITE_FRAMES can carry each site's
+// `pieces` list; LaunchScenery just renders the active site's pieces (Epic 04 P2).
 
-// Set-pieces parked along the FAR edge of the ~20-unit worksite (GROUND_SPAN=20,
-// terrain reaches ±16), spread on x so they read as a launch complex on the
-// horizon without crowding the active worksite. `fit` keeps the towers tall but
-// no longer dominating: an ~8-unit launcher/gantry reads as a backdrop next to
-// the ~2-unit dome, the crawler sits low and wide, the lander is smallest.
-const SET_PIECES: SetPiece[] = [
-  {
-    key: "crawler",
-    modelRef: "/assets/models/nasa_crawler.glb",
-    position: [-13, 0, -13],
-    rotation: [0, Math.PI / 5, 0],
-    fit: 4.5,
-    fallbackColor: "#5a5a4e",
-  },
-  {
-    key: "mobile-launcher",
-    modelRef: "/assets/models/nasa_mobile_launcher.glb",
-    position: [-5, 0, -15],
-    rotation: [0, 0, 0],
-    fit: 8,
-    fallbackColor: "#6b6b72",
-  },
-  {
-    key: "gantry",
-    modelRef: "/assets/models/nasa_gantry.glb",
-    position: [6, 0, -14],
-    rotation: [0, -Math.PI / 8, 0],
-    fit: 7,
-    fallbackColor: "#7a4a3a",
-  },
-  {
-    key: "lander",
-    modelRef: "/assets/models/nasa_lunar_module.glb",
-    position: [13, 0, -12],
-    rotation: [0, -Math.PI / 4, 0],
-    fit: 3,
-    fallbackColor: "#b8a070",
-  },
-  // Scale props (#89, rescoped). NASA-PD filler that gives the worksite human
-  // scale: a small Base Station (NASA/Ames) tucked just inside the far complex
-  // and an EVA Astronaut (NASA) standing beside it. The astronaut's `fit`
-  // (~0.9 world units tall) is the human-scale anchor against the ~8-unit
-  // towers. Both are draco-compressed (load via the vendored /draco/ decoder)
-  // and insignia-stripped — the US flags + NASA meatball were painted out of
-  // the suit texture (see CREDITS.md).
-  {
-    key: "base-station",
-    modelRef: "/assets/models/base-station.glb",
-    position: [9, 0, -9],
-    rotation: [0, Math.PI / 6, 0],
-    fit: 1.8,
-    fallbackColor: "#8c8c84",
-  },
-  {
-    key: "astronaut",
-    modelRef: "/assets/models/astronaut.glb",
-    position: [7.4, 0, -8],
-    rotation: [0, -Math.PI / 3, 0],
-    fit: 0.9,
-    fallbackColor: "#d9d9d9",
-    fallbackShape: "capsule",
-  },
-];
+// Every distinct set-piece GLB URL across BOTH sites, de-duplicated (Shackleton
+// reuses the SAME GLBs as lunar — no new assets), so the preload manifest
+// (lib/assets.ts) warms every model the surface can show and can't drift from the
+// actual scenery (Epic 05 P1).
+export const SCENERY_MODEL_REFS: readonly string[] = Array.from(
+  new Set(
+    [...LUNAR_SET_PIECES, ...SHACKLETON_SET_PIECES].map((p) => p.modelRef),
+  ),
+);
 
 // fitAndSeat normalizes a loaded model in place: scale its largest dimension to
 // `fit` world units, recenter on x/z, and seat its base at y=0 — so the wrapping
@@ -180,12 +120,16 @@ function fitAndSeat(obj: THREE.Object3D, fit: number) {
 // must render IDENTICALLY (same silhouette, placement, materials).
 //
 // The model arrives already fitAndSeat-normalized, i.e. its own transform (scale
-// + x/z recenter + base-at-y=0 lift) lives on the ROOT. We bake every child's
-// world transform into a cloned geometry but FIRST strip the root's own matrix
-// out of it — the merged mesh is parented under the SAME wrapping
-// <group position rotation>, which already expects the normalized (root-local)
-// frame. So each child geometry is baked by `rootInverse * child.matrixWorld`,
-// putting it exactly where the cloned tree sat under that group.
+// + x/z recenter + base-at-y=0 lift) lives on the ROOT. We bake every child's FULL
+// world matrix into a cloned geometry so that normalization (the fit SCALE + the
+// recenter/seat) is frozen into the merged buffers — the merged group is then
+// parented under the wrapping <group position rotation> which only adds placement.
+// (A prior version stripped the root matrix back off via `rootInverse`, which
+// silently CANCELLED fitAndSeat's scale + recenter — pieces rendered at their raw
+// native size + off-origin pivot. That was masked only because the lunar GLBs are
+// authored near unit scale; raw NASA models like the habitat/astronaut, 70–380
+// native units, then rendered enormous. Baking the full world matrix fixes it so
+// realMeters actually governs on-screen size for EVERY piece — Epic 04 P0's intent.)
 //
 // Geometries are bucketed by (material identity, attribute signature). Material
 // identity keeps materials pixel-identical (one output mesh per material).
@@ -201,10 +145,10 @@ function mergeSetPiece(root: THREE.Object3D): {
   group: THREE.Group;
   geometries: THREE.BufferGeometry[];
 } {
-  // Freeze the normalized transforms into world matrices, then peel the root's
-  // own matrix back off each child so the bake lands in root-local space.
+  // Freeze the normalized transforms (fitAndSeat's root scale + recenter + every
+  // child's own transform) into world matrices, so the bake captures the model at
+  // its NORMALIZED size/placement — not the raw native frame.
   root.updateMatrixWorld(true);
-  const rootInverse = new THREE.Matrix4().copy(root.matrixWorld).invert();
   const local = new THREE.Matrix4();
 
   // Bucket key → { material, geometries[] }. Insertion order is preserved so the
@@ -224,8 +168,9 @@ function mergeSetPiece(root: THREE.Object3D): {
       ? mesh.material
       : [mesh.material];
 
-    // Bake child → root-local: rootInverse * childWorld.
-    local.copy(mesh.matrixWorld).premultiply(rootInverse);
+    // Bake the child's FULL normalized world matrix (includes fitAndSeat's root
+    // scale + recenter/seat), so the merged geometry renders at the fitted size.
+    local.copy(mesh.matrixWorld);
 
     for (let g = 0; g < materials.length; g++) {
       const material = materials[g];
@@ -360,26 +305,33 @@ function SceneryPiece({ piece }: { piece: SetPiece }) {
     };
   }, [merged]);
 
+  // The literal scene size (Epic 04 P0): real meters → scene units via the one
+  // fixed scale. Drives BOTH the fitAndSeat target for the loaded glTF and the
+  // primitive fallback below, so the fallback occupies the exact footprint the
+  // real model will (ADR-0004 fallback must read at the same scale).
+  const sceneSize = piece.realMeters * SCENE_UNITS_PER_METER;
+
   // Primitive fallback (ADR-0004) approximating the normalized model: a slim
-  // upright volume whose height is `fit` (towers read tall, the crawler low-ish),
-  // seated on the ground. `fallbackShape` picks the silhouette: a box for
-  // structures, a capsule for the astronaut. Both are sized to the model's `fit`
-  // bbox so the proxy occupies the same footprint until/if the glTF loads.
+  // upright volume whose height is `sceneSize` (towers read tall, the crawler
+  // low-ish), seated on the ground. `fallbackShape` picks the silhouette: a box
+  // for structures, a capsule for the astronaut. Both are sized to the model's
+  // computed scene size so the proxy occupies the same footprint until/if the
+  // glTF loads.
   const fallbackSize = useMemo<Vec3>(
-    () => [piece.fit * 0.6, piece.fit, piece.fit * 0.6],
-    [piece.fit],
+    () => [sceneSize * 0.6, sceneSize, sceneSize * 0.6],
+    [sceneSize],
   );
   const fallbackGeo = useMemo(() => {
     if (piece.fallbackShape === "capsule") {
       // CapsuleGeometry(radius, length, …): total height = length + 2·radius, so
-      // length = fit − 2·radius keeps the overall height at `fit`. A slim radius
-      // reads as a standing figure.
-      const radius = piece.fit * 0.2;
-      const length = Math.max(piece.fit - 2 * radius, 0.001);
+      // length = sceneSize − 2·radius keeps the overall height at sceneSize. A
+      // slim radius reads as a standing figure.
+      const radius = sceneSize * 0.2;
+      const length = Math.max(sceneSize - 2 * radius, 0.001);
       return new THREE.CapsuleGeometry(radius, length, 4, 8);
     }
     return new THREE.BoxGeometry(...fallbackSize);
-  }, [piece.fallbackShape, piece.fit, fallbackSize]);
+  }, [piece.fallbackShape, sceneSize, fallbackSize]);
   useEffect(() => () => fallbackGeo.dispose(), [fallbackGeo]);
 
   useEffect(() => {
@@ -394,8 +346,9 @@ function SceneryPiece({ piece }: { piece: SetPiece }) {
         const obj = suppressRaycast(g.clone(true));
         // Normalize the raw NASA model (arbitrary units / off-origin pivot) to a
         // predictable size, centered on x/z and seated on y=0, so the wrapping
-        // group's position drops it onto the ground at a sensible scale.
-        fitAndSeat(obj, piece.fit);
+        // group's position drops it onto the ground at its LITERAL real-world
+        // scale (Epic 04 P0).
+        fitAndSeat(obj, sceneSize);
         // Texture fidelity sweep (#100): max anisotropy + per-channel colourSpace
         // + crisp data-map mip filtering. Runs BEFORE mergeSetPiece, which buckets
         // by material identity and reuses these same (now-corrected) materials.
@@ -415,7 +368,7 @@ function SceneryPiece({ piece }: { piece: SetPiece }) {
     return () => {
       disposed = true;
     };
-  }, [piece.modelRef, piece.fit, invalidate, gl]);
+  }, [piece.modelRef, sceneSize, invalidate, gl]);
 
   if (!scene) {
     // Box fallback: parked at the set-piece position, raised by half its height
@@ -445,13 +398,15 @@ function SceneryPiece({ piece }: { piece: SetPiece }) {
   );
 }
 
-// LaunchScenery — ONE component wrapping every static set-piece. Renders nothing
-// snapshot-dependent and never animates, so the demand loop returns to 0 fps once
-// the models have loaded.
-export function LaunchScenery() {
+// LaunchScenery — ONE component wrapping the ACTIVE site's static set-pieces
+// (Epic 04 P2). Renders nothing snapshot-dependent and never animates. The two
+// sites reuse the same GLBs but compose/retint them differently (see
+// LUNAR_SET_PIECES / SHACKLETON_SET_PIECES in lib/scene); the active site's
+// `pieces` list is threaded down from SceneContents via the site frame.
+export function LaunchScenery({ pieces }: { pieces: SetPiece[] }) {
   return (
     <group>
-      {SET_PIECES.map((piece) => (
+      {pieces.map((piece) => (
         <SceneryPiece key={piece.key} piece={piece} />
       ))}
     </group>

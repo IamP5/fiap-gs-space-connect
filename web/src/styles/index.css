@@ -25,6 +25,17 @@
   --signal-down: #e74c3c;
   --signal-idle: #9aa4b2;
 
+  /* ---- game-UI HUD tokens (Epic 06) ----
+     The floating HUD reskin: solid, beveled game-UI panels with a cyan primary
+     accent and an amber warning accent. Distinct from the functional telemetry
+     signals above — these tint HUD chrome (borders, highlights, glyphs), not
+     live data. --panel-bg is opaque (a hair richer than canvas-night-soft so the
+     panels read as solid plates over the scene); --panel-edge is the bevel/border. */
+  --hud-accent: #3fd0e6;
+  --hud-warn: #f5a623;
+  --panel-bg: #0d0f14;
+  --panel-edge: #2b313c;
+
   /* ---- type families ---- */
   --display: "D-DIN-Bold", "Arial Narrow", Arial, Verdana, sans-serif;
   --ui: "D-DIN", "Inter", Arial, Verdana, sans-serif;

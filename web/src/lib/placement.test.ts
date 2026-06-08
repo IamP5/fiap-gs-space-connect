@@ -7,11 +7,13 @@
 
 import { describe, expect, it } from "vitest";
 import {
+  dragDeltaToRadians,
   footprintOf,
   ghostTasks,
   placeBlueprintControl,
   placeRel,
   placementValid,
+  ROTATE_RADIANS_PER_PIXEL,
   type CatalogTask,
   type Footprint,
 } from "./placement";
@@ -140,5 +142,25 @@ describe("placeBlueprintControl — per-placement build mode (bh-08c)", () => {
     expect(ctl.mode).toBe("replay");
     expect(ctl.cmd).toBe("placeBlueprint");
     expect(ctl.blueprint_id).toBe("solar-array");
+  });
+});
+
+describe("dragDeltaToRadians — right-drag-rotate gesture (Epic 06 P1, #151)", () => {
+  it("is zero with no horizontal movement", () => {
+    expect(dragDeltaToRadians(0)).toBe(0);
+  });
+
+  it("maps a rightward drag to a positive (clockwise) rotation delta", () => {
+    expect(dragDeltaToRadians(100)).toBeCloseTo(100 * ROTATE_RADIANS_PER_PIXEL);
+    expect(dragDeltaToRadians(100)).toBeGreaterThan(0);
+  });
+
+  it("is linear and sign-symmetric (left drag mirrors right drag)", () => {
+    expect(dragDeltaToRadians(-250)).toBeCloseTo(-dragDeltaToRadians(250));
+  });
+
+  it("sweeps a little over a full turn across a screen-width drag (~800px)", () => {
+    expect(dragDeltaToRadians(800)).toBeGreaterThan(2 * Math.PI);
+    expect(dragDeltaToRadians(800)).toBeLessThan(3 * Math.PI);
   });
 });

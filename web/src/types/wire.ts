@@ -58,6 +58,10 @@ export type RoverView = {
   alive: boolean;
   load: number;
   task?: string; // task id the rover currently holds, if any
+  // Worksite the rover is stationed at (two-site lunar surface, epic 04). The
+  // dashboard slices rovers by site so each surface view shows only its own swarm.
+  // Absent ⇒ the single default site (back-compat). Mirrors wire.go RoverView.Site.
+  site?: string;
 };
 
 export type TaskView = {
@@ -69,6 +73,10 @@ export type TaskView = {
   lease_expiry?: number;
   version: number;
   deps?: string[];
+  // Worksite this task belongs to (two-site lunar surface, epic 04). The dashboard
+  // slices tasks by site so each surface view shows only its own structure. Absent
+  // ⇒ the single default site (back-compat). Mirrors wire.go TaskView.Site.
+  site?: string;
   // Accumulated, ordered Build spec (ADR-0006). Absent ⇒ the renderer falls back
   // to the deterministic `tierOf` primitive, so the field is purely additive.
   build_spec?: BuildOp[];

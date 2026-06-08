@@ -4,11 +4,11 @@
 // status halos (idle/bidding/working/dead), lease beams from each rover to the
 // task it holds, and the habitat dome rising block-by-block as tasks complete.
 // There is NO client-side simulation — every mesh position is derived from the
-// authoritative snapshot via lib/scene.ts, so neither renderer can lie about
+// authoritative snapshot via lib/scene.ts, so the scene can never lie about
 // World Model state. Choreography beats (lib/choreography.ts) only DECORATE.
 //
-// Drop-in swap for WorldCanvas: same `{ snapshot, selected, onPick }` contract,
-// so App can toggle between the 3D scene and the 2D fallback.
+// The sole renderer of the worksite, on the `{ snapshot, selected, onPick }`
+// contract App threads in.
 //
 // PERFORMANCE MODEL (the dashboard must run light on a projector laptop):
 //   - frameloop="demand": the render loop is IDLE unless something changed. We
@@ -38,7 +38,7 @@
 
 import { memo, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
 import { Canvas, useFrame, useThree, type ThreeEvent } from "@react-three/fiber";
-import { ContactShadows, Instance, Instances, Line, OrbitControls } from "@react-three/drei";
+import { ContactShadows, Html, Instance, Instances, Line, OrbitControls } from "@react-three/drei";
 import { SpaceEnvironment, STARFIELD_PARALLAX_NAME } from "./SpaceEnvironment";
 import { SkyBodies } from "./SkyBodies";
 import {
@@ -62,15 +62,21 @@ import type { RoverView, Snapshot, TaskView, Vec2 } from "../types/wire";
 import { batteryPercent } from "../lib/format";
 import { suppressRaycast } from "../lib/suppressRaycast";
 import { applyGltfTextureFidelity, polishGltfMaterials } from "../lib/textureFidelity";
+import { loadTexture, preloadTexture } from "../lib/textureCache";
 import {
+  CRATER_OUTER_RADIUS,
   EARTH_POSITION,
   GROUND_SPAN,
   MOON_POSITION,
   ORBIT_SUN_POSITION,
-  SUN_POSITION,
+  REAL_METERS,
+  SCENE_UNITS_PER_METER,
+  SITE_FRAMES,
   type SceneMap,
+  type SiteFrame,
+  craterProfile,
   isBuilt,
-  sceneMap,
+  siteMap,
   tierHeight,
   tierOf,
 } from "../lib/scene";
@@ -92,7 +98,7 @@ import {
   type PrimitiveDesc,
   interpretBuildSpec,
 } from "../lib/buildspec";
-import { type Ghost, footprintOf } from "../lib/placement";
+import { type Ghost, dragDeltaToRadians, footprintOf } from "../lib/placement";
 import {
   IDLE_DELAY_MS,
   ORBIT_EXPOSURE_SCALE,
@@ -131,10 +137,10 @@ export const CELESTIAL_BLOOM_LAYER = 12;
 // reference) so it never re-triggers the memoized effect across renders.
 const CHROMATIC_OFFSET = new THREE.Vector2(0.0006, 0.0012);
 
-// Distance from the origin worksite to the sun (#104). The sun's orthographic
-// shadow camera looks from SUN_POSITION toward the origin, so its near/far must
-// bracket the worksite slab at this depth along the sun ray.
-const SUN_POSITION_LEN = Math.hypot(SUN_POSITION[0], SUN_POSITION[1], SUN_POSITION[2]);
+// The sun's orthographic shadow camera looks from the (per-site) surface sun
+// position toward the origin worksite; its near/far bracket the worksite slab at
+// the sun's distance along that ray. The distance is now computed PER SITE inside
+// SpaceLights (each site has its own sunDir), so this is no longer a module const.
 
 // Half-extent of the sun shadow-camera frustum (#104) — clamps the 2048 map to
 // the ±25-unit worksite (GROUND_SPAN=20 + margin) so resolution isn't wasted on
@@ -185,24 +191,49 @@ function EnvironmentGrade({ onSurface }: { onSurface: boolean }) {
 function SpaceLights({
   onSurface,
   lightRef,
+  surfaceSunDir,
+  surfaceSunIntensity,
+  crater = false,
 }: {
   onSurface: boolean;
   lightRef: React.RefObject<THREE.DirectionalLight>;
+  // Per-site SURFACE key-light direction + intensity (Epic 04 P2). Lunar: a high
+  // bright key; Shackleton: a low grazing pole sun that reads dimmer. The orbit Sun
+  // *body* light stays at the global ORBIT_SUN_POSITION (the two views never co-
+  // render). The shadow-camera near/far track the chosen sun's distance so the
+  // worksite slab stays inside the frustum at either site's sun angle.
+  surfaceSunDir: [number, number, number];
+  surfaceSunIntensity: number;
+  // Shackleton crater fill: the near-horizontal pole sun is OCCLUDED by the carved
+  // rim, so the bowl floor (where the outpost sits) is in shadow and the grazing key
+  // light can't reach it. Lift the cool ambient/hemisphere FILL when on the crater
+  // floor so the shadowed-floor relief + outpost read as cold dark rock — the way
+  // reflected light picks out a permanently-shadowed crater (SVS 4716) — without
+  // flattening the dramatic sunlit rim ridge (still lit by the directional key).
+  crater?: boolean;
 }) {
+  const sunPos = onSurface ? surfaceSunDir : ORBIT_SUN_POSITION;
+  const sunLen = Math.hypot(sunPos[0], sunPos[1], sunPos[2]);
+  const craterFill = onSurface && crater;
   return (
     <>
-      <ambientLight color="#0e1014" intensity={onSurface ? 0.12 : 0.01} />
-      <hemisphereLight args={["#ffe9cc", "#1a1814", onSurface ? 0.25 : 0.0]} />
+      <ambientLight
+        color={craterFill ? "#1a2230" : "#0e1014"}
+        intensity={onSurface ? (craterFill ? 0.34 : 0.12) : 0.01}
+      />
+      <hemisphereLight
+        args={[craterFill ? "#aebfd6" : "#ffe9cc", "#1a1814", onSurface ? (craterFill ? 0.6 : 0.25) : 0.0]}
+      />
       <directionalLight
         ref={lightRef}
-        position={onSurface ? SUN_POSITION : ORBIT_SUN_POSITION}
+        position={sunPos}
         color="#ffffff"
-        intensity={1.9}
+        intensity={onSurface ? surfaceSunIntensity : 1.9}
         castShadow
         shadow-mapSize-width={2048}
         shadow-mapSize-height={2048}
-        shadow-camera-near={SUN_POSITION_LEN - SHADOW_WORKSITE_HALF - 35}
-        shadow-camera-far={SUN_POSITION_LEN + SHADOW_WORKSITE_HALF + 35}
+        shadow-camera-near={sunLen - SHADOW_WORKSITE_HALF - 35}
+        shadow-camera-far={sunLen + SHADOW_WORKSITE_HALF + 35}
         shadow-camera-left={-SHADOW_WORKSITE_HALF}
         shadow-camera-right={SHADOW_WORKSITE_HALF}
         shadow-camera-top={SHADOW_WORKSITE_HALF}
@@ -319,11 +350,25 @@ function roverHaloColor(r: RoverView): string {
 // The one configured rover model. Self-hosted, conditioned + Draco-compressed by
 // scripts/condition-asset.mjs (recentered, fit-to-unit). A missing file just
 // keeps the primitive fallback below.
-const ROVER_MODEL_REF = "/assets/models/rassor_rover.glb";
-// Target world size for the model's LARGEST bbox dimension. Matches the visible
-// footprint of the primitive fallback (~1 unit), so the realistic body and the
-// fallback read at the same scale under the same hit-proxy/halos.
+// Exported so the preload manifest (lib/assets.ts) references the SAME URL the
+// renderer uses — the manifest can't drift from the component (Epic 05 P1).
+export const ROVER_MODEL_REF = "/assets/models/rassor_rover.glb";
+// The native (authored) size the rover body, primitive fallback, hit-proxy, and
+// halos were all laid out at — the model's LARGEST bbox dim fits to this, and the
+// primitive box/mast/wheels + hit sphere + halo rings are all proportioned around
+// it. We DON'T retune those constants individually; instead the whole rover group
+// is scaled by ROVER_SCALE below so its real size is literal (Epic 04 P0) while
+// the body still exactly fills its hit-proxy (ADR-0004 no-missed-click).
 const ROVER_MODEL_FIT = 1.15;
+const ROVER_BASE_SIZE = ROVER_MODEL_FIT;
+
+// The LITERAL scene size of a rover (2.5 m real → 0.3 scene units), from the one
+// fixed real-meters→scene-units scale. Both the visible body AND the invisible
+// hit-proxy sphere derive from this (the whole rover group is scaled by
+// ROVER_SCALE), so a click can never miss the rover the user sees — the proxy and
+// the body scale together (Epic 04 P0; ADR-0004).
+const ROVER_SCENE_SIZE = REAL_METERS.rover * SCENE_UNITS_PER_METER;
+const ROVER_SCALE = ROVER_SCENE_SIZE / ROVER_BASE_SIZE;
 
 // fitAndSeatRover normalizes a loaded model in place (mirrors LaunchScenery's
 // fitAndSeat): scale its largest dimension to `fit`, recenter on x/z, and seat
@@ -886,10 +931,16 @@ function Rover3D({ rover, map, geo, selected, beats, onPick }: Rover3DProps) {
         : SIGNAL_DOWN;
 
   return (
-    <group position={[p.x, p.y, p.z]}>
+    // The group is PLACED by map.at (world position) and SCALED to the rover's
+    // literal real-world size (Epic 04 P0): every child — the hit-proxy, the body,
+    // the halos/rings, dust, battery — scales together by ROVER_SCALE, so the
+    // proxy still exactly covers the visible body (ADR-0004 no-missed-click) and
+    // the affordances stay proportional to the (now real-sized) rover.
+    <group position={[p.x, p.y, p.z]} scale={ROVER_SCALE}>
       {/* Invisible, generous hit-proxy. Larger than the visible body so clicks
-          reliably land; shares this group's transform (= map.at), so the raycast
-          hit and the rendered rover are positioned by the exact same math. */}
+          reliably land; shares this group's transform (= map.at · ROVER_SCALE), so
+          the raycast hit and the rendered rover are positioned + sized by the exact
+          same math. */}
       <mesh
         geometry={geo.hit}
         position={[0, 0.45, 0]}
@@ -1069,7 +1120,10 @@ gltfLoader.setDRACOLoader(dracoLoader);
 gltfLoader.setMeshoptDecoder(MeshoptDecoder);
 const gltfCache = new Map<string, Promise<THREE.Group>>();
 
-function loadGLTF(url: string): Promise<THREE.Group> {
+// Exported so the preload pass (lib/assets.ts) can WARM this exact module-level
+// cache — preloading a rover/spec GLB through here means the descent reuses the
+// already-decoded model with zero rework (Epic 05 P1).
+export function loadGLTF(url: string): Promise<THREE.Group> {
   let p = gltfCache.get(url);
   if (!p) {
     p = new Promise<THREE.Group>((resolve, reject) => {
@@ -1143,8 +1197,6 @@ function SpecPrimitive({
       { url: desc.aoMap, key: "aoMap", colorSpace: THREE.NoColorSpace },
     ];
     let disposed = false;
-    const loaded: THREE.Texture[] = [];
-    const loader = new THREE.TextureLoader();
     for (const slot of slots) {
       // A slot with no URL is explicitly cleared so a re-render that DROPS a map
       // (this mesh's index now folds a different op) doesn't keep a stale texture.
@@ -1155,40 +1207,31 @@ function SpecPrimitive({
         }
         continue;
       }
-      loader.load(
-        slot.url,
-        (t) => {
-          if (disposed) {
-            t.dispose();
-            return;
-          }
-          t.colorSpace = slot.colorSpace;
-          loaded.push(t);
-          if (matRef.current) {
-            matRef.current[slot.key] = t;
-            matRef.current.needsUpdate = true;
-            invalidate(); // wake the demand loop so the texture shows
-          }
-        },
-        undefined,
-        () => {
-          // Missing/failed texture ⇒ keep the flat color for this channel
-          // (fallback, never crash).
-        },
-      );
+      // Shared URL-keyed cache (textureCache): one decoded texture per URL, shared
+      // with the preload pass so the descent shows no pop-in. The cache OWNS the
+      // texture (we never dispose it). colorSpace is per-URL config applied here.
+      const url = slot.url;
+      const t = loadTexture(url);
+      t.colorSpace = slot.colorSpace;
+      void preloadTexture(url).then(() => {
+        if (disposed || !matRef.current) return;
+        if (!t.image) return; // failed load ⇒ keep the flat colour (ADR-0004)
+        matRef.current[slot.key] = t;
+        matRef.current.needsUpdate = true;
+        invalidate(); // wake the demand loop so the texture shows
+      });
     }
     const mat = matRef.current;
     return () => {
       disposed = true;
-      // Detach our textures from the material BEFORE disposing them, so a
-      // re-render never leaves a freed texture referenced on the slot.
-      for (const t of loaded) {
-        if (mat) {
-          for (const slot of slots) {
-            if (mat[slot.key] === t) mat[slot.key] = null;
-          }
+      // The cache owns the textures (shared, session-lived) — do NOT dispose them.
+      // Detach our textures from the material so a re-render never leaves a stale
+      // slot pointing at a texture this op no longer uses.
+      if (mat) {
+        for (const slot of slots) {
+          if (!slot.url) continue;
+          if (mat[slot.key] === loadTexture(slot.url)) mat[slot.key] = null;
         }
-        t.dispose();
       }
     };
   }, [desc.map, desc.normalMap, desc.roughnessMap, desc.aoMap, invalidate]);
@@ -1469,7 +1512,9 @@ function TaskBlock({
 
 // The CC0 regolith PBR set (Poly Haven "Moon 01", 512 jpg) tiled over the ground.
 // Self-hosted under web/public so it works offline; see public/assets/CREDITS.md.
-const REGOLITH_MAPS: {
+// Exported so the preload manifest (lib/assets.ts) references the SAME terrain
+// URLs the renderer tiles — the manifest can't drift from the component (Epic 05 P1).
+export const REGOLITH_MAPS: {
   url: string;
   key: "map" | "normalMap" | "roughnessMap" | "aoMap";
   colorSpace: THREE.ColorSpace;
@@ -1534,23 +1579,33 @@ function valueNoise2(x: number, y: number): number {
 // by the snapshot. Subtle deterministic vertex displacement gives a regolith
 // feel, and a tiling CC0 regolith PBR set (issue #53) clothes it. A missing/
 // failed texture leaves the flat fallback color, so the scene never breaks.
-function LunarTerrain() {
+function LunarTerrain({ terrainTint, crater = false }: { terrainTint: string; crater?: boolean }) {
   const matRef = useRef<THREE.MeshStandardMaterial>(null);
   const gl = useThree((s) => s.gl);
   const invalidate = useThree((s) => s.invalidate);
 
   const geom = useMemo(() => {
-    const g = new THREE.PlaneGeometry(GROUND_VISUAL, GROUND_VISUAL, 96, 96);
+    // Shackleton's carved crater needs a finer mesh than the flat lunar plain: at
+    // 96 segments a 700-unit plane is ~7.3 units/quad, too coarse for a clean rim
+    // crest. Bump to 220 (≈3.2 units/quad) ONLY when the crater is on — still a
+    // single mesh / single draw call (the only hygiene budget post-ADR-0004), and
+    // the one-time rebuild happens behind the site-swap dust veil.
+    const seg = crater ? 220 : 96;
+    const g = new THREE.PlaneGeometry(GROUND_VISUAL, GROUND_VISUAL, seg, seg);
     const pos = g.attributes.position as THREE.BufferAttribute;
     for (let i = 0; i < pos.count; i++) {
       const x = pos.getX(i);
       const y = pos.getY(i);
+      // Plane-local (x, y) maps to scene (x, -z) after the -90° rotation, so
+      // hypot(x, y) is the scene-radius from the worksite origin — the same radius
+      // the crater profile (and the worksite recenter) use.
+      const r = Math.hypot(x, y);
       // Deterministic pseudo-noise (sines): fine regolith ripple everywhere, plus a
       // long, low rolling swell that fades IN with distance from the worksite so the
       // far plain undulates toward the horizon while the center (where rovers/tasks
       // sit at y=0) stays flat. No physics, no asset.
       const fine = Math.sin(x * 0.6) * Math.cos(y * 0.55) * 0.18 + Math.sin(x * 1.7 + y) * 0.05;
-      const swellAmp = THREE.MathUtils.smoothstep(Math.hypot(x, y), 30, 200) * 4.0;
+      const swellAmp = THREE.MathUtils.smoothstep(r, 30, 200) * 4.0;
       const swell = Math.sin(x * 0.018 + 1.3) * Math.cos(y * 0.021) * swellAmp;
       // High-frequency micro-relief octave (#105): two value-noise layers near the
       // mesh's Nyquist limit (~7.3 units/vertex) break the smooth sine dunes into
@@ -1558,56 +1613,52 @@ function LunarTerrain() {
       // Centered to ±1 so it adds no net rise — rovers/tasks at y=0 stay grounded.
       // Slightly attenuated right under the worksite (<6 units) to keep that floor
       // readable, then full strength outward across the visible plain.
-      const microMask = 0.55 + 0.45 * THREE.MathUtils.smoothstep(Math.hypot(x, y), 4, 12);
+      const microMask = 0.55 + 0.45 * THREE.MathUtils.smoothstep(r, 4, 12);
       const micro =
         ((valueNoise2(x * 0.31, y * 0.31) - 0.5) * 0.16 +
           (valueNoise2(x * 0.73 + 19.3, y * 0.73 - 7.1) - 0.5) * 0.07) *
         microMask;
-      pos.setZ(i, fine + swell + micro);
+      // Shackleton crater (carved at the worksite origin — siteMap recenters the
+      // worksite there). Suppress the rolling swell INSIDE the rim so it can't
+      // corrugate the clean bowl wall; keep fine ripple + micro grain on the floor
+      // and walls. The crater delta lifts a rim ring around the y≈0 floor.
+      const swellTerm = crater ? (r > CRATER_OUTER_RADIUS ? swell : 0) : swell;
+      pos.setZ(i, fine + swellTerm + micro + (crater ? craterProfile(r) : 0));
     }
     g.computeVertexNormals();
     // aoMap reads from uv2; PlaneGeometry's uv works directly as the second set.
     if (g.attributes.uv && !g.attributes.uv2) g.setAttribute("uv2", g.attributes.uv);
     return g;
-  }, []);
+  }, [crater]);
   useEffect(() => () => geom.dispose(), [geom]);
 
   useEffect(() => {
     let disposed = false;
-    const loaded: THREE.Texture[] = [];
     const maxAniso = gl.capabilities.getMaxAnisotropy();
-    const loader = new THREE.TextureLoader();
     for (const m of REGOLITH_MAPS) {
-      loader.load(
-        m.url,
-        (t) => {
-          if (disposed) {
-            t.dispose();
-            return;
-          }
-          // Each map is loaded fresh here (no shared cache), so we own it and may
-          // mutate wrap/repeat directly before disposing it on unmount.
-          t.colorSpace = m.colorSpace;
-          t.wrapS = THREE.RepeatWrapping;
-          t.wrapT = THREE.RepeatWrapping;
-          t.repeat.set(REGOLITH_REPEAT, REGOLITH_REPEAT);
-          t.anisotropy = maxAniso;
-          loaded.push(t);
-          if (matRef.current) {
-            matRef.current[m.key] = t;
-            matRef.current.needsUpdate = true;
-            invalidate(); // wake the demand loop so the texture shows
-          }
-        },
-        undefined,
-        () => {
-          // Missing/failed map ⇒ keep the flat fallback for this channel.
-        },
-      );
+      // Shared URL-keyed cache (textureCache): preload and the renderer share ONE
+      // decoded texture so the descent shows no pop-in. The cache owns the texture
+      // (we never dispose it). Per-URL config (colorSpace/wrap/repeat/anisotropy) is
+      // applied here — regolith has a single consumer, so this is safe & idempotent.
+      const t = loadTexture(m.url);
+      t.colorSpace = m.colorSpace;
+      t.wrapS = THREE.RepeatWrapping;
+      t.wrapT = THREE.RepeatWrapping;
+      t.repeat.set(REGOLITH_REPEAT, REGOLITH_REPEAT);
+      t.anisotropy = maxAniso;
+      // Settle once the (possibly already-warm) load completes, then attach + paint.
+      // If it failed, the texture stays empty and the flat fallback colour holds.
+      void preloadTexture(m.url).then(() => {
+        if (disposed || !matRef.current) return;
+        if (!t.image) return; // failed load ⇒ keep the flat fallback (ADR-0004)
+        matRef.current[m.key] = t;
+        matRef.current.needsUpdate = true;
+        invalidate(); // wake the demand loop so the texture shows
+      });
     }
     return () => {
+      // The cache owns the textures (shared, session-lived) — do NOT dispose here.
       disposed = true;
-      for (const t of loaded) t.dispose();
     };
   }, [gl, invalidate]);
 
@@ -1616,9 +1667,106 @@ function LunarTerrain() {
     // the rovers and domes. It never casts (it's the floor), so castShadow is off.
     <mesh rotation={[-Math.PI / 2, 0, 0]} raycast={() => null} receiveShadow>
       <primitive object={geom} attach="geometry" />
-      {/* Flat #3a3a40 is the fallback until/if the regolith maps load. */}
-      <meshStandardMaterial ref={matRef} color="#8a8a8e" roughness={1} metalness={0} />
+      {/* Per-site tint (Epic 04 P2): multiplies the regolith map once loaded (and
+          is the flat fallback colour before/if it fails) — lunar reads warm grey,
+          Shackleton darker/cooler. */}
+      <meshStandardMaterial ref={matRef} color={terrainTint} roughness={1} metalness={0} />
     </mesh>
+  );
+}
+
+// ---- Shackleton long-shadow fakes (Epic 04 P4) -----------------------------
+// At the lunar south pole the sun grazes the horizon, so structures throw very long
+// shadows. We FAKE them (real shadow maps on a grazing pole sun balloon the shadow-
+// camera frustum + fight the EffectComposer + the dpr≤1.5 budget — see the plan's P2
+// "Shadows" note) with static, snapshot-INDEPENDENT decals: soft dark elongated
+// blobs laid flat on the regolith, stretched + rotated to point AWAY from the sun.
+//
+// The decal texture is a PROCEDURAL canvas radial gradient (NO image asset, so no
+// lib/assets.ts manifest entry is needed and nothing can pop in on descent — the
+// hard ASSETS RULE). One texture is shared by all blobs; each blob is a flat plane
+// scaled long in the shadow direction. Anchored under the Shackleton set-pieces.
+//
+// Shadow heading is derived from SITE_FRAMES.shackleton.sunDir so it can never drift
+// from the actual key light: shadows fall along the GROUND projection of −sunDir.
+
+// Anchor points (scene units, on the y=0 plane) under the Shackleton structures +
+// the worksite cluster, each with a relative length multiplier for visual variety.
+const SHACKLETON_SHADOW_ANCHORS: { at: [number, number]; len: number }[] = [
+  { at: [-10, -16], len: 1.25 }, // shk-base-station
+  { at: [14, -18], len: 1.15 }, // shk-lander
+  { at: [-26, -30], len: 1.4 }, // shk-crawler
+  { at: [0, 0], len: 1.0 }, // dome cluster centre
+];
+
+// Build the soft radial-gradient shadow blob once (procedural CanvasTexture — no
+// manifest asset). Dark, soft-edged, transparent at the rim so it never reads as a
+// hard disc on the regolith. Returns null in non-DOM (SSR/test) so callers fall back.
+function makeShadowBlobTexture(): THREE.Texture | null {
+  if (typeof document === "undefined") return null;
+  const size = 128;
+  const cv = document.createElement("canvas");
+  cv.width = cv.height = size;
+  const ctx = cv.getContext("2d");
+  if (!ctx) return null;
+  const g = ctx.createRadialGradient(size / 2, size / 2, 0, size / 2, size / 2, size / 2);
+  g.addColorStop(0, "rgba(0,0,0,0.55)");
+  g.addColorStop(0.55, "rgba(0,0,0,0.32)");
+  g.addColorStop(1, "rgba(0,0,0,0)");
+  ctx.fillStyle = g;
+  ctx.fillRect(0, 0, size, size);
+  const tex = new THREE.CanvasTexture(cv);
+  tex.colorSpace = THREE.SRGBColorSpace;
+  return tex;
+}
+
+function ShackletonShadows() {
+  // The shadow falls OPPOSITE the sun: project −sunDir onto the ground (x,z) plane.
+  // (sunDir is [x,y,z] in scene space; the ground heading ignores y.)
+  const { heading, blobLen } = useMemo(() => {
+    const [sx, , sz] = SITE_FRAMES.shackleton.sunDir;
+    // Shadow direction on the ground = away from the sun's horizontal heading.
+    const shadowAngle = Math.atan2(-sz, -sx); // around +y
+    // A long base blob length; the grazing pole sun → very long shadows.
+    return { heading: shadowAngle, blobLen: 18 };
+  }, []);
+
+  const tex = useMemo(makeShadowBlobTexture, []);
+  useEffect(() => () => tex?.dispose(), [tex]);
+  if (!tex) return null;
+
+  return (
+    <group>
+      {SHACKLETON_SHADOW_ANCHORS.map((a, i) => {
+        const len = blobLen * a.len;
+        const width = 5 * a.len;
+        // The plane lies flat (rotateX −90°) then yaws to the shadow heading; it is
+        // stretched LONG along its local x (the shadow's length) so it reads as a
+        // raking streak. Offset the blob centre out along the heading so the streak
+        // begins at the structure's foot and trails away from the sun.
+        const ox = a.at[0] + Math.cos(heading) * len * 0.45;
+        const oz = a.at[1] + Math.sin(heading) * len * 0.45;
+        return (
+          <mesh
+            key={i}
+            position={[ox, 0.03, oz]}
+            rotation={[-Math.PI / 2, 0, -heading]}
+            scale={[len, width, 1]}
+            raycast={() => null}
+            renderOrder={1}
+          >
+            <planeGeometry args={[1, 1]} />
+            <meshBasicMaterial
+              map={tex}
+              transparent
+              opacity={0.85}
+              depthWrite={false}
+              toneMapped={false}
+            />
+          </mesh>
+        );
+      })}
+    </group>
   );
 }
 
@@ -1846,6 +1994,12 @@ const CinematicFX = memo(function CinematicFX({
 // its own clamps/target so neither can be knocked into a useless pose.
 export type ViewMode = "surface" | "orbit";
 
+// The active worksite shown on the surface (Epic 04 P2). The surface renders ONE
+// site at a time; the operator toggles between them. Snapshot rovers/tasks are
+// sliced by this (back-compat: an untagged rover/task ⇒ "lunar"). Keep in lockstep
+// with lib/scene's SITE_FRAMES keys.
+export type SiteId = "lunar" | "shackleton";
+
 type Scene3DProps = {
   snapshot: Snapshot | null;
   selected: string | null;
@@ -1858,6 +2012,15 @@ type Scene3DProps = {
   ghost?: Ghost | null;
   onPlaceMove?: (origin: Vec2) => void;
   onPlaceConfirm?: () => void;
+  // In-scene placement gestures (Epic 06 P1, #151). `placementRotation` is the
+  // current rotation (radians) the right-drag uses as its base; `onPlaceRotate`
+  // pushes the new absolute rotation; `onPlaceCancel` aborts (ESC / interrupt).
+  // `placementInvalidReason` is the client validity (null = valid) surfaced as a
+  // cursor-anchored ✓/✗ tick. All optional (tests / 2D fallback omit them).
+  placementRotation?: number;
+  placementInvalidReason?: string | null;
+  onPlaceRotate?: (rotation: number) => void;
+  onPlaceCancel?: () => void;
   // View-mode framing (issue #49). Defaults to "surface" so the scene keeps its
   // rehearsed worksite pose when the prop is omitted (tests / 2D fallback).
   viewMode?: ViewMode;
@@ -1865,6 +2028,14 @@ type Scene3DProps = {
   // clicking the marker calls this with "surface", flipping the app to surface
   // view and triggering the descent. Optional (tests / 2D fallback omit it).
   onViewModeChange?: (mode: ViewMode) => void;
+  // The active surface site (Epic 04 P2). Defaults to "lunar" when omitted so the
+  // single-site path / tests keep working. SceneContents slices the snapshot to
+  // this site and reads its per-site framing/lighting/tint/fog/pieces.
+  activeSite?: SiteId;
+  // Lets an in-scene orbit site marker (Epic 04 P3) request the active site. A
+  // marker click calls BOTH this and onViewModeChange("surface"), descending to
+  // the clicked site. Optional (tests / single-site path omit it).
+  onActiveSiteChange?: (site: SiteId) => void;
 };
 
 // Per-mode OrbitControls clamps + target. Both presets are clamped (ADR-0004):
@@ -1883,17 +2054,21 @@ const VIEW_PRESETS: Record<
   }
 > = {
   surface: {
-    // FOV widened 42→50 (#101) makes the worksite subtend more of the frame, so
-    // the surface distance band is pulled IN by ~tan(21°)/tan(25°) ≈ 0.82 (10→8,
-    // 40→33) to hold the rehearsed framing — the dome/rovers fill the same screen
-    // area at the wider lens.
-    minDistance: 8,
-    maxDistance: 33,
-    minPolarAngle: Math.PI / 6,
-    // Allow a flatter, more horizon-facing look (up to ~80° from vertical) so the
-    // plain + sky + distant Earth read; still clamped short of dipping under it.
+    // A 3D-game / RTS-style camera looking DOWN on the worksite so the regolith
+    // terrain reads as a surveyable plain (not a horizon strip). The band is wide
+    // enough to pull back and take in the whole site; the polar clamps favour an
+    // elevated 3/4 look — near top-down at the tight end (~18° off vertical), with
+    // room to tip toward the horizon (~80°) if the player wants the standing-on-
+    // the-Moon read. Target sits on the worksite cluster centre. Tune on screen.
+    minDistance: 6,
+    // Pulled out from 34 to give the SHACKLETON crater pose (dist ≈ 33.5 from the
+    // floor target) clamp headroom — at 34 idle drift could trip the OrbitControls
+    // distance clamp and yank the camera in. Lunar's default framing (dist ≈ 20) is
+    // unchanged; it just gains a little zoom-out room. Still far under the far-plane.
+    maxDistance: 60,
+    minPolarAngle: Math.PI / 10,
     maxPolarAngle: Math.PI / 2.25,
-    target: [0, 4, 0],
+    target: [2.5, 0, -3],
   },
   orbit: {
     // The space vista: the camera ORBITS THE MOON GLOBE itself (target = the
@@ -1916,13 +2091,26 @@ const VIEW_PRESETS: Record<
 // the destination pose. Tuned by eye; see CameraTransition.
 type Pose = { position: THREE.Vector3; target: THREE.Vector3 };
 
-// Surface: the rehearsed worksite framing (matches the Canvas `camera` default).
-// A lower pitch that looks OUT toward the horizon so the regolith plain recedes
-// into the fog and the sky (with a distant Earth) reads above it — "standing on
-// the Moon," not staring straight down at a platform.
+// Surface: an elevated 3D-game / RTS camera looking DOWN on the worksite (matches
+// the Canvas `camera` default). High vantage at a ~43° pitch off vertical so the
+// regolith terrain spreads out below as a surveyable plain — the rovers + rising
+// dome read from above, with the literally-sized launch complex laid out behind.
 const SURFACE_POSE: Pose = {
-  position: new THREE.Vector3(0, 11, 30),
-  target: new THREE.Vector3(0, 4, 0),
+  position: new THREE.Vector3(2.5, 15, 11),
+  target: new THREE.Vector3(2.5, 0, -3),
+};
+// Per-site surface poses. Lunar reuses the elevated worksite framing above.
+// Shackleton now frames its CARVED CRATER: the camera is seated up on the near rim
+// (high + well back on +z, above the crest height ≈ CRATER_RIM_HEIGHT) looking DOWN
+// and IN onto the shadowed floor where the outpost sits, so the bowl + its sunlit
+// rim read as a distinct place (the SVS-4716 pole-crater look). This is the same
+// pose the orbit→descend-to-Shackleton lands on (poseFor), so the descent also
+// crests the rim. Tuned so the settled polar angle stays inside the surface
+// OrbitControls clamp [π/10, π/2.25] (≈70° here).
+const LUNAR_SURFACE_POSE: Pose = SURFACE_POSE;
+const SHACKLETON_SURFACE_POSE: Pose = {
+  position: new THREE.Vector3(2.5, 13, 19),
+  target: new THREE.Vector3(2.5, 1, -3),
 };
 // A high vantage straight over the worksite — the start/end of the descent half,
 // so the surface "drops in" from above rather than cutting in flat.
@@ -1963,6 +2151,38 @@ const TRANSITION_MS = 1500;
 // The cinematic intro fly-in (#108) reuses the descent rig but stretched, so the
 // experience opens as a slow deep-space arrival rather than a snappy mode toggle.
 const INTRO_MS = 4500;
+// Surface→surface site swap: a cinematic GROUND DRIVE — NOT a fly-to-Moon and NOT a
+// lateral cut. The camera dives near the surface, races out across the open regolith
+// (SKIM_OUT_DIST units, at SKIM_ALTITUDE) toward the horizon, flips the rendered site
+// under a dust-brownout peak, then races back in and settles on the destination
+// surface pose (for Shackleton, cresting the rim into the crater). Long enough to
+// read as a journey, not a cut.
+const TRAVERSE_MS = 2900;
+const SKIM_ALTITUDE = 4; // scene-y of the low ground-skim race
+const SKIM_OUT_DIST = 120; // how far out across the plain the drive races
+
+// ---- ground-traverse envelope (cinematic site drive) -----------------------
+// The surface→surface site swap is a cinematic GROUND DRIVE (not a lateral whip):
+// the camera dives low, races across the open regolith, and the destination site is
+// swapped behind a warm REGOLITH-DUST brownout at the far point. This envelope, as a
+// function of progress t∈[0,1], returns the dust-veil opacity, the eased path
+// parameter `k` for lerpPose, and whether the content swap has passed (t≥0.5). Kept
+// a pure helper so the shape is unit-testable. The veil is WIDER + flatter-topped
+// than the old glare spike — the drive is ~3s, so the one swap frame must be FULLY
+// covered (peak ≈ 1 with a plateau), not just a brief flash.
+export function traverseEnvelope(t: number) {
+  const c = Math.min(1, Math.max(0, t));
+  // Dust brownout: a flat-topped peak around the t=0.5 swap. DUST_HALF widens the
+  // window and the gentle power keeps it near-opaque across the peak so the swap is
+  // never glimpsed; it still falls to 0 at both ends so the regolith reads clean
+  // before and after the drive.
+  const DUST_HALF = 0.3;
+  const veil = Math.pow(Math.max(0, 1 - Math.abs(c - 0.5) / DUST_HALF), 1.25);
+  // Path easing: ease-in-out so the drive accelerates out of the old framing and
+  // decelerates HARD into the new one (settles cleanly, no overshoot).
+  const k = c * c * (3 - 2 * c);
+  return { veil, k, swapped: c >= 0.5 };
+}
 
 // ---- Earthrise hero pose (#108) --------------------------------------------
 // The `earthrise-hero` beat lerps the SURFACE camera from its current pose to a
@@ -2076,33 +2296,122 @@ function BlueprintGhost({ ghost, map }: { ghost: Ghost; map: SceneMap }) {
   );
 }
 
+// PlacementTip is the cursor-anchored validity tick (Epic 06 P1, #151) that
+// replaces the old BlueprintPalette sub-panel's validity line. It billboards a
+// tiny ✓ (valid) / ✗ + reason (invalid) overlay at the ghost centroid, so the
+// operator reads placement validity right where they're aiming. drei <Html> with
+// `center` keeps it pinned to the spot; `pointerEvents: none` so it never eats the
+// placement gestures. Purely transient client UI (ADR-0004) — never the snapshot.
+function PlacementTip({
+  ghost,
+  map,
+  invalidReason,
+}: {
+  ghost: Ghost;
+  map: SceneMap;
+  invalidReason: string | null;
+}) {
+  if (ghost.tasks.length === 0) return null;
+  // Anchor at the centroid of the ghost task positions (the placement origin region).
+  let cx = 0;
+  let cy = 0;
+  for (const t of ghost.tasks) {
+    cx += t.pos.X;
+    cy += t.pos.Y;
+  }
+  cx /= ghost.tasks.length;
+  cy /= ghost.tasks.length;
+  const center = map.at({ X: cx, Y: cy }, 0.06);
+  const valid = invalidReason === null;
+  return (
+    <Html
+      position={[center.x, center.y + 1.2, center.z]}
+      center
+      zIndexRange={[20, 0]}
+      style={{ pointerEvents: "none" }}
+    >
+      <div className={`place-tip ${valid ? "place-tip--ok" : "place-tip--bad"}`}>
+        <span className="place-tip__mark">{valid ? "✓" : "✗"}</span>
+        {valid ? null : <span className="place-tip__reason">{invalidReason}</span>}
+      </div>
+    </Html>
+  );
+}
+
 // PlacementPlane is a large invisible ground plane, mounted ONLY while placing,
-// that captures the cursor: pointer-move raycasts a world origin (via the shared
-// sceneMap inverse, so the ghost can't drift from the rendered world) and reports
-// it; a click drops the Blueprint. It sits just above the terrain so it wins the
-// raycast over scene geometry during placement.
+// that captures the cursor and the placement gestures (Epic 06 P1, #151):
+//   - pointer-move raycasts a world origin (via the shared sceneMap inverse, so the
+//     ghost can't drift from the rendered world) and reports it via onMove;
+//   - LEFT-click (button 0) on a spot confirms the drop (onConfirm) — gated to the
+//     left button so a right-drag never places;
+//   - RIGHT-drag (button 2) rotates the ghost: the horizontal pixel delta from the
+//     drag start maps to a rotation delta (dragDeltaToRadians) added to the base
+//     rotation captured at press, pushed via onRotate. Pointer capture on the canvas
+//     keeps the drag tracking even when the cursor leaves the plane.
+// It sits just above the terrain so it wins the raycast over scene geometry while
+// placing. Camera pan/orbit is locked by Scene3D (controls.enableRotate=false +
+// enablePan=false); scroll-zoom stays live. The browser context menu is suppressed
+// by Scene3D's placing-scoped contextmenu listener.
 function PlacementPlane({
   map,
+  rotation,
   onMove,
   onConfirm,
+  onRotate,
 }: {
   map: SceneMap;
+  rotation: number;
   onMove: (origin: Vec2) => void;
   onConfirm: () => void;
+  onRotate: (rotation: number) => void;
 }) {
+  // Right-drag-rotate transient state — refs (not state) so a frequent drag never
+  // re-renders the tree. `baseRotation` is the rotation at press; `startX` the
+  // pointer x at press; `pointerId` the captured pointer (null when not rotating).
+  const drag = useRef<{ baseRotation: number; startX: number; pointerId: number } | null>(null);
   return (
     <mesh
       position={[0, 0.02, 0]}
       rotation={[-Math.PI / 2, 0, 0]}
       onPointerMove={(e: ThreeEvent<PointerEvent>) => {
         e.stopPropagation();
+        // While a right-drag is active, map the horizontal pixel delta to rotation;
+        // otherwise track the cursor origin for the ghost.
+        if (drag.current) {
+          const dx = e.nativeEvent.clientX - drag.current.startX;
+          onRotate(drag.current.baseRotation + dragDeltaToRadians(dx));
+          return;
+        }
         // e.point is the world-space (scene) hit; map its ground x/z back to the
         // worksite origin via the inverse of the shared world→scene projection.
         onMove(map.invert(e.point.x, e.point.z));
       }}
       onPointerDown={(e: ThreeEvent<PointerEvent>) => {
         e.stopPropagation();
-        onConfirm();
+        if (e.button === 2) {
+          // Right button → start a rotate-drag. Capture the pointer on the canvas so
+          // the rotation keeps tracking even if the cursor leaves this plane.
+          const target = e.nativeEvent.target as HTMLElement | null;
+          target?.setPointerCapture?.(e.pointerId);
+          drag.current = {
+            baseRotation: rotation,
+            startX: e.nativeEvent.clientX,
+            pointerId: e.pointerId,
+          };
+          return;
+        }
+        if (e.button === 0) {
+          // Left button → confirm the drop. Any other button is ignored (so a
+          // middle-click or stray button never places).
+          onConfirm();
+        }
+      }}
+      onPointerUp={(e: ThreeEvent<PointerEvent>) => {
+        if (drag.current && e.button === 2) {
+          const target = e.nativeEvent.target as HTMLElement | null;
+          target?.releasePointerCapture?.(drag.current.pointerId);
+          drag.current = null;
+        }
       }}
     >
       <planeGeometry args={[GROUND_SPAN * 4, GROUND_SPAN * 4]} />
@@ -2111,15 +2420,11 @@ function PlacementPlane({
   );
 }
 
-// Surface-only horizon fog — SINGLE SOURCE OF TRUTH (#101). Previously the same
-// <fog> was declared twice in two SceneContents return branches (the loading
-// fallback + the main render) and could drift apart; consolidated here so both
-// branches render the identical fog. Tinted a warm deep blue-grey (#0a0f1a)
-// instead of pure black for atmospheric depth — the far regolith plain dissolves
-// into a faint dusk rather than a hard black void, while the worksite (within
-// ~30 units, well inside the 180 near plane) stays unaffected. Surface-only;
-// orbit skips it so the Moon globe stays crisp.
-const SURFACE_FOG_ARGS: [string, number, number] = ["#0a0f1a", 180, 680];
+// Surface horizon fog is now PER-SITE (Epic 04 P2): each SiteFrame carries its own
+// `fog: [color, near, far]` (see SITE_FRAMES in lib/scene), read in BOTH
+// SceneContents return branches so they stay consistent. Lunar keeps the warm deep
+// grey dusk (#101); Shackleton uses a tighter/darker fog for the pole. Surface-
+// only; orbit skips it so the Moon globe stays crisp.
 
 // ---- cinematic camera beats (#108) -----------------------------------------
 //
@@ -2334,10 +2639,15 @@ function SceneContents({
   onPick,
   placing,
   ghost,
+  placementRotation = 0,
+  placementInvalidReason = null,
   onPlaceMove,
   onPlaceConfirm,
+  onPlaceRotate,
   viewMode = "surface",
   onViewModeChange,
+  activeSite = "lunar",
+  onActiveSiteChange,
 }: Scene3DProps) {
   const lightRef = useRef<THREE.DirectionalLight>(null);
   // Shared ref to the Sun core disc — surfaced from SkyBodies so the GodRays
@@ -2345,16 +2655,24 @@ function SceneContents({
   const sunRef = useRef<THREE.Mesh>(null);
   const invalidate = useThree((s) => s.invalidate);
 
-  // Clicking the orbit-view lunar-base marker flips to surface view → the descent.
-  const onBaseClick = onViewModeChange ? () => onViewModeChange("surface") : undefined;
+  // Clicking an orbit-view site marker (Epic 04 P3) selects that site AND flips to
+  // surface view → the existing glare-masked descent lands on the clicked site.
+  // This is the PRIMARY entry into the surface now that orbit is the default view.
+  const onSelectSite =
+    onViewModeChange && onActiveSiteChange
+      ? (site: SiteId) => {
+          onActiveSiteChange(site);
+          onViewModeChange("surface");
+        }
+      : undefined;
 
   // Shared geometry buffers — one set per Canvas mount, disposed on unmount.
   const geo = useMemo(makeSceneGeo, []);
   useEffect(() => () => disposeSceneGeo(geo), [geo]);
 
-  // Beat bookkeeping — DECORATION ONLY, derived from the server's own events
-  // (mirrors WorldCanvas). Stamped with performance.now() so animation progress
-  // is independent of snapshot cadence. Held in a ref and read by each mesh's
+  // Beat bookkeeping — DECORATION ONLY, derived from the server's own events.
+  // Stamped with performance.now() so animation progress is independent of
+  // snapshot cadence. Held in a ref and read by each mesh's
   // useFrame; mutating it never triggers a React re-render.
   const beats = useRef<ActiveBeat[]>([]);
   const lastAt = useRef<number>(Number.NEGATIVE_INFINITY);
@@ -2391,22 +2709,35 @@ function SceneContents({
     if (beats.current.length > 0 || before > 0) invalidate();
   });
 
-  // The world→scene map (and the task lookup) only change when a new snapshot
-  // arrives, so memoize them on snapshot identity rather than rebuilding every
-  // render — cheap, but it keeps the snapshot pass allocation-light.
-  const map = useMemo(
+  // Per-site framing (Epic 04 P2): the active site's frame drives the FIXED
+  // real-meters world→scene map (recenter + rotate + scale), so the framing never
+  // jitters as the swarm moves and each site composes to its own hero pose. The
+  // map is rebuilt only when the site changes, not per snapshot.
+  const frame: SiteFrame = SITE_FRAMES[activeSite];
+  const map = useMemo(() => siteMap(frame), [frame]);
+
+  // Slice the snapshot to the active site (Epic 04 P2). `?? "lunar"` keeps an
+  // untagged rover/task on the default site (back-compat), so a single-site
+  // snapshot renders unchanged. The surface shows ONE site's swarm + structure.
+  const siteRovers = useMemo(
     () =>
       snapshot
-        ? sceneMap(
-            snapshot.rovers.map((r) => r.pos),
-            snapshot.tasks.map((t) => t.pos),
-          )
-        : null,
-    [snapshot],
+        ? snapshot.rovers.filter((r) => (r.site ?? "lunar") === activeSite)
+        : [],
+    [snapshot, activeSite],
   );
+  const siteTasks = useMemo(
+    () =>
+      snapshot
+        ? snapshot.tasks.filter((t) => (t.site ?? "lunar") === activeSite)
+        : [],
+    [snapshot, activeSite],
+  );
+  // Task lookup over the FILTERED tasks, so a lease beam only resolves a held task
+  // within the active site (a cross-site beam would point off-frame).
   const taskById = useMemo(
-    () => (snapshot ? new Map(snapshot.tasks.map((t) => [t.id, t])) : null),
-    [snapshot],
+    () => (snapshot ? new Map(siteTasks.map((t) => [t.id, t])) : null),
+    [snapshot, siteTasks],
   );
 
   // `viewMode` here is the RENDERED mode (Scene3D's `shown`, which flips at the
@@ -2419,14 +2750,22 @@ function SceneContents({
       <>
         {/* Same decorative lighting rig as the main branch (snapshot-independent), so
             the orbit vista's dark-side Moon reads correctly even before the first
-            snapshot arrives. */}
-        <SpaceLights onSurface={onSurface} lightRef={lightRef} />
+            snapshot arrives. Per-site surface sun (Epic 04 P2). */}
+        <SpaceLights
+          onSurface={onSurface}
+          lightRef={lightRef}
+          surfaceSunDir={frame.sunDir}
+          surfaceSunIntensity={frame.sunIntensity}
+          crater={activeSite === "shackleton"}
+        />
         <EnvironmentGrade onSurface={onSurface} />
-        {/* Surface-only horizon fog — shared SURFACE_FOG_ARGS (#101, see above). */}
-        {onSurface && <fog attach="fog" args={SURFACE_FOG_ARGS} />}
-        {onSurface && <LunarTerrain />}
+        {/* Surface-only horizon fog — per-site (Epic 04 P2). */}
+        {onSurface && <fog attach="fog" args={frame.fog} />}
+        {onSurface && (
+          <LunarTerrain terrainTint={frame.terrainTint} crater={activeSite === "shackleton"} />
+        )}
         <SpaceEnvironment />
-        <SkyBodies viewMode={viewMode} onBaseClick={onBaseClick} sunRef={sunRef} />
+        <SkyBodies viewMode={viewMode} onSelectSite={onSelectSite} sunRef={sunRef} />
       </>
     );
   }
@@ -2435,14 +2774,21 @@ function SceneContents({
     <group>
       {/* SPACE LIGHTING rig — shared with the pre-snapshot fallback branch (see the
           SpaceLights definition above for the full physical rationale of each light
-          and the Wave-4 decoupled-sun / dark-side-Moon tuning). */}
-      <SpaceLights onSurface={onSurface} lightRef={lightRef} />
+          and the Wave-4 decoupled-sun / dark-side-Moon tuning). Per-site surface
+          sun direction + intensity (Epic 04 P2): lunar high/bright, Shackleton low
+          grazing/dim. */}
+      <SpaceLights
+        onSurface={onSurface}
+        lightRef={lightRef}
+        surfaceSunDir={frame.sunDir}
+        surfaceSunIntensity={frame.sunIntensity}
+      />
       <EnvironmentGrade onSurface={onSurface} />
 
-      {/* Surface-only horizon fog — shared SURFACE_FOG_ARGS (#101, see above): one
-          consolidated definition (was duplicated across two return branches), warm
-          deep blue-grey tint for atmospheric depth. Skipped in orbit. */}
-      {onSurface && <fog attach="fog" args={SURFACE_FOG_ARGS} />}
+      {/* Surface-only horizon fog — PER-SITE (Epic 04 P2): lunar warm deep grey,
+          Shackleton tighter/darker for the pole. Skipped in orbit (the Moon globe
+          stays crisp). */}
+      {onSurface && <fog attach="fog" args={frame.fog} />}
 
       {/* Static, snapshot-independent backdrop: hand-rolled starfield + self-
           hosted HDR skybox/IBL (issue #50). Shown in BOTH views. Encodes no world
@@ -2451,16 +2797,21 @@ function SceneContents({
 
       {/* Decorative sky bodies (issue #51) — snapshot-INDEPENDENT Scenery: the
           Moon globe (orbit-only hero) + a distant Earth (both views) + the Sun
-          (light emitter) + the clickable lunar-base marker (orbit-only). The
+          (light emitter) + the clickable site markers (orbit-only). The
           Moon's appear/vanish is hidden behind the descent glare. */}
-      <SkyBodies viewMode={viewMode} onBaseClick={onBaseClick} sunRef={sunRef} />
+      <SkyBodies viewMode={viewMode} onSelectSite={onSelectSite} sunRef={sunRef} />
 
       {/* The WORKSITE — only in surface view. In orbit it would float as a square
           in space ("moonbase lost in space"), so it is mounted only on the
           surface (the rendered mode flips under the glare, so the swap is unseen). */}
       {onSurface && (
         <>
-          <LunarTerrain />
+          <LunarTerrain terrainTint={frame.terrainTint} crater={activeSite === "shackleton"} />
+
+          {/* Shackleton long-shadow fakes (Epic 04 P4): static decals raking AWAY
+              from the grazing pole sun. Snapshot-independent + procedural (no asset),
+              so they never pop in on descent. Lunar's high key light needs none. */}
+          {activeSite === "shackleton" && <ShackletonShadows />}
 
           {/* Contact shadows (#104) — drei bakes a soft ambient-occlusion-like
               contact shadow under the rovers + domes so they read as GROUNDED, not
@@ -2481,21 +2832,21 @@ function SceneContents({
             frames={1}
           />
 
-          {/* Tasks / rising dome. */}
-          {snapshot.tasks.map((t) => (
+          {/* Tasks / rising dome — ACTIVE SITE only (Epic 04 P2). */}
+          {siteTasks.map((t) => (
             <TaskBlock key={t.id} task={t} map={map} geo={geo} beats={beats} />
           ))}
 
-          {/* Lease beams (rover → held task), under the rovers. */}
-          {snapshot.rovers.map((r) => {
+          {/* Lease beams (rover → held task), under the rovers — active site only. */}
+          {siteRovers.map((r) => {
             if (!r.alive || !r.task) return null;
             const held = taskById.get(r.task);
             if (!held) return null;
             return <LeaseBeam key={`beam-${r.id}`} from={r} to={held} map={map} />;
           })}
 
-          {/* Rovers. */}
-          {snapshot.rovers.map((r) => (
+          {/* Rovers — active site only. */}
+          {siteRovers.map((r) => (
             <Rover3D
               key={r.id}
               rover={r}
@@ -2508,8 +2859,10 @@ function SceneContents({
           ))}
 
           {/* Launch infrastructure set-pieces (#56) — static NASA-PD Scenery at the
-              worksite edge. Snapshot-INDEPENDENT decoration, raycast-suppressed. */}
-          <LaunchScenery />
+              worksite edge. Snapshot-INDEPENDENT decoration, raycast-suppressed.
+              Per-site pieces (Epic 04 P2): the two sites reuse the same GLBs but
+              compose/retint them — Shackleton is a leaner, cooler outpost. */}
+          <LaunchScenery pieces={frame.pieces} />
 
           {/* Launch-beat flare (#108): additive exhaust + godray billboards at the
               pad, hidden until a `launch` beat ramps them in useFrame. */}
@@ -2525,8 +2878,17 @@ function SceneContents({
           only. The plane is mounted only while placing; the ghost only once the
           cursor has hit the ground. */}
       {onSurface && ghost ? <BlueprintGhost ghost={ghost} map={map} /> : null}
-      {onSurface && placing && onPlaceMove && onPlaceConfirm ? (
-        <PlacementPlane map={map} onMove={onPlaceMove} onConfirm={onPlaceConfirm} />
+      {onSurface && ghost ? (
+        <PlacementTip ghost={ghost} map={map} invalidReason={placementInvalidReason} />
+      ) : null}
+      {onSurface && placing && onPlaceMove && onPlaceConfirm && onPlaceRotate ? (
+        <PlacementPlane
+          map={map}
+          rotation={placementRotation}
+          onMove={onPlaceMove}
+          onConfirm={onPlaceConfirm}
+          onRotate={onPlaceRotate}
+        />
       ) : null}
 
       {/* Cinematic camera beats (#108): earthrise-hero framing + decaying launch
@@ -2545,8 +2907,8 @@ function SceneContents({
   );
 }
 
-// The exported renderer. Mirrors WorldCanvas's contract exactly so App can swap
-// them. A FIXED default orbit-camera angle frames the worksite; OrbitControls is
+// The exported renderer (sole worksite renderer, ADR-0004). A FIXED default
+// orbit-camera angle frames the worksite; OrbitControls is
 // allowed but clamped (no roll past the horizon, bounded zoom) so it can't be
 // knocked into a useless pose on a projector. A click on empty space (the
 // ground / background) deselects via onPointerMissed.
@@ -2584,6 +2946,26 @@ function RigBridge({
     controlsRef.current = controls;
     invalidateRef.current = invalidate;
   });
+  return null;
+}
+
+// PlacementGestureGuard suppresses the browser context menu on the canvas WHILE a
+// blueprint placement is active (Epic 06 P1, #151), so the right-drag-rotate gesture
+// never pops the OS menu mid-drag (Risk #1). Lives inside the Canvas to reach the
+// live `gl.domElement`. The listener is added ONLY while `placing` and removed in the
+// effect cleanup — scoped tight so right-click works normally everywhere else and at
+// rest. Renders nothing; the camera lock itself is the declarative OrbitControls
+// `enableRotate={!placing}` + `enablePan={false}` (zoom stays live), which self-
+// restores when `placing` flips false (no imperative controls.enabled to leak).
+function PlacementGestureGuard({ placing }: { placing: boolean }) {
+  const gl = useThree((s) => s.gl);
+  useEffect(() => {
+    if (!placing) return;
+    const el = gl.domElement;
+    const onContextMenu = (e: MouseEvent) => e.preventDefault();
+    el.addEventListener("contextmenu", onContextMenu);
+    return () => el.removeEventListener("contextmenu", onContextMenu);
+  }, [placing, gl]);
   return null;
 }
 
@@ -2696,8 +3078,26 @@ function CameraFeel({ active, onSurface }: { active: boolean; onSurface: boolean
     };
     document.addEventListener("visibilitychange", onVisibility);
 
-    // Arm the first idle wake from mount.
-    markInput();
+    // Recapture the rest pose on (re)activation. CameraFeel deactivates during a
+    // transition/placement (active=false) and reactivates when it ends — but a
+    // view toggle is a BUTTON click, not a canvas gesture, so markInput never
+    // fires and restAzimuthRef would still hold the rest pose captured at the
+    // PREVIOUS view's camera. Left stale, the first idle frame would rebuild the
+    // camera as `controls.target + staleOffset`, yanking it off the pose the
+    // transition just settled on (the old "snaps to a wrong orbit/surface pose
+    // right after the toggle" bug). Null it so the next idle frame recaptures the
+    // offset from the freshly-settled camera. (markInput also nulls it on input.)
+    restAzimuthRef.current = null;
+    // Immediate-idle init (05-P2): backdate the last-input stamp by the full
+    // idle delay so idleElapsed > 0 from the very first frame and the sway eases
+    // in right away (IDLE_FADE_MS still ramps the amplitude, so there is no
+    // snap). Scene3D now mounts only after the splash, so this is the reveal
+    // moment — the drift begins exactly when the user first sees the vista. Only
+    // the initial behavior changes: markInput (start/end/DOM input) still arms
+    // the normal ~4s delay after any interaction.
+    lastInputRef.current = performance.now() - IDLE_DELAY_MS;
+    // Still schedule a wake so the drift can start in a fully-settled scene.
+    idleTimer = window.setTimeout(() => invalidate(), 16);
 
     return () => {
       controls.removeEventListener("start", onStart);
@@ -2785,8 +3185,15 @@ function CameraFeel({ active, onSurface }: { active: boolean; onSurface: boolean
   return null;
 }
 
-// The canonical settled pose for a mode (start/end of the descent transition).
-const poseFor = (m: ViewMode): Pose => (m === "orbit" ? ORBIT_POSE : SURFACE_POSE);
+// The canonical settled pose for a (view, site) pair — the start/end of every
+// transition. Orbit is site-agnostic (one Moon vista for both markers); the
+// surface picks the active site's framing (Epic 04 P4: Shackleton lower/back).
+export const poseFor = (m: ViewMode, site: SiteId = "lunar"): Pose =>
+  m === "orbit"
+    ? ORBIT_POSE
+    : site === "shackleton"
+      ? SHACKLETON_SURFACE_POSE
+      : LUNAR_SURFACE_POSE;
 
 export function Scene3D({
   snapshot,
@@ -2794,17 +3201,48 @@ export function Scene3D({
   onPick,
   placing,
   ghost,
+  placementRotation = 0,
+  placementInvalidReason = null,
   onPlaceMove,
   onPlaceConfirm,
+  onPlaceRotate,
   viewMode = "surface",
   onViewModeChange,
+  activeSite = "lunar",
+  onActiveSiteChange,
 }: Scene3DProps) {
-  // `viewMode` (prop) is the DESIRED mode; `shown` is the mode currently RENDERED.
-  // They differ only during the descent transition: `shown` flips at the glare
-  // peak, so the content/sky swap is hidden behind the flash. Clamps + the OrbitⅭ
-  // ontrols target track `shown` so they always match the visible scene.
+  // Initial camera pose, seeded to the DEFAULT view so the app opens already
+  // framed on it. The Canvas `camera` prop is applied ONCE on mount, so this is
+  // captured from the first viewMode and never changes identity. When the app
+  // opens in orbit (the current default), seed ORBIT_POSE so the very first frame
+  // is the settled Moon vista — without this the camera mounts at the surface
+  // default and OrbitControls clamps it against the orbit target into a dark,
+  // off-centre Moon (it did not match the pose a surface→orbit toggle settles on).
+  // Surface default keeps the rehearsed worksite seat; the #108 intro flies it in.
+  const initialCamera = useRef({
+    position: (viewMode === "orbit"
+      ? [ORBIT_POSE.position.x, ORBIT_POSE.position.y, ORBIT_POSE.position.z]
+      : [SURFACE_POSE.position.x, SURFACE_POSE.position.y, SURFACE_POSE.position.z]) as [
+      number,
+      number,
+      number,
+    ],
+    fov: 50,
+    near: 0.1,
+    far: 8000,
+  }).current;
+
+  // `viewMode`/`activeSite` (props) are the DESIRED state; `shown`/`shownSite` are
+  // what is currently RENDERED. They differ only DURING a transition: each flips at
+  // its glare peak, so the content/sky swap is hidden behind the flash. Clamps + the
+  // OrbitControls target track `shown` so they always match the visible scene. The
+  // pair is generalized (Epic 04 P4) so ONE driver, keyed on [viewMode, activeSite],
+  // owns both the view change (descent/ascent) and the surface→surface site swap
+  // (match-cut) — two separate effects would race over the camera (Risk #3).
   const [shown, setShown] = useState<ViewMode>(viewMode);
   const shownRef = useRef<ViewMode>(viewMode);
+  const [shownSite, setShownSite] = useState<SiteId>(activeSite);
+  const shownSiteRef = useRef<SiteId>(activeSite);
   const [transitioning, setTransitioning] = useState(false);
 
   // Live handles to the in-Canvas camera/controls/invalidate, captured by RigBridge.
@@ -2822,10 +3260,10 @@ export function Scene3D({
   // cleanup that cancels the rAF and re-enables controls if interrupted. The
   // CINEMATIC INTRO (#108) reuses this exact rig — an orbit→surface descent
   // stretched to ~4.5s — so the experience opens from deep space.
-  const runDescent = useRef<(from: ViewMode, to: ViewMode, durationMs: number) => () => void>(
-    () => () => {},
-  );
-  runDescent.current = (from, to, durationMs) => {
+  const runDescent = useRef<
+    (from: ViewMode, to: ViewMode, durationMs: number, toSite?: SiteId) => () => void
+  >(() => () => {});
+  runDescent.current = (from, to, durationMs, toSite = shownSiteRef.current) => {
     const camera = cameraRef.current;
     const invalidate = invalidateRef.current;
     const controls = controlsRef.current;
@@ -2833,6 +3271,8 @@ export function Scene3D({
     if (!camera || !invalidate) {
       shownRef.current = to;
       setShown(to);
+      shownSiteRef.current = toSite;
+      setShownSite(toSite);
       return () => {};
     }
 
@@ -2841,11 +3281,15 @@ export function Scene3D({
     // glare. Beat 1 starts from wherever the user actually left the camera.
     const startPose: Pose = {
       position: camera.position.clone(),
-      target: controls ? controls.target.clone() : poseFor(from).target.clone(),
+      target: controls
+        ? controls.target.clone()
+        : poseFor(from, shownSiteRef.current).target.clone(),
     };
     const beat1To = to === "surface" ? MOON_CLOSE_POSE : SURFACE_HIGH_POSE;
     const beat2From = to === "surface" ? SURFACE_HIGH_POSE : MOON_CLOSE_POSE;
-    const destPose = poseFor(to);
+    // On a descent the dest is the TARGET site's surface pose (orbit-marker click
+    // lands there); on an ascent the site is irrelevant (orbit is site-agnostic).
+    const destPose = poseFor(to, toSite);
 
     // Descent vs. ascent. The pitch ramp (#84) puts the horizon-rise in the FINAL
     // ~15% of the whole move on a descent (beat 2, t∈[0.85,1] → its last 30%), and
@@ -2889,6 +3333,10 @@ export function Scene3D({
           swapped = true;
           shownRef.current = to;
           setShown(to); // swap content + sky under the brief full-glare peak
+          // Land on the target site too (orbit-marker click descends to it). On an
+          // ascent toSite == the current site, so this is a no-op.
+          shownSiteRef.current = toSite;
+          setShownSite(toSite);
         }
         // Beat 2 — arrive: ease-out (fast in, hard deceleration into the landing).
         // On DESCENT this beat owns the pitch ramp (horizon rises in its last 30%).
@@ -2934,14 +3382,156 @@ export function Scene3D({
     };
   };
 
-  // View-mode change ⇒ play the glare-masked descent between modes.
+  // Surface→surface GROUND-DRIVE runner. Instead of a lateral cut, the camera dives
+  // near the surface and RACES across the open regolith: beat 1 skims out toward the
+  // horizon, the rendered site is swapped under a dust-brownout peak (t=0.5), and
+  // beat 2 races back in and settles on the destination surface pose — for Shackleton
+  // that pose crests the carved rim, so the drive arrives by descending INTO the
+  // crater. Same rig discipline as runDescent: it OWNS the camera (controls disabled),
+  // `transitioning` suspends CameraFeel's input clock so the tween doesn't fight the
+  // idle drift, and at t=1 it settles EXACTLY on the dest pose, re-enables controls,
+  // and clears `transitioning` so CameraFeel re-arms and eases idle drift back in (no
+  // snap — #130 handoff). The dust veil reuses the glare overlay div with a `.view-
+  // dust` class (a warm regolith brownout instead of the white sun-flash).
+  const runTraverse = useRef<(toSite: SiteId, durationMs: number) => () => void>(
+    () => () => {},
+  );
+  runTraverse.current = (toSite, durationMs) => {
+    const camera = cameraRef.current;
+    const invalidate = invalidateRef.current;
+    const controls = controlsRef.current;
+    // Rig not ready: snap the site with no animation.
+    if (!camera || !invalidate) {
+      shownSiteRef.current = toSite;
+      setShownSite(toSite);
+      return () => {};
+    }
+
+    // Start from wherever the camera actually is (it may be mid-idle-drift — #130),
+    // so the drive takes the camera CLEANLY from the drifting state. Dest is the
+    // destination site's settled surface pose.
+    const startPose: Pose = {
+      position: camera.position.clone(),
+      target: controls
+        ? controls.target.clone()
+        : poseFor("surface", shownSiteRef.current).target.clone(),
+    };
+    const destPose = poseFor("surface", toSite);
+
+    // The drive heads OUT into the open plain (toward the fogged horizon, −z with a
+    // slight +x so it reads as travel) and back. Both worksites recenter onto the
+    // origin, so the journey is fabricated by racing across the empty 700-unit plain;
+    // the dust veil hides the site swap at the far point, and the crater gives the
+    // arrival a real destination. The two skim poses are low (SKIM_ALTITUDE) so the
+    // regolith streams past the camera like a ground vehicle.
+    const heading = new THREE.Vector3(0.15, 0, -1).normalize();
+    const skimOut: Pose = {
+      position: heading.clone().multiplyScalar(SKIM_OUT_DIST).setY(SKIM_ALTITUDE),
+      target: heading.clone().multiplyScalar(SKIM_OUT_DIST + 40).setY(2),
+    };
+    const skimIn: Pose = {
+      position: heading.clone().multiplyScalar(SKIM_OUT_DIST).setY(SKIM_ALTITUDE),
+      target: destPose.target.clone(),
+    };
+
+    const tmpPos = new THREE.Vector3();
+    const tmpTgt = new THREE.Vector3();
+    let raf = 0;
+    let start = 0;
+    let swapped = false;
+    if (controls) controls.enabled = false; // own the camera for the drive
+    setTransitioning(true); // suspends CameraFeel + OrbitControls rotate
+    if (glareRef.current) glareRef.current.classList.add("view-dust"); // warm dust veil
+
+    const step = (now: number) => {
+      if (!start) start = now;
+      const t = Math.min(1, (now - start) / durationMs);
+      const env = traverseEnvelope(t);
+
+      if (glareRef.current) glareRef.current.style.opacity = String(env.veil);
+
+      if (env.swapped && !swapped) {
+        swapped = true;
+        // Swap the rendered site (content + lighting + fog + scenery + crater) under
+        // the dust peak, so the drive never glimpses the change.
+        shownSiteRef.current = toSite;
+        setShownSite(toSite);
+      }
+
+      if (t < 0.5) {
+        // Beat 1 — dive + race OUT across the regolith (ease-in: accelerate away).
+        lerpPose(startPose, skimOut, easeInQuad(t / 0.5), tmpPos, tmpTgt, 1);
+      } else {
+        // Beat 2 — race back IN and settle (ease-out: hard decel into the landing).
+        // pitchHold=0.7 holds the low ground aim, then pitches onto the dest target
+        // in the final ~30% so for Shackleton the look-down into the crater resolves
+        // right at the rim crest (the reveal).
+        lerpPose(skimIn, destPose, easeOutQuint((t - 0.5) / 0.5), tmpPos, tmpTgt, 0.7);
+      }
+      camera.position.copy(tmpPos);
+      camera.lookAt(tmpTgt);
+      if (controls) controls.target.copy(tmpTgt);
+      invalidate();
+
+      if (t < 1) {
+        raf = requestAnimationFrame(step);
+      } else {
+        if (glareRef.current) {
+          glareRef.current.style.opacity = "0";
+          glareRef.current.classList.remove("view-dust");
+        }
+        // Settle EXACTLY on the destination pose so OrbitControls + CameraFeel resume
+        // from the canon pose with no snap and no drift-fight.
+        camera.position.copy(destPose.position);
+        camera.up.set(0, 1, 0);
+        camera.lookAt(destPose.target);
+        if (controls) {
+          controls.target.copy(destPose.target);
+          controls.enabled = true;
+          controls.update();
+        }
+        setTransitioning(false); // re-arms CameraFeel; idle drift eases back in
+        invalidate();
+      }
+    };
+    raf = requestAnimationFrame(step);
+    return () => {
+      cancelAnimationFrame(raf);
+      if (glareRef.current) {
+        glareRef.current.style.opacity = "0";
+        glareRef.current.classList.remove("view-dust"); // never leave the dust veil stuck
+      }
+      if (controls) controls.enabled = true; // never leave controls disabled if interrupted
+    };
+  };
+
+  // SINGLE transition driver (Epic 04 P4) — keyed on [viewMode, activeSite] so ONE
+  // effect owns every transition and two effects can never race the camera (Risk
+  // #3). Three branches:
+  //   1. view changed (orbit↔surface): the glare-masked descent/ascent. If the site
+  //      ALSO changed (orbit-marker click → site + surface), descend to that site.
+  //   2. same view (surface) + site changed: the lateral glare MATCH-CUT.
+  //   3. same view (orbit) + site changed: orbit is site-agnostic — just sync the
+  //      shown site silently (no camera move; the markers don't depend on it).
   useEffect(() => {
-    const to = viewMode;
-    const from = shownRef.current;
-    if (to === from) return;
-    return runDescent.current(from, to, TRANSITION_MS);
-    // Driven by viewMode only; the runDescent ref + state setters are stable.
-  }, [viewMode]);
+    const toView = viewMode;
+    const fromView = shownRef.current;
+    const toSite = activeSite;
+    const fromSite = shownSiteRef.current;
+    if (toView !== fromView) {
+      // Branch 1 (+3-combined): descend/ascend; on a descent land on the target site.
+      return runDescent.current(fromView, toView, TRANSITION_MS, toSite);
+    }
+    if (toSite === fromSite) return; // nothing changed
+    if (toView === "surface") {
+      // Branch 2: surface→surface site swap — the cinematic ground drive.
+      return runTraverse.current(toSite, TRAVERSE_MS);
+    }
+    // Branch 3: orbit + site change — no visible camera move; sync silently.
+    shownSiteRef.current = toSite;
+    setShownSite(toSite);
+    // Driven by [viewMode, activeSite]; the runner refs + setters are stable.
+  }, [viewMode, activeSite]);
 
   // CINEMATIC INTRO FLY-IN (#108): on first mount in surface view, open from deep
   // space — reuse the descent rig (orbit→surface) stretched to ~4.5s so the
@@ -3003,7 +3593,9 @@ export function Scene3D({
         // its gl note + the logdepthbuf_* chunks in SkyBodies.tsx).
         // fov widened 42→50 (#101) for a more immersive, cinematic field — the
         // surface distance band (VIEW_PRESETS) is pulled in to hold framing.
-        camera={{ position: [0, 11, 30], fov: 50, near: 0.1, far: 8000 }}
+        // position is seeded per the default view (see initialCamera) so the app
+        // opens already framed on it (orbit → ORBIT_POSE, surface → worksite seat).
+        camera={initialCamera}
         // While placing, a click on empty space confirms the drop; otherwise it
         // deselects a rover (the existing behaviour).
         onPointerMissed={() => (placing ? onPlaceConfirm?.() : onPick(null))}
@@ -3050,16 +3642,26 @@ export function Scene3D({
           onPick={onPick}
           placing={placing}
           ghost={ghost}
+          placementRotation={placementRotation}
+          placementInvalidReason={placementInvalidReason}
           onPlaceMove={onPlaceMove}
           onPlaceConfirm={onPlaceConfirm}
+          onPlaceRotate={onPlaceRotate}
           viewMode={shown}
           onViewModeChange={onViewModeChange}
+          // The RENDERED site (flips under the match-cut/descent glare), so the
+          // worksite + per-site lighting/fog/scenery swap unseen behind the flash.
+          activeSite={shownSite}
+          onActiveSiteChange={onActiveSiteChange}
         />
         <RigBridge
           cameraRef={cameraRef}
           controlsRef={controlsRef}
           invalidateRef={invalidateRef}
         />
+        {/* Suppress the canvas context menu while placing so right-drag-rotate never
+            pops the OS menu (#151, Risk #1). Scoped to placing only. */}
+        <PlacementGestureGuard placing={placing === true} />
         <OrbitControls
           makeDefault
           enablePan={false}

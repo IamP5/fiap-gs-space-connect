@@ -20,6 +20,7 @@ import (
 	"fmt"
 	"math"
 	"swarmbuild/internal/agent"
+	"swarmbuild/internal/blueprint"
 	"swarmbuild/internal/coordinator"
 	"swarmbuild/internal/core/domain"
 	"swarmbuild/internal/harness/cache"
@@ -34,6 +35,22 @@ const (
 	taskWall       domain.TaskType = "wall"
 	taskDomeCap    domain.TaskType = "dome-cap"
 )
+
+// The two worksites of the live lunar surface (epic 04). Each builds its OWN copy
+// of the habitat dome with its OWN six-rover swarm; the auction is gated by site
+// (wire.Announce.SiteID vs the agent's Config.SiteID) so the two never bid across
+// the map. SiteLunar sits at the world origin; SiteShackleton is offset far away
+// in world coords (the frontend recenters each site to the scene origin).
+const (
+	SiteLunar      = "lunar"
+	SiteShackleton = "shackleton"
+)
+
+// shackletonOrigin is where the Shackleton dome is placed in world coords (epic
+// 04): far from the lunar dome at the origin so the two sites never collide in
+// world space. The frontend's per-site framing recenters each to the scene origin,
+// so the large offset is invisible on screen and only keeps the boards disjoint.
+var shackletonOrigin = domain.Vec2{X: 400, Y: 0}
 
 // Config is the ONE place every demo-pacing timing is tuned. The defaults
 // (Rehearsal) widen the real engine windows so the kill→heal arc reads in
@@ -75,7 +92,11 @@ func Rehearsal() Config {
 		TTLFactor:       6, // TTL = 4.2 s: a long, legible drain ring over the orphan
 		SnapshotHz:      12,
 		KillAfterLeased: 900 * time.Millisecond,
-		KillTarget:      "wall-1",
+		// Retarget the rehearsal kill to the LUNAR site's wall (the prefixed id from
+		// Place, epic 04): a same-site standby heals it, so no rover drives 400 units
+		// across the map to the other site — more correct, and the site gate is what
+		// keeps the heal local.
+		KillTarget: SiteLunar + "/wall-1",
 	}
 }
 
@@ -93,29 +114,40 @@ func External() Config {
 	return cfg
 }
 
-// DomeScenario assembles the full scripted board for the rehearsal: the lunar
-// habitat dome blueprint, a fixed six-rover swarm, and the single scripted kill,
-// all folded into a coordinator.Config. Because the board (positions, batteries,
-// blueprint) is fixed and the auction tie-breaks are deterministic, the same run
-// reproduces beat-for-beat: the same rover wins the target wall, is killed at the
-// same beat, and the same standby heals it — every time.
+// DomeScenario assembles the full scripted board for the rehearsal: TWO live
+// worksites (epic 04) — a lunar habitat dome at the world origin and a Shackleton
+// dome offset far away — each with its OWN fixed six-rover swarm, plus the single
+// scripted kill on the lunar site. Both sites and both swarms ride ONE coordinator
+// and ONE snapshot (a SiteID tag, not two coordinators), so the whole frontend +
+// ADR-0004's single-snapshot contract are untouched. The auction is gated by site,
+// so a rover only ever bids on its own site's tasks. Because both boards
+// (positions, batteries, blueprints) are fixed and the tie-breaks deterministic,
+// the run reproduces beat-for-beat: the same lunar rover wins lunar/wall-1, is
+// killed at the same beat, and the same LUNAR standby heals it — every time.
 //
 // When cfg.NoInProcRovers is set (the External pod-per-rover mode), the returned
-// Config carries NO Rovers and NO ScriptedKills: the coordinator builds the same
-// dome but the rovers join over NATS from outside and kills are real pod deletes.
+// Config carries NO Rovers and NO ScriptedKills: the coordinator builds both domes
+// but the rovers join over NATS from outside and kills are real pod deletes.
 //
 // natsURL is the bus to run against. Pass cfg from Rehearsal (or a tuned copy).
 func DomeScenario(natsURL string, cfg Config) coordinator.Config {
-	blueprint := DomeBlueprint()
+	// Two domes: lunar at the origin, Shackleton offset far in world coords. Each
+	// task is tagged with its SiteID so the auction is site-gated. Place id-prefixes
+	// every task with its site ("lunar/wall-1", "shackleton/wall-1"), so the two
+	// boards never share ids.
+	bp := siteDome(SiteLunar, domain.Vec2{X: 0, Y: 0})
+	bp = append(bp, siteDome(SiteShackleton, shackletonOrigin)...)
 
 	// In pod-per-rover mode the coordinator runs ZERO in-process rovers (they join
 	// over NATS from outside) and arms NO scripted kill (kills are real pod deletes
-	// from the dashboard). Otherwise it spawns the fixed six-rover swarm and the
-	// single reproducible rehearsal kill, exactly as the docker-compose demo does.
+	// from the dashboard). Otherwise it spawns BOTH fixed six-rover swarms (one per
+	// site) and the single reproducible rehearsal kill on the lunar site, exactly as
+	// the docker-compose demo does.
 	var rovers []agent.Config
 	scripted := []coordinator.ScriptedKill(nil)
 	if !cfg.NoInProcRovers {
-		rovers = DomeRovers()
+		rovers = siteRovers(SiteLunar, domain.Vec2{X: 0, Y: -70})
+		rovers = append(rovers, siteRovers(SiteShackleton, domain.Vec2{X: shackletonOrigin.X, Y: -70})...)
 		if cfg.KillTarget != "" {
 			scripted = []coordinator.ScriptedKill{
 				{WhenTaskLeased: cfg.KillTarget, After: cfg.KillAfterLeased},
@@ -125,7 +157,7 @@ func DomeScenario(natsURL string, cfg Config) coordinator.Config {
 
 	return coordinator.Config{
 		NATSURL:        natsURL,
-		Blueprint:      blueprint,
+		Blueprint:      bp,
 		Rovers:         rovers,
 		AuctionWindow:  cfg.AuctionWindow,
 		HeartbeatEvery: cfg.HeartbeatEvery,
@@ -141,11 +173,73 @@ func DomeScenario(natsURL string, cfg Config) coordinator.Config {
 	}
 }
 
-// DomeBlueprint is the lunar habitat dome as a positioned blueprint (TECHSPEC
-// §5): four foundations (no deps) on an inner ring, eight walls on an outer
-// octagon (wall-i needs foundation-((i-1)/2+1)), and a dome-cap keystone at the
-// centre that needs all eight walls. The geometry is a top-down dome footprint
-// so the structure visibly rises as the swarm builds it.
+// siteDome instantiates the habitat dome for one worksite (epic 04): it Places the
+// catalog dome at the site's world origin under the site id as the instance prefix
+// (so every task id is "<site>/<localid>", e.g. "lunar/wall-1") and offsets each
+// position to the origin, then stamps SiteID onto every BlueprintTask so the
+// coordinator gates the auction by site. The dome DAG is identical per site — the
+// same four-foundation, eight-wall, one-cap structure — so each site builds the
+// same shape with its own swarm. The catalog dome reuses the demo dome's task
+// shapes, so the rovers' capabilities and the embedded baked-spec cache still match.
+func siteDome(siteID string, origin domain.Vec2) []coordinator.BlueprintTask {
+	dome, ok := blueprint.DefaultCatalog().Get("dome")
+	if !ok {
+		// The default catalog always carries the dome; a missing entry is a programmer
+		// error, not a runtime condition. Panic loudly rather than ship an empty board.
+		panic("demo: default blueprint catalog missing the \"dome\" entry")
+	}
+	placed := dome.Place(siteID, origin, 0, "")
+	bp := make([]coordinator.BlueprintTask, 0, len(placed))
+	for _, p := range placed {
+		bp = append(bp, coordinator.BlueprintTask{
+			Task:   p.Task,
+			Pos:    p.Pos,
+			SiteID: siteID, // gate this task's auction to its site (epic 04)
+		})
+	}
+	return bp
+}
+
+// siteRovers is the fixed six-rover swarm stationed at one worksite (epic 04),
+// parked below the site's worksite origin. Each rover is capable of every task type
+// (so any standby can heal any wall) and carries the site's SiteID, so it only bids
+// on its OWN site's announces — the two swarms never bid across the map. Ids are
+// prefixed by the site so the two swarms have distinct, deterministic ids
+// ("lunar-R1".."lunar-R6", "shackleton-R1".."shackleton-R6"); fixed positions and
+// staggered batteries make every auction's winner deterministic per site.
+//
+// Every rover carries the demo BlueprintID, so while working a Task it consults the
+// embedded baked-spec cache (bh-03, ADR-0007): a HIT replays the committed generated
+// spec deterministically (no model call); a MISS falls back to the deterministic
+// primitive op stream, riding the same build.op.<task> path so resume-on-kill is
+// unchanged.
+func siteRovers(siteID string, base domain.Vec2) []agent.Config {
+	caps := []domain.Capability{
+		domain.Capability(taskFoundation),
+		domain.Capability(taskWall),
+		domain.Capability(taskDomeCap),
+	}
+	rovers := make([]agent.Config, 0, 6)
+	for i := range 6 {
+		rovers = append(rovers, agent.Config{
+			ID:           domain.RobotID(fmt.Sprintf("%s-R%d", siteID, i+1)),
+			Pos:          domain.Vec2{X: base.X + float64(-50+i*20), Y: base.Y},
+			Battery:      1.0 - float64(i)*0.05,
+			Capabilities: caps,
+			BlueprintID:  cache.DemoBlueprintID,
+			SiteID:       siteID, // gate bidding to this site (epic 04)
+		})
+	}
+	return rovers
+}
+
+// DomeBlueprint is the lunar habitat dome as a positioned, SINGLE-SITE blueprint
+// (TECHSPEC §5): four foundations (no deps) on an inner ring, eight walls on an
+// outer octagon (wall-i needs foundation-((i-1)/2+1)), and a dome-cap keystone at
+// the centre that needs all eight walls. The geometry is a top-down dome footprint
+// so the structure visibly rises as the swarm builds it. It carries no SiteID
+// (single default site) and is kept for the single-site tooling/tests; the live
+// two-site demo board is assembled by DomeScenario via siteDome.
 func DomeBlueprint() []coordinator.BlueprintTask {
 	wallPos := ring(8, 46, 90)       // outer octagon, wall-1 at 12 o'clock
 	foundationPos := ring(4, 24, 68) // inner ring, offset to sit under each wall pair

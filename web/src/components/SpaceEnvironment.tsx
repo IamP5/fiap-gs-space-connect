@@ -57,9 +57,11 @@ import { Environment, Line } from "@react-three/drei";
 import { useFrame, useThree } from "@react-three/fiber";
 import type { Line2 } from "three-stdlib";
 import * as THREE from "three";
+import { loadTexture, preloadTexture } from "../lib/textureCache";
 
 // Self-hosted CC0 HDRI (Poly Haven "Moonless Golf", 2k). See public/assets/CREDITS.md.
-const HDR_FILE = "/assets/hdr/moonless_golf_2k.hdr";
+// Exported so the preload manifest (lib/assets.ts) references the SAME URL (Epic 05 P1).
+export const HDR_FILE = "/assets/hdr/moonless_golf_2k.hdr";
 
 // Self-hosted Deep Star Maps 2020 (NASA/Goddard SVS 4851, Gaia DR2) equirect,
 // galactic coords (the warm dust band sits along the equator). Converted offline
@@ -68,7 +70,8 @@ const HDR_FILE = "/assets/hdr/moonless_golf_2k.hdr";
 // projection lays the band horizontally; backgroundRotation (below) rolls/yaws it
 // so the bright galactic-centre dust runs DIAGONALLY through the orbit frame,
 // behind the Moon+Earth, as in the reference render (SVS #14992). See CREDITS.md.
-const STAR_BG_FILE = "/assets/starmap_2020_8k_gal.jpg";
+// Exported so the preload manifest (lib/assets.ts) references the SAME URL (Epic 05 P1).
+export const STAR_BG_FILE = "/assets/starmap_2020_8k_gal.jpg";
 
 // scene.backgroundRotation (three r0.169): roll tilts the horizontal galactic band
 // to a diagonal; yaw swings the bright galactic-centre bulge toward the orbit
@@ -144,47 +147,41 @@ function StarBackground() {
   useEffect(() => {
     let cancelled = false;
     const prev = scene.background; // the black <color> fallback from Scene3D
-    new THREE.TextureLoader().load(
-      STAR_BG_FILE,
-      (tex) => {
-        if (cancelled) {
-          tex.dispose();
-          return;
-        }
-        tex.mapping = THREE.EquirectangularReflectionMapping;
-        tex.colorSpace = THREE.SRGBColorSpace;
-        tex.anisotropy = gl.capabilities.getMaxAnisotropy();
-        // Keep trilinear mipmapping (three defaults) — sharpness comes from the 8k
-        // source, NOT from disabling mips (which would shimmer the minified stars).
-        tex.generateMipmaps = true;
-        tex.minFilter = THREE.LinearMipmapLinearFilter;
-        tex.magFilter = THREE.LinearFilter;
-        scene.background = tex;
-        // Orient + brighten the galactic band (three r0.169) so the warm dust runs
-        // diagonally through the orbit frame behind the bodies.
-        scene.backgroundRotation = new THREE.Euler(
-          0,
-          THREE.MathUtils.degToRad(STAR_BG_YAW_DEG),
-          THREE.MathUtils.degToRad(STAR_BG_ROLL_DEG),
-        );
-        scene.backgroundIntensity = STAR_BG_INTENSITY;
-        invalidate(); // wake the demand loop ONCE
-      },
-      undefined,
-      () => {
-        /* load failed → leave the black background (ADR-0004 fallback) */
-      },
-    );
+    // Shared URL-keyed cache (textureCache): the 8k starmap is preloaded behind the
+    // splash, so this read is warm. The cache OWNS the texture (never disposed). The
+    // equirect mapping/colorSpace/anisotropy is per-URL config applied here.
+    const tex = loadTexture(STAR_BG_FILE);
+    void preloadTexture(STAR_BG_FILE).then(() => {
+      if (cancelled || !tex.image) return; // failed load ⇒ keep black (ADR-0004)
+      tex.mapping = THREE.EquirectangularReflectionMapping;
+      tex.colorSpace = THREE.SRGBColorSpace;
+      tex.anisotropy = gl.capabilities.getMaxAnisotropy();
+      // Keep trilinear mipmapping (three defaults) — sharpness comes from the 8k
+      // source, NOT from disabling mips (which would shimmer the minified stars).
+      tex.generateMipmaps = true;
+      tex.minFilter = THREE.LinearMipmapLinearFilter;
+      tex.magFilter = THREE.LinearFilter;
+      tex.needsUpdate = true; // re-upload with the new mapping/filters
+      scene.background = tex;
+      // Orient + brighten the galactic band (three r0.169) so the warm dust runs
+      // diagonally through the orbit frame behind the bodies.
+      scene.backgroundRotation = new THREE.Euler(
+        0,
+        THREE.MathUtils.degToRad(STAR_BG_YAW_DEG),
+        THREE.MathUtils.degToRad(STAR_BG_ROLL_DEG),
+      );
+      scene.backgroundIntensity = STAR_BG_INTENSITY;
+      invalidate(); // wake the demand loop ONCE
+    });
     return () => {
       cancelled = true;
       const cur = scene.background;
-      // Only restore/dispose if WE installed a texture; if the load failed or is
-      // still pending, `cur` is still `prev` and we must not dispose it.
-      if (cur instanceof THREE.Texture && cur !== prev) {
+      // Only restore if WE installed the texture; if the load failed or is still
+      // pending, `cur` is still `prev`. The cache owns `tex` — do NOT dispose it.
+      if (cur === tex) {
         scene.background = prev;
         scene.backgroundIntensity = 1;
         scene.backgroundRotation = new THREE.Euler();
-        cur.dispose();
       }
     };
   }, [scene, gl, invalidate]);

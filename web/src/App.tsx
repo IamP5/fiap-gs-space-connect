@@ -1,9 +1,9 @@
 // App — the SwarmBuild dashboard shell. Pure re-render of the latest snapshot:
 // a connection indicator (header), the task ledger (top-left), the kill panel
-// (top-right, when a rover is selected), and the 2D world canvas. No state
+// (top-right, when a rover is selected), and the 3D worksite scene. No state
 // libraries, no router — React + a canvas is enough. App owns only selection
 // state; everything else is derived from the snapshot and pushed into small
-// memoized presentational components (StatusIndicator, TaskLedger, KillPanel).
+// memoized presentational components (StatusIndicator, MissionHud, KillPanel).
 
 import {
   Suspense,
@@ -16,16 +16,15 @@ import {
 } from "react";
 import { useSnapshot } from "./hooks/useSnapshot";
 import { connectionStatus } from "./lib/connection";
-import { StatusIndicator } from "./components/StatusIndicator";
-import { TaskLedger } from "./components/TaskLedger";
+import { TopBar } from "./components/TopBar";
+import { MissionHud } from "./components/MissionHud";
 import { KillPanel } from "./components/KillPanel";
-import { ControlsPanel } from "./components/ControlsPanel";
 import { EarthPanel } from "./components/EarthPanel";
-import { BlueprintPalette } from "./components/BlueprintPalette";
-import { WorldCanvas } from "./components/WorldCanvas";
+import { Hotbar } from "./components/Hotbar";
+import { LoadingScreen } from "./components/LoadingScreen";
 // Type-only — erased at build time, so referencing the camera view-mode type
 // here does NOT pull the lazy three.js Scene3D chunk into the eager shell bundle.
-import type { ViewMode } from "./components/Scene3D";
+import type { SiteId, ViewMode } from "./components/Scene3D";
 import { blueprintById } from "./lib/blueprintCatalog";
 import {
   ghostTasks,
@@ -34,21 +33,22 @@ import {
   type Footprint,
   type Ghost,
 } from "./lib/placement";
+import { missionStats, tasksForSite } from "./lib/missionStats";
 import type { BuildMode, Vec2 } from "./types/wire";
 import "./styles/dashboard.css";
 
 // The 3D scene drags in three.js + drei + postprocessing (~300 kB gzipped), so
-// it is code-split into its own chunk and loaded on demand. The lightweight 2D
-// WorldCanvas (the rehearsed fallback, ADR-0004) stays eager, so the shell and
-// the fallback path never pay to parse three.js up front.
+// it is code-split into its own chunk and loaded on demand. The shell stays
+// lightweight so it never pays to parse three.js up front; in-scene primitive
+// fallbacks (ADR-0004) cover any per-asset failure once the scene mounts.
 const Scene3D = lazy(() =>
   import("./components/Scene3D").then((m) => ({ default: m.Scene3D })),
 );
 
-// Which renderer draws the worksite. Both are PURE functions of the same
-// snapshot (ADR-0004), so toggling between them can never change World Model
-// state — the 3D scene is the headline; the 2D canvas is the rehearsed fallback.
-type Renderer = "3d" | "2d";
+// Reveal no later than this even if a load hangs entirely (ADR-0004 safety
+// backstop): preloadAllAssets settles per-asset (never rejects), but a load that
+// never settles at all must not trap the user behind the splash.
+const SAFETY_TIMEOUT_MS = 9000;
 
 export default function App() {
   const { snapshot, earth, wsOpen, url, send } = useSnapshot();
@@ -58,14 +58,79 @@ export default function App() {
   // rover to select, then click KILL, so a stray click never kills.
   const [selected, setSelected] = useState<string | null>(null);
 
-  // The renderer toggle. Defaults to the 3D diorama (the pitch); the 2D canvas
-  // stays a one-click fallback if 3D ever misbehaves on the projector.
-  const [renderer, setRenderer] = useState<Renderer>("3d");
+  // Camera view-mode (issue #49). Defaults to "orbit" — on reveal the scene
+  // settles in the distant parked-Moon vista (no auto push-in; the surface intro
+  // fly-in self-disables off-surface). Clicking the base marker flies the descent
+  // to the rehearsed worksite framing (ADR-0004); both framings stay clamped.
+  const [viewMode, setViewMode] = useState<ViewMode>("orbit");
 
-  // Camera view-mode (issue #49). Defaults to "surface" — the rehearsed fixed
-  // worksite framing (ADR-0004). The operator can flip to "orbit" to pull the
-  // camera back and take in the distant parked Moon; both framings stay clamped.
-  const [viewMode, setViewMode] = useState<ViewMode>("surface");
+  // Active surface site (Epic 04 P2). The surface renders ONE worksite at a time;
+  // this picks which. Defaults to "lunar" so the existing single base marker
+  // descends to the lunar site and the snapshot's untagged rovers/tasks (?? "lunar")
+  // are shown. Orthogonal to viewMode: orbit is site-agnostic, surface shows this
+  // site. (Two orbit markers + descend-to-site are a later slice, #137.)
+  const [activeSite, setActiveSite] = useState<SiteId>("lunar");
+
+  // --- Persistent "LLM Generated" build mode (Epic 06 P1). The bottom hotbar's
+  // checkbox owns this flag (default false = deterministic Replay); when checked,
+  // the NEXT placement is seeded as "live" (the Build harness generates it inline).
+  // This is the ONLY new global client state this slice adds (additive per
+  // ADR-0004): a persistent UI preference, NOT world state. It REPLACES the old
+  // per-placement Replay/Live toggle — `startPlacement` seeds `placement.mode`
+  // from it, so the existing `mode` field on the placeBlueprint control is
+  // threaded with NO wire/back-end change.
+  const [liveMode, setLiveMode] = useState(false);
+
+  // --- Cinematic HUD hide (Epic 06 P0). `H` fades ALL HUD out (and back) for a
+  // clean, panel-free screenshot of the 3D scene. This is the ONLY new global
+  // client state this slice adds (additive per ADR-0004); it's a pure UI flag,
+  // never world state. A window keydown listener toggles it; when true the stage
+  // wrapper gets a `hud--hidden` class that drops both opacity AND pointer-events
+  // so a hidden HUD never eats clicks. The Canvas lives OUTSIDE the faded wrapper,
+  // so the scene is unaffected. We ignore the key while typing in a field so it
+  // can never hijack text entry.
+  const [hudHidden, setHudHidden] = useState(false);
+  useEffect(() => {
+    const onKeyDown = (e: KeyboardEvent) => {
+      if (e.key !== "h" && e.key !== "H") return;
+      if (e.metaKey || e.ctrlKey || e.altKey) return;
+      const el = e.target as HTMLElement | null;
+      const tag = el?.tagName;
+      if (tag === "INPUT" || tag === "TEXTAREA" || el?.isContentEditable) return;
+      setHudHidden((v) => !v);
+    };
+    window.addEventListener("keydown", onKeyDown);
+    return () => window.removeEventListener("keydown", onKeyDown);
+  }, []);
+
+  // --- Preload-everything-behind-a-splash (Epic 05 P1). On mount we kick the
+  // explicit asset preload (lib/assets) AND warm the lazy Scene3D chunk, both via
+  // DYNAMIC import() so the three.js-pulling manifest never lands in the light
+  // shell bundle. The Canvas is gated on `ready`, which latches true when the
+  // preload resolves OR a safety timeout fires — ONE-WAY, so the splash never
+  // re-shows on later on-demand loads (ADR-0004). `progress` (0..1) drives the bar.
+  const [progress, setProgress] = useState(0);
+  const [ready, setReady] = useState(false);
+  useEffect(() => {
+    let settled = false; // one-way reveal guard
+    const reveal = () => {
+      if (settled) return;
+      settled = true;
+      setReady(true);
+    };
+    // Safety backstop: reveal even if a load hangs forever (ADR-0004).
+    const timer = window.setTimeout(reveal, SAFETY_TIMEOUT_MS);
+    // Warm the lazy Scene3D JS chunk in parallel with the asset decode so the
+    // chunk parse doesn't add a stall after the bar fills.
+    void import("./components/Scene3D");
+    // Kick the asset preload via a dynamic import (keeps three out of the shell).
+    void import("./lib/assets").then(({ preloadAllAssets }) =>
+      preloadAllAssets((loaded, total) => {
+        setProgress(total > 0 ? loaded / total : 1);
+      }).then(reveal),
+    );
+    return () => window.clearTimeout(timer);
+  }, []);
 
   // The currently-selected rover, resolved against the LATEST snapshot. If it
   // has vanished from the snapshot, this is undefined → treated as deselected.
@@ -127,29 +192,63 @@ export default function App() {
     mode: BuildMode; // per-placement build mode (bh-08c): "replay" (default) | "live"
   } | null>(null);
 
-  const startPlacement = useCallback((blueprintId: string) => {
-    setSelected(null); // placing and rover-selection are mutually exclusive modes
-    setPlacement((prev) =>
-      // Clicking the active blueprint again cancels; clicking another switches.
-      prev?.blueprintId === blueprintId
-        ? null
-        : { blueprintId, origin: null, rotation: 0, mode: "replay" },
-    );
-  }, []);
+  const startPlacement = useCallback(
+    (blueprintId: string) => {
+      setSelected(null); // placing and rover-selection are mutually exclusive modes
+      setPlacement((prev) =>
+        // Clicking the active blueprint again cancels; clicking another switches.
+        prev?.blueprintId === blueprintId
+          ? null
+          : // Seed the build mode from the persistent hotbar toggle (Epic 06 P1):
+            // the placeBlueprint control's `mode` field is threaded from liveMode,
+            // replacing the old per-placement Replay/Live picker.
+            { blueprintId, origin: null, rotation: 0, mode: liveMode ? "live" : "replay" },
+      );
+    },
+    [liveMode],
+  );
 
+  // `mode` is seeded ONCE in startPlacement from the persistent `liveMode` toggle.
+  // `movePlacement` tracks the cursor origin; `rotatePlacement` is the in-scene
+  // right-drag-rotate mutator (#151) — the scene maps a horizontal drag delta to an
+  // absolute rotation (radians) and pushes it here, replacing the old slider.
+  const movePlacement = useCallback((origin: Vec2) => {
+    setPlacement((p) => (p ? { ...p, origin } : p));
+  }, []);
   const rotatePlacement = useCallback((rotation: number) => {
     setPlacement((p) => (p ? { ...p, rotation } : p));
   }, []);
 
-  const setPlacementMode = useCallback((mode: BuildMode) => {
-    setPlacement((p) => (p ? { ...p, mode } : p));
-  }, []);
-
-  const movePlacement = useCallback((origin: Vec2) => {
-    setPlacement((p) => (p ? { ...p, origin } : p));
-  }, []);
-
+  // Explicit cancel (#151): ESC, or re-picking the active glyph, drops the
+  // placement. Re-picking is handled by startPlacement (toggles to null); this is
+  // the ESC / interrupt path. Restoring the camera is automatic — `placing` flips
+  // false, so the OrbitControls camera-lock + contextmenu suppression in Scene3D
+  // release in their own cleanup effects (no camera handle to touch from here).
   const cancelPlacement = useCallback(() => setPlacement(null), []);
+
+  // ESC cancels an active placement (#151). A window keydown listener so the key
+  // works regardless of canvas focus; ignored while typing in a field so it never
+  // hijacks text entry. Armed only while placing, so it never swallows ESC at rest.
+  useEffect(() => {
+    if (placement === null) return;
+    const onKeyDown = (e: KeyboardEvent) => {
+      if (e.key !== "Escape") return;
+      const el = e.target as HTMLElement | null;
+      const tag = el?.tagName;
+      if (tag === "INPUT" || tag === "TEXTAREA" || el?.isContentEditable) return;
+      cancelPlacement();
+    };
+    window.addEventListener("keydown", onKeyDown);
+    return () => window.removeEventListener("keydown", onKeyDown);
+  }, [placement, cancelPlacement]);
+
+  // Surface site chip (Epic 06 P1): the hotbar cycles the active worksite
+  // Lunar ↔ Shackleton, triggering the EXISTING site re-descent (the same
+  // setActiveSite the old ControlsPanel Site toggle drove + Scene3D reacts to).
+  const cycleSite = useCallback(
+    () => setActiveSite((s) => (s === "lunar" ? "shackleton" : "lunar")),
+    [],
+  );
 
   // Existing structures' footprints, derived from the snapshot's task positions,
   // so the client can mirror the server's no-overlap gate. Each task gets a small
@@ -157,8 +256,14 @@ export default function App() {
   // envelope). Pure read of the snapshot.
   const obstacles = useMemo<Footprint[]>(() => {
     const ts = snapshot?.tasks ?? [];
-    return ts.map((t) => ({ cx: t.pos.X, cy: t.pos.Y, halfX: 6, halfY: 6 }));
-  }, [snapshot]);
+    // Filter to the active site (Epic 04 P2): drag-to-place must only collide with
+    // THIS site's tasks, else placing on the lunar surface would conflict with
+    // Shackleton's worksite (and vice versa). `?? "lunar"` keeps untagged tasks on
+    // the default site (back-compat).
+    return ts
+      .filter((t) => (t.site ?? "lunar") === activeSite)
+      .map((t) => ({ cx: t.pos.X, cy: t.pos.Y, halfX: 6, halfY: 6 }));
+  }, [snapshot, activeSite]);
 
   // The live validity of the current placement (client mirror of the server gate),
   // recomputed as the cursor/rotation move. Null origin ⇒ "move the cursor" hint
@@ -193,9 +298,25 @@ export default function App() {
 
   const tasks = snapshot?.tasks ?? [];
 
+  // --- Mission HUD derivations (Epic 06 P2). The top-left HUD reads the self-heal
+  // story at a glance for the ACTIVE worksite only: a build-progress bar
+  // `done/total` and a `rovers N/M alive` count. Both are PURE site-scoped reads
+  // of the snapshot (lib/missionStats), filtered to `activeSite` the same way
+  // `obstacles` is, so a kill / Failure spike dips them and a re-auction heals them
+  // with no extra wiring (ADR-0004). `siteTasks` also feeds the HUD's expandable
+  // per-task detail list, so the expanded view shows only this site's tasks.
+  const siteTasks = useMemo(
+    () => tasksForSite(tasks, activeSite),
+    [tasks, activeSite],
+  );
+  const stats = useMemo(
+    () => missionStats(tasks, snapshot?.rovers ?? [], activeSite),
+    [tasks, snapshot, activeSite],
+  );
+
   // The ghost the scene draws while placing: the catalog blueprint's tasks
   // instantiated at the cursor origin + rotation, with validity, threaded to the
-  // active renderer. Null when not placing or before the cursor hits the ground.
+  // 3D scene. Null when not placing or before the cursor hits the ground.
   const ghost = useMemo<Ghost | null>(() => {
     if (!placement || !placement.origin) return null;
     const bp = blueprintById(placement.blueprintId);
@@ -206,97 +327,109 @@ export default function App() {
     };
   }, [placement, placementInvalidReason]);
 
+  // View-gating (Epic 06 P0): in ORBIT the only HUD is the top bar — the ledger,
+  // blueprints, stress sliders, and Earth panel are all dead weight there, so
+  // they are not mounted at all. They render in SURFACE as before. (The orbit
+  // site markers live inside Scene3D and are orbit-gated there.)
+  const isSurface = viewMode === "surface";
+
   return (
     <div className="app">
-      <header className="topbar">
-        <div className="brand">
-          SwarmBuild <span className="brand-sub">dashboard</span>
-        </div>
-        <StatusIndicator status={status} />
-        <button
-          type="button"
-          className="reload-btn"
-          onClick={reloadDemo}
-          disabled={reloading}
-          aria-disabled={reloading}
-          title="Reset the board so the swarm rebuilds the dome"
-        >
-          {reloading ? "Reloading…" : "Reload demo"}
-        </button>
-        <div className="renderer-toggle" role="group" aria-label="Renderer">
-          <button
-            type="button"
-            className={`renderer-btn ${renderer === "3d" ? "is-active" : ""}`}
-            aria-pressed={renderer === "3d"}
-            onClick={() => setRenderer("3d")}
-          >
-            3D
-          </button>
-          <button
-            type="button"
-            className={`renderer-btn ${renderer === "2d" ? "is-active" : ""}`}
-            aria-pressed={renderer === "2d"}
-            onClick={() => setRenderer("2d")}
-          >
-            2D
-          </button>
-        </div>
-        <div className="meta">{url}</div>
-      </header>
+      <TopBar
+        status={status}
+        url={url}
+        viewMode={viewMode}
+        onViewModeChange={setViewMode}
+        reloading={reloading}
+        onReload={reloadDemo}
+      />
 
       <main className="stage">
-        <TaskLedger
-          tasks={tasks}
-          roverCount={snapshot?.rovers.length ?? 0}
-          hasSnapshot={snapshot !== null}
-        />
+        {/* The HUD stage: every floating panel lives here. Two CSS effects compose
+            on this one wrapper, and they MUST NOT fight:
+              (a) `hud--surface`/`hud--orbit` (keyed on `viewMode`) drives the
+                  animated view transition — surface panels slide+fade IN as the
+                  glare-masked descent settles, and OUT as you return to orbit. It's
+                  a PURE CSS transition off the same `viewMode` flip the Scene3D
+                  driver consumes — NO second JS/imperative animation clock
+                  (Epic 06 P4, Risk #5). Per-panel `transition-delay` lands the IN
+                  fade just AFTER the glare peak (descent ≈1500ms, swap ≈750ms).
+              (b) `hud--hidden` (the `H` cinematic key) fades the WHOLE wrapper to
+                  opacity:0 and drops pointer-events. Because it sits on the PARENT,
+                  its opacity multiplies the children's — so a hidden HUD always wins
+                  regardless of the surface/orbit state mid-transition, and never
+                  eats a click. The Canvas sits OUTSIDE this wrapper (below), so the
+                  3D scene is never faded by `H`. */}
+        <div
+          className={`hud-stage ${isSurface ? "hud--surface" : "hud--orbit"} ${
+            hudHidden ? "hud--hidden" : ""
+          }`}
+        >
+          {/* Compact Mission HUD (Epic 06 P2) — replaces the verbose TaskLedger.
+              A site-scoped build-progress bar + rovers-alive readout that dip on
+              a Failure spike and recover as the swarm heals; click to expand the
+              full per-task list. Surface-only — kept mounted across views so it can
+              animate OUT on return-to-orbit (visibility is the `hud--orbit` class;
+              it's fully faded + pointer-inert in orbit, per the README success
+              criterion). */}
+          <MissionHud
+            tasks={siteTasks}
+            done={stats.done}
+            total={stats.total}
+            roversAlive={stats.roversAlive}
+            roversTotal={stats.roversTotal}
+            hasSnapshot={snapshot !== null}
+          />
 
-        {/* Drag-to-place authoring (bh-05): list catalog Blueprints; a click
-            starts a placement, the 3D scene previews the ghost, confirm emits a
-            placeBlueprint control. */}
-        <BlueprintPalette
-          placement={
-            placement
-              ? { blueprintId: placement.blueprintId, rotation: placement.rotation, mode: placement.mode, invalidReason: placementInvalidReason }
-              : null
-          }
-          onStart={startPlacement}
-          onRotate={rotatePlacement}
-          onModeChange={setPlacementMode}
-          onConfirm={confirmPlacement}
-          onCancel={cancelPlacement}
-        />
+          {/* Unified bottom hotbar (Epic 06 P1) — replaces the old BlueprintPalette
+              card list AND the bottom-left stress slider panel. Footprint-glyph
+              blueprint icons (a click arms a placement; the 3D scene previews the
+              ghost and the EXISTING confirm path places it) · persistent
+              LLM-Generated toggle (seeds placement.mode) · ⚠/⏱ stress popovers ·
+              📍 site chip (re-descent). Surface-only (faded out in orbit). */}
+          <Hotbar
+            activeBlueprintId={placement?.blueprintId ?? null}
+            onPickBlueprint={startPlacement}
+            liveMode={liveMode}
+            onLiveModeChange={setLiveMode}
+            activeSite={activeSite}
+            onCycleSite={cycleSite}
+            send={send}
+          />
 
-        {selectedRover ? (
-          <KillPanel rover={selectedRover} onKill={kill} onDismiss={dismiss} />
-        ) : null}
+          {/* One-line placement key hint (Epic 06 P1, #151) — docked just above the
+              hotbar while a blueprint is armed, replacing the old sub-panel's
+              instructions. The cursor-anchored ✓/✗ validity tick lives in-scene
+              (Scene3D PlacementTip). Surface-only + only while placing (transient,
+              so it stays conditionally mounted — no view-transition needed). */}
+          {isSurface && placement !== null ? (
+            <div className="place-hint" role="status">
+              <b>L</b> place · <b>R-drag</b> rotate · <b>scroll</b> zoom · <b>ESC</b> cancel
+            </div>
+          ) : null}
 
-        {/* Stress dials, bottom-left. The latency slider is wired here so it can
-            be promoted into the demo arc with a one-line change (issue 09). */}
-        <ControlsPanel
-          send={send}
-          viewMode={viewMode}
-          onViewModeChange={setViewMode}
-        />
+          {/* The Kill panel stays contextual (a live selected rover) — it renders
+              ONLY for a live selection (#147/#149 gate, preserved) AND only on the
+              surface, since selection only happens at the worksite. */}
+          {isSurface && selectedRover ? (
+            <KillPanel rover={selectedRover} onKill={kill} onDismiss={dismiss} />
+          ) : null}
 
-        {/* The DELAYED Earth view, bottom-right — it lags the live TaskLedger
-            (top-left) as latency climbs, proving "Earth never knew" (issue 09). */}
-        <EarthPanel earth={earth} snapshotAt={snapshot?.at ?? null} />
+          {/* The DELAYED Earth view, bottom-right — it lags the live Mission HUD
+              (top-left) as latency climbs, proving "Earth never knew" (issue 09).
+              Surface-only (faded out in orbit; kept mounted to animate in/out). */}
+          <EarthPanel earth={earth} snapshotAt={snapshot?.at ?? null} />
+        </div>
 
-        {/* Both renderers honor the SAME {snapshot, selected, onPick} contract,
-            so the toggle swaps them with no other change. The 2D WorldCanvas is
-            kept fully functional as the rehearsed fallback (ADR-0004). */}
-        {renderer === "3d" ? (
-          // Suspense covers the lazy three.js chunk; the fallback is the same 2D
-          // canvas, so the worksite is visible instantly even before 3D loads.
+        {/* The 3D scene is the sole renderer (ADR-0004). Everything preloads
+            behind the branded splash; the Canvas mounts only once `ready` (preload
+            resolved OR safety timeout), so nothing pops in later — even on descent.
+            The lazy chunk's Suspense fallback is the same splash, so a slow chunk
+            parse is covered by the same branded screen. */}
+        <LoadingScreen progress={progress} revealed={ready} />
+        {ready ? (
           <Suspense
-            fallback={
-              <WorldCanvas
-                snapshot={snapshot}
-                selected={selectedRover ? selected : null}
-                onPick={setSelected}
-              />
-            }
+            fallback={<LoadingScreen progress={progress} revealed={false} />}
           >
             <Scene3D
               snapshot={snapshot}
@@ -304,19 +437,19 @@ export default function App() {
               onPick={setSelected}
               placing={placement !== null}
               ghost={ghost}
+              placementRotation={placement?.rotation ?? 0}
+              placementInvalidReason={placementInvalidReason}
               onPlaceMove={movePlacement}
               onPlaceConfirm={confirmPlacement}
+              onPlaceRotate={rotatePlacement}
+              onPlaceCancel={cancelPlacement}
               viewMode={viewMode}
               onViewModeChange={setViewMode}
+              activeSite={activeSite}
+              onActiveSiteChange={setActiveSite}
             />
           </Suspense>
-        ) : (
-          <WorldCanvas
-            snapshot={snapshot}
-            selected={selectedRover ? selected : null}
-            onPick={setSelected}
-          />
-        )}
+        ) : null}
       </main>
     </div>
   );
