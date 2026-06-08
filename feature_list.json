@@ -1741,7 +1741,7 @@
       "area": "surface-immersion",
       "title": "Robotic rover readability — scale 2.5-3x + load-fix + material (08-P4)",
       "user_visible_behavior": "Rovers are unmistakably robots at default camera distance — visibly metal, subtly alive, scaled ~2.5-3x larger (intentional realism break), and never silently rendered as primitive boxes.",
-      "status": "not_started",
+      "status": "passing",
       "issue": 171,
       "milestone": 3,
       "depends_on": [],
@@ -1749,7 +1749,7 @@
         "cd web && npm run build && npm test",
         "manual: confirm rassor_rover.glb loads (no primitive fallback); hit-proxy scales with body (no missed clicks); rover reads as metal robot with idle motion; structures unchanged"
       ],
-      "evidence": "",
+      "evidence": "feat/08-surface-immersion: GLB load confirmed (was a featureless rassor shrinkwrap, not the primitive fallback); swapped active rover to CC0 Quaternius 6-wheel explorer (rover_robot.glb, 26KB Draco, insignia-clean, via Poly Pizza). ROVER_HERO_SCALE 2.7x (0.3u->~0.81u; hit-proxy scales with body, no-missed-click held). Rover material branch in polishGltfMaterials (metalness .85 / roughness .5 / clearcoat) so it reads as machined metal. Idle yaw+bob articulation on alive rovers (ref-mutation, no re-render). Added self-shim to condition-asset.mjs. Verified: tsc clean, eslint 0 err, 239 vitest pass; chrome-mcp surface = chassis+mast silhouette, no GLB load errors.",
       "notes": "Milestone 08. Plan WS-3. Decision locked: rover scale breaks realism (~2.5-3x); structures stay real (realMeters x 0.12). Document the break next to scale constants."
     },
     {

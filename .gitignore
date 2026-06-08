@@ -16,3 +16,6 @@ tmp/
 .env.*
 !.env.example
 .e2e-captures/
+
+# Asset conditioning sources (not shipped; conditioned .glb is committed instead)
+sources/

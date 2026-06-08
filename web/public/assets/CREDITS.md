@@ -301,7 +301,7 @@ ESA/Hubble publishes its images under **CC-BY 4.0**
 here verbatim. **Attribution:** NASA, ESA, and the Hubble Heritage
 (STScI/AURA)-ESA/Hubble Collaboration. Acknowledgment: J. Hester (ASU).
 
-## Rover model (NASA-PD)
+## Rover model (CC0 — milestone 08 / #171; was NASA-PD RASSOR)
 
 Used by `<Rover3D>` (issue #54) as the realistic worker-entity render — every
 rover swaps its primitive box body for this one configured glTF. It is NOT a
@@ -312,9 +312,16 @@ Draco-compressed by `scripts/condition-asset.mjs` (recentered, fit-to-unit);
 fitted + ground-seated at load. The loaded tree is raycast-suppressed so the
 rover's invisible hit-proxy sphere stays the SOLE pickable surface.
 
+WS-3 (#171) swapped the **active** rover from the NASA-PD `rassor_rover.glb`
+(a featureless single-mesh "shrinkwrap" hull that read as a smooth pod) to a
+CC0 Quaternius 6-wheel explorer — visible body + 6 wheels + sensor mast, so the
+swarm reads as actual robots. The RASSOR row is retained below for provenance
+(file still present, no longer referenced by the renderer).
+
 | File | Source asset | Author | Source URL | License |
 |------|--------------|--------|-----------|---------|
-| `models/rassor_rover.glb` | "Regolith Advanced Surface Systems Operations Robot (RASSOR)" — NASA's lunar regolith excavation/construction robot. Draco-decompressed, decimated (~2.1M → render-light), conditioned (Y-up, recentered, fit-to-unit), then Draco-recompressed (6.3 MB → 2.0 MB). | NASA | https://github.com/nasa/NASA-3D-Resources/tree/master/3D%20Models/Regolith%20Advanced%20Surface%20Systems%20Operations%20Robot%20(RASSOR) | NASA-PD |
+| `models/rover_robot.glb` | "Rover" — 6-wheel low-poly explorer (body + 6 wheels + sensor mast) from Quaternius's Space Kit, via Poly Pizza. up=y + recenter + fit-to-unit + `gltf-transform optimize --compress draco` (the optimize `join` flattens the named parts into one mesh — all geometry preserved; the baseColor atlas is pruned → flat PBR, shaded by the rover material pass). 356 KB → 25.9 KB. Poly Pizza shows the per-model license as "Public Domain (CC0)". | Quaternius (quaternius.com) | https://poly.pizza/m/WRd1piJOfh | CC0 1.0 |
+| `models/rassor_rover.glb` | "Regolith Advanced Surface Systems Operations Robot (RASSOR)" — NASA's lunar regolith excavation/construction robot. Draco-decompressed, decimated (~2.1M → render-light), conditioned (Y-up, recentered, fit-to-unit), then Draco-recompressed (6.3 MB → 2.0 MB). _Retained for provenance; no longer the active rover (#171)._ | NASA | https://github.com/nasa/NASA-3D-Resources/tree/master/3D%20Models/Regolith%20Advanced%20Surface%20Systems%20Operations%20Robot%20(RASSOR) | NASA-PD |
 
 NASA's 3D Resources are released into the public domain (NASA-PD); see
 https://github.com/nasa/NASA-3D-Resources (Usage Guidelines). No NASA insignia

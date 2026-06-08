@@ -338,9 +338,13 @@ function roverHaloColor(r: RoverView): string {
 // The one configured rover model. Self-hosted, conditioned + Draco-compressed by
 // scripts/condition-asset.mjs (recentered, fit-to-unit). A missing file just
 // keeps the primitive fallback below.
+// WS-3 (#171): swapped from the featureless `rassor_rover.glb` shrinkwrap hull to a
+// CC0 Quaternius 6-wheel explorer (body + 6 wheels + sensor mast) so the swarm reads
+// as ACTUAL ROBOTS, not smooth pods. CC0 via Poly Pizza (see CREDITS.md), insignia-
+// clean, ~26 KB Draco.
 // Exported so the preload manifest (lib/assets.ts) references the SAME URL the
 // renderer uses — the manifest can't drift from the component (Epic 05 P1).
-export const ROVER_MODEL_REF = "/assets/models/rassor_rover.glb";
+export const ROVER_MODEL_REF = "/assets/models/rover_robot.glb";
 // The native (authored) size the rover body, primitive fallback, hit-proxy, and
 // halos were all laid out at — the model's LARGEST bbox dim fits to this, and the
 // primitive box/mast/wheels + hit sphere + halo rings are all proportioned around
@@ -356,7 +360,16 @@ const ROVER_BASE_SIZE = ROVER_MODEL_FIT;
 // ROVER_SCALE), so a click can never miss the rover the user sees — the proxy and
 // the body scale together (Epic 04 P0; ADR-0004).
 const ROVER_SCENE_SIZE = REAL_METERS.rover * SCENE_UNITS_PER_METER;
-const ROVER_SCALE = ROVER_SCENE_SIZE / ROVER_BASE_SIZE;
+// WS-3 (#171) INTENTIONAL REALISM BREAK — readability over strict scale, for the
+// HERO ACTORS only. A literal 2.5 m rover is 0.3 u, a speck against the 4.8–14.4 u
+// launch infra, so it reads as neither robot nor agent. We bump the *rover only* by
+// ROVER_HERO_SCALE so it lands at ~0.81 u — unmistakably a machine, still smaller
+// than the habitats. Structure proportions stay literal (REAL_METERS × units/m); do
+// NOT "fix" this back. The whole rover group (body + hit-proxy + halos) scales by
+// ROVER_SCALE together, so the invisible pick sphere grows with the body — the
+// no-missed-click invariant (ADR-0004) is preserved.
+const ROVER_HERO_SCALE = 2.7;
+const ROVER_SCALE = (ROVER_SCENE_SIZE / ROVER_BASE_SIZE) * ROVER_HERO_SCALE;
 
 // fitAndSeatRover normalizes a loaded model in place (mirrors LaunchScenery's
 // fitAndSeat): scale its largest dimension to `fit`, recenter on x/z, and seat
@@ -441,6 +454,10 @@ function RoverBody({
   // per-mesh materials, but we clone uniformly so the reset path is identical.
   const flashMats = useRef<THREE.MeshStandardMaterial[] | null>(null);
   const flashing = useRef(false);
+  // WS-3 (#171) idle articulation: a per-rover phase so a live swarm doesn't sway in
+  // lockstep. Seeded once on mount; drives a tiny continuous yaw + bob in useFrame so
+  // an alive rover reads as an *active* machine scanning the site, not a parked prop.
+  const idlePhase = useRef(Math.random() * Math.PI * 2);
 
   // Resurrection body flash (#107): pulse every body mesh's emissive toward bright
   // cyan at the comeback and ease back as the shockwave ring expands. A no-op when
@@ -449,6 +466,14 @@ function RoverBody({
   useFrame(() => {
     const group = bodyRef.current;
     if (!group) return;
+    // Idle articulation (alive rovers only): a subtle scanning yaw + settle bob,
+    // local to the body group (so it composes with the snapshot-driven world move).
+    // Ref-mutation only — never a re-render. A dead rover holds still.
+    if (!dim) {
+      const t = performance.now() / 1000;
+      group.rotation.y = Math.sin(t * 0.55 + idlePhase.current) * 0.09;
+      group.position.y = Math.sin(t * 1.2 + idlePhase.current) * 0.012;
+    }
     const p = revived.current ?? 0;
     if (p <= 0) {
       if (!flashing.current) return; // already idle — nothing to reset
