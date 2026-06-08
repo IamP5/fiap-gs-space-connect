@@ -1626,7 +1626,7 @@
       "area": "demo-cinematic",
       "title": "Marker lock-on cue + bookend label flip (Scenery)",
       "user_visible_behavior": "An operator cue forces the markers' existing lock-on visual without mouse hover, and a bookend cue flips the Shackleton marker amber->cyan / em construcao -> operacional so both diamonds read operational on the final wide.",
-      "status": "not_started",
+      "status": "passing",
       "issue": 157,
       "depends_on": [
         "r3d-155"
@@ -1634,6 +1634,9 @@
       "verification": [
         "cd web && npm run build && npm test (TS-clean + vitest)",
         "chrome-devtools MCP: orbit, fire lock-on on Lunar marker (assert locked state) + Shackleton flip (assert label=operacional); before/after screenshots of brackets/bloom + both diamonds cyan/operacional"
+      ],
+      "evidence": [
+        "Implemented on feat/07-157-markers (base feat/07-demo-cinematic). DoD green: `cd web && npm run build` TS-clean (tsc -b + vite build OK); `npm test` 229 passed (19 files), incl. 9 new in src/lib/reel/markerCue.test.ts. Two optional props threaded App.tsx -> Scene3D.tsx (Scene3DProps + SceneContents + both SkyBodies render branches) -> SkyBodies (SiteMarkers/SiteMarker): `lockedSite?: SiteId` ORs the cinematic cue with real mouse hover into a `locked` flag driving the EXISTING lock-on visual (brackets pop in, line+label brighten/tighten); `statusOverride?: boolean` flips the Shackleton marker to the Lunar marker's cyan + 'operational' (reusing SITE_MARKERS.lunar so there's no 2nd source of truth). New pure lib src/lib/reel/markerCue.ts: `cycleLockOn` (null->lunar->shackleton->null, no wrap past null) + `isMarkerLockOn`/`isMarkerFlip` keystroke matchers; keys M (lock cycle) + B (bookend flip) chosen to avoid taken r/k/h/]/[/l/Escape (collision test asserts this). Both cues wired into the EXISTING single App keydown listener, gated on the #155 `cinematic` arm flag (disarmed -> no-op). Additive client UI state only (ADR-0004): zero new snapshot/wire fields; markers stay Scenery. chrome-devtools MCP self-check (VITE_MOCK=1, ?reel=1, orbit view): badge advertises 'M lock / B flip'; M locked the Lunar diamond (brackets + bloom, Shackleton unchanged), 2nd M moved lock to Shackleton (Lunar cleared), 3rd M cleared; B flipped Shackleton to cyan/'operational' so BOTH diamonds read operational over the vista, 2nd B reverted to amber/'in construction'; after R (disarm) the badge unmounts and M/B are no-ops (markers stay default). Screenshots in .e2e-captures/ (01-baseline, 02-lockon-lunar, 03-lockon-shackleton, 04-bookend-flip, 05-flip-toggled-off, 06-disarmed-noop)."
       ],
       "notes": "Epic 07. Markers are Scenery (operacional = site established, not dome-complete). See docs/07-demo-cinematic/."
     },

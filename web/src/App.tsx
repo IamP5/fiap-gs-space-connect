@@ -42,6 +42,12 @@ import {
   isTypingTarget,
 } from "./lib/cinematicArm";
 import { copyStepDir, stepCursor } from "./lib/reel/copy";
+import {
+  cycleLockOn,
+  isMarkerFlip,
+  isMarkerLockOn,
+  type MarkerSite,
+} from "./lib/reel/markerCue";
 import type { BuildMode, Vec2 } from "./types/wire";
 import "./styles/dashboard.css";
 
@@ -134,6 +140,18 @@ export default function App() {
   // never resets it, so re-arming resumes where the take left off.
   const [copyCursor, setCopyCursor] = useState(-1);
 
+  // The cinematic marker cues (Epic 07 S4 · #157). Two more ADDITIVE client-only
+  // UI flags (the ADR-0004 carve-out) — they invent ZERO snapshot/wire fields and
+  // only DRIVE Scenery visuals the orbit markers already own:
+  //   · `lockedSite` forces the lock-on look on a chosen marker without a mouse
+  //     hover (`M` cycles null → lunar → shackleton → null) — Beats 3/6.
+  //   · `markerFlip` flips the Shackleton marker cyan/"operational" over the close
+  //     (`B` toggles) — Beat 15. A Scenery transition: asserts no World Model state.
+  // Only mutated while armed; disarm never resets them, so re-arming resumes the
+  // take. `MarkerSite` is the lib's site union (identical to Scene3D's `SiteId`).
+  const [lockedSite, setLockedSite] = useState<MarkerSite | null>(null);
+  const [markerFlip, setMarkerFlip] = useState(false);
+
   // The single cinematic cue this slice owns: the climax kill. While armed, one
   // `K` press emits exactly `{cmd:"cueKill"}` once (the keydown handler ignores
   // OS key-repeat via `e.repeat`, so holding the key still fires only once per
@@ -172,7 +190,19 @@ export default function App() {
         const dir = copyStepDir(e);
         if (dir !== 0) {
           setCopyCursor((c) => stepCursor(c, dir));
+          return;
         }
+      }
+      // Marker cues (#157): `M` cycles the lock-on target, `B` toggles the
+      // Shackleton bookend flip — armed-only, so disarmed presses are a no-op.
+      // Pure Scenery: drives the markers' existing visuals, touches no World Model.
+      if (cinematic && isMarkerLockOn(e)) {
+        setLockedSite((s) => cycleLockOn(s));
+        return;
+      }
+      if (cinematic && isMarkerFlip(e)) {
+        setMarkerFlip((v) => !v);
+        return;
       }
     };
     window.addEventListener("keydown", onKeyDown);
@@ -432,7 +462,7 @@ export default function App() {
           {cinematic ? (
             <span className="reel-arm__badge">
               <span className="reel-arm__dot" aria-hidden="true" />
-              REEL ARMED · <b>K</b> cue · <b>]</b>/<b>[</b> copy · <b>R</b> disarm
+              REEL ARMED · <b>K</b> cue · <b>]</b>/<b>[</b> copy · <b>M</b> lock · <b>B</b> flip · <b>R</b> disarm
             </span>
           ) : null}
         </div>
@@ -548,6 +578,11 @@ export default function App() {
               onViewModeChange={setViewMode}
               activeSite={activeSite}
               onActiveSiteChange={setActiveSite}
+              // Cinematic marker cues (#157) — only ever non-default while armed.
+              // `lockedSite` is the lib's MarkerSite union, identical to SiteId;
+              // null ⇒ undefined (no cue, manual hover only).
+              lockedSite={lockedSite ?? undefined}
+              statusOverride={markerFlip}
             />
           </Suspense>
         ) : null}

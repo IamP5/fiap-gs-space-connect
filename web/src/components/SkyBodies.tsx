@@ -1299,6 +1299,7 @@ function SiteMarker({
   name,
   status,
   onSelect,
+  forceLock = false,
 }: {
   position: [number, number, number];
   quaternion: [number, number, number, number];
@@ -1306,8 +1307,17 @@ function SiteMarker({
   name: string;
   status: string;
   onSelect: () => void;
+  // Cinematic lock-on cue (Epic 07 S4 · #157): forces the EXISTING hover lock-on
+  // look (brackets tighten + pop in, line widens, label brightens) WITHOUT a mouse
+  // hover, for the Beat-3/6 "lock on the target" moments. ORed with real hover so
+  // manual mouse-hover still works as a fallback. Scenery: asserts no World Model
+  // state. Defaults false ⇒ the un-cued marker is byte-for-byte unchanged.
+  forceLock?: boolean;
 }) {
   const [hover, setHover] = useState(false);
+  // The lock-on look fires on EITHER a real pointer hover OR the cinematic cue.
+  // Everything that read `hover` for the lock-on visual now reads `locked`.
+  const locked = hover || forceLock;
   // The reticle content (diamond + brackets + label) — pulsed/scaled per frame.
   const reticleRef = useRef<THREE.Group>(null);
   const diamondRef = useRef<THREE.Object3D>(null);
@@ -1318,23 +1328,23 @@ function SiteMarker({
   useEffect(() => {
     diamondRef.current?.layers.enable(CELESTIAL_BLOOM_LAYER);
     bracketRef.current?.layers.enable(CELESTIAL_BLOOM_LAYER);
-  }, [hover]);
+  }, [locked]);
 
-  // Subtle continuous breathe + hover lock-on tighten. frameloop="always", so a
-  // per-frame pulse is free (no invalidate gymnastics). Hover snaps the diamond a
-  // touch tighter (lock-on) and reveals the corner brackets.
+  // Subtle continuous breathe + lock-on tighten. frameloop="always", so a
+  // per-frame pulse is free (no invalidate gymnastics). Lock-on (hover OR cue)
+  // snaps the diamond a touch tighter and reveals the corner brackets.
   useFrame((state) => {
     const t = state.clock.elapsedTime;
     const breathe = 1 + Math.sin(t * 2) * 0.04; // ±4% gentle breathe
-    const lock = hover ? 0.9 : 1; // tighten on lock-on
+    const lock = locked ? 0.9 : 1; // tighten on lock-on
     if (reticleRef.current) {
       reticleRef.current.scale.setScalar(breathe * lock);
     }
     if (bracketRef.current) {
-      // brackets fade/pop in on hover (opacity lives on the Line2 material)
+      // brackets fade/pop in on lock-on (opacity lives on the Line2 material)
       const mat = (bracketRef.current as THREE.Mesh)
         .material as THREE.Material & { opacity: number };
-      if (mat) mat.opacity = THREE.MathUtils.lerp(mat.opacity, hover ? 1 : 0, 0.2);
+      if (mat) mat.opacity = THREE.MathUtils.lerp(mat.opacity, locked ? 1 : 0, 0.2);
     }
   });
 
@@ -1348,9 +1358,9 @@ function SiteMarker({
     document.body.style.cursor = "default";
   };
 
-  // Brighter when hovered (lock-on). Lines are toneMapped:false so the bloom pass
-  // reads the raw color; we boost the line width slightly on hover too.
-  const lineWidth = hover ? 2.4 : 1.6;
+  // Brighter when locked on. Lines are toneMapped:false so the bloom pass reads
+  // the raw color; we boost the line width slightly on lock-on too.
+  const lineWidth = locked ? 2.4 : 1.6;
 
   return (
     <group position={position} quaternion={quaternion}>
@@ -1382,17 +1392,17 @@ function SiteMarker({
             color={color}
             lineWidth={lineWidth}
             transparent
-            opacity={hover ? 1 : 0.9}
+            opacity={locked ? 1 : 0.9}
             toneMapped={false}
             raycast={() => null}
           />
-          {/* Hover lock-on corner brackets (faded in by the useFrame). */}
+          {/* Lock-on corner brackets (faded in by the useFrame on hover OR cue). */}
           <Line
             ref={bracketRef as never}
             points={BRACKET_POINTS}
             segments
             color={color}
-            lineWidth={hover ? 2 : 1.4}
+            lineWidth={locked ? 2 : 1.4}
             transparent
             opacity={0}
             toneMapped={false}
@@ -1411,7 +1421,7 @@ function SiteMarker({
             outlineWidth={0.12}
             outlineColor="#000000"
             outlineOpacity={0.85}
-            fillOpacity={hover ? 1 : 0.92}
+            fillOpacity={locked ? 1 : 0.92}
             material-toneMapped={false}
             raycast={() => null}
           >
@@ -1443,13 +1453,34 @@ function useSiteMarkerSeat(site: SiteId) {
 
 // Renders both site markers on the orbit globe. `onSelectSite(siteId)` sets the
 // active site AND surface view (the descent) for the clicked site.
+//
+// Two optional cinematic Scenery cues (Epic 07 S4 · #157), both gated upstream on
+// the `cinematic` arm flag and asserting NO World Model state:
+//   · `lockedSite` — forces the lock-on look on that marker without a mouse hover
+//     (Beats 3/6). Undefined ⇒ both markers fall back to manual hover only.
+//   · `statusOverride` — flips the Shackleton marker amber→cyan / "in construction"
+//     →"operational" over the closing wide (Beat 15), so both diamonds read
+//     operational. A marker's status is "site established", not dome-complete
+//     (Scenery — CONTEXT.md). Undefined ⇒ Shackleton stays amber/"in construction".
 function SiteMarkers({
   onSelectSite,
+  lockedSite,
+  statusOverride = false,
 }: {
   onSelectSite: (site: SiteId) => void;
+  lockedSite?: SiteId;
+  statusOverride?: boolean;
 }) {
   const lunarSeat = useSiteMarkerSeat("lunar");
   const shackletonSeat = useSiteMarkerSeat("shackleton");
+  // The bookend flip reuses the Lunar marker's live cyan + "operational" status,
+  // so the two diamonds read identically operational — no second source of truth.
+  const shackletonColor = statusOverride
+    ? SITE_MARKERS.lunar.color
+    : SITE_MARKERS.shackleton.color;
+  const shackletonStatus = statusOverride
+    ? SITE_MARKERS.lunar.status
+    : SITE_MARKERS.shackleton.status;
   return (
     <>
       <SiteMarker
@@ -1459,14 +1490,16 @@ function SiteMarkers({
         name={SITE_MARKERS.lunar.name}
         status={SITE_MARKERS.lunar.status}
         onSelect={() => onSelectSite("lunar")}
+        forceLock={lockedSite === "lunar"}
       />
       <SiteMarker
         position={shackletonSeat.position}
         quaternion={shackletonSeat.quaternion}
-        color={SITE_MARKERS.shackleton.color}
+        color={shackletonColor}
         name={SITE_MARKERS.shackleton.name}
-        status={SITE_MARKERS.shackleton.status}
+        status={shackletonStatus}
         onSelect={() => onSelectSite("shackleton")}
+        forceLock={lockedSite === "shackleton"}
       />
     </>
   );
@@ -1600,11 +1633,17 @@ export function SkyBodies({
   viewMode,
   onSelectSite,
   sunRef,
+  lockedSite,
+  statusOverride,
 }: {
   viewMode: ViewMode;
   onSelectSite?: (site: SiteId) => void;
   // Shared ref to the Sun core disc, surfaced for the post-FX GodRays pass (#110).
   sunRef?: React.RefObject<THREE.Mesh>;
+  // Cinematic marker cues (Epic 07 S4 · #157) — see SiteMarkers. Both optional and
+  // additive Scenery; omitted ⇒ markers behave exactly as before (#155-gated cues).
+  lockedSite?: SiteId;
+  statusOverride?: boolean;
 }) {
   const inOrbit = viewMode === "orbit";
   // DECOUPLED sun (Wave 4): the visible flare follows the same swing as the key
@@ -1621,7 +1660,13 @@ export function SkyBodies({
       <MoonGlobe visible={inOrbit} />
       <NebulaHero visible={inOrbit} />
       <EarthBody visible viewMode={viewMode} />
-      {inOrbit && onSelectSite ? <SiteMarkers onSelectSite={onSelectSite} /> : null}
+      {inOrbit && onSelectSite ? (
+        <SiteMarkers
+          onSelectSite={onSelectSite}
+          lockedSite={lockedSite}
+          statusOverride={statusOverride}
+        />
+      ) : null}
     </>
   );
 }
