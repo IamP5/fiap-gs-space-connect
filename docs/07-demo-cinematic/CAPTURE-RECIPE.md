@@ -105,6 +105,35 @@ would desync the slider's local readout).
 
 ---
 
+## 4b. Orbit-open camera-arc — "found by light" (Beats 1–2, #158)
+
+The film's opening Scenery beat (script Beats 1–2 "WANDERING" + "SUN REVEAL"). Arm
+the cinematic layer (`R`, or load with `?reel=1`), be in **orbit** view, and press
+**`O`** (mnemonic: open). The camera drifts laterally along the Moon's dark limb
+(sun off-frame) then **arcs** so the *fixed* sun's GodRays + celestial bloom crest
+into frame, easing into `ORBIT_POSE` (~9 s). The marker reticles read under the
+flare as exposure stops down (fire the marker lock-on cue `M` here for Beat 3).
+
+**Camera-arc, NOT sun-arc (load-bearing):** the sun never moves — it stays at
+`ORBIT_SUN_POSITION`. Only the *camera* azimuth swings (the rig rotates the settled
+`ORBIT_POSE` offset around the Moon, lib `web/src/lib/reel/openArc.ts`). The rig
+reuses the descent/traverse `transitioning` discipline: while it runs, CameraFeel
+idle-sway + OrbitControls stand down; on settle (or cancel) it restores `ORBIT_POSE`
+and re-enables controls cleanly — no stuck-disabled controls, no leaked glare.
+Pressing `O` again cancels mid-arc (the rig settles into `ORBIT_POSE`); a second
+press re-runs it. The rig only runs in orbit; firing it on the surface is inert.
+
+**Fallback (script-sanctioned — the open NEVER blocks the climax):** if the open is
+cut or never fired, the orbit is byte-for-byte unchanged — a **cold static
+`ORBIT_POSE` hold + idle sway**, and the "found by light" read simply moves to the
+descent glare (Beat 4, `runDescent`). This slice is lowest-priority by design;
+omitting it costs nothing in the rest of the take. (Pure-Scenery, so it can be
+self-checked under `VITE_MOCK=1` at `localhost:5173/?reel=1` in orbit without the
+k8s overlay — sample the camera position over time and confirm the SUN body
+position is unchanged while the camera drifts → arcs → settles on `ORBIT_POSE`.)
+
+---
+
 ## 5. Assert the take end-to-end (screen + services)
 
 Tail every service during the take in a second terminal:

@@ -1646,7 +1646,7 @@
       "area": "demo-cinematic",
       "title": "Orbit-open camera-arc — found by light (fallback-ready)",
       "user_visible_behavior": "On the cinematic open, the camera drifts along the dark lunar limb then arcs so the fixed sun's godrays crest into frame, settling at the orbit pose. Fallback: a static orbit hold + the descent glare carries found-by-light.",
-      "status": "not_started",
+      "status": "passing",
       "issue": 158,
       "depends_on": [
         "r3d-155"
@@ -1654,6 +1654,9 @@
       "verification": [
         "cd web && npm run build && npm test (TS-clean + vitest)",
         "chrome-devtools MCP: arm + trigger open, sample camera position over time (drifts then arcs, end==orbit pose, sun position unchanged); screenshot sequence dark drift -> godrays cresting -> settle"
+      ],
+      "evidence": [
+        "Implemented on feat/07-158-orbit-open (base feat/07-demo-cinematic). DoD green: `cd web && npm run build` TS-clean (tsc -b + vite build OK); `npm test` 239 passed (20 files), incl. 10 new in src/lib/reel/openArc.test.ts. New scene-mounted <CinematicOpen active onSurface onTransition> rig in Scene3D.tsx beside <CameraFeel> (SAME prop-driven pattern, NOT an imperative handle): while active+orbit it rotates the settled ORBIT_POSE offset around the target up-axis by openAzimuthOffset(t) — a slow lateral DRIFT along the dark limb then an ARC back to ORBIT_POSE so the FIXED sun's godrays/bloom crest in (CAMERA-ARC, sun stays at ORBIT_SUN_POSITION). Reuses the descent/traverse transition discipline: onTransition(true) sets `transitioning` (CameraFeel + OrbitControls stand down) + controls.enabled=false; on settle/cancel it restores ORBIT_POSE, re-enables controls, onTransition(false). New pure lib src/lib/reel/openArc.ts (openAzimuthOffset path/easing + OPEN_MS=9000 + isOpenCue keybind `o`, chosen to avoid taken r/k/h/]/[/m/b/Escape/l — collision test asserts). Wired via cinematicOpen prop App.tsx -> Scene3D.tsx, set by `O` toggle in the EXISTING single keydown listener, gated on the #155 cinematic arm flag (disarmed -> no-op). Additive client UI state only (ADR-0004): zero new snapshot/wire fields; pure Scenery. chrome-devtools MCP self-check (VITE_MOCK=1, ?reel=1, orbit view, temporary window probe removed before commit): sampled camera over the arc — pre-cue dist~2.5 from ORBIT_POSE (static hold), drift peaked ~141 off-pose, arc returned through ~117->~8.5->settle ~1.9; nearest-mesh-to-ORBIT_SUN_POSITION distance == 0 at EVERY sample (sun never moved). Post-settle idle drift resumed + controls responsive (no stuck-disabled). Screenshots in .e2e-captures/ (158-01-dark-drift mostly-shadow Moon no sun, 158-02-godrays-cresting sunlit limb returning, 158-03-settle-orbit-pose canonical half-lit hero w/ both diamonds). Fallback documented in docs/07-demo-cinematic/CAPTURE-RECIPE.md §4b: when the cue isn't fired the orbit is byte-for-byte unchanged (cold ORBIT_POSE hold + descent glare carries 'found by light'); the rig NEVER blocks."
       ],
       "notes": "Epic 07. Scenery; camera-arc NOT sun-arc; reuses frameloop=always (ADR-0004 Wave-4). Fallback-ready (lowest priority, never blocks the climax). See docs/07-demo-cinematic/."
     },
