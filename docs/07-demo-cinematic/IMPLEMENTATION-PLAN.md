@@ -262,7 +262,7 @@ Per `AGENTS.md` Definition of Done, in order:
 No umbrella epic ticket (flat, like Epic 06 #147–152). Each slice is `type:feature`,
 all-AFK, with chrome-devtools MCP acceptance criteria (functionality + look-and-feel).
 
-- [ ] **S1 · #154** `feat(*): Cinematic External pacing + hero-wall hold + cueKill` · `area:backend` · `r3d-154` · blocked by: none
+- [x] **S1 · #154** `feat(*): Cinematic External pacing + hero-wall hold + cueKill` · `area:backend` · `r3d-154` · blocked by: none
 - [ ] **INFRA · #160** `task(infra): k8s cinematic overlay + chrome-mcp harness + log aggregation` · `area:infra` · `r3d-160` · blocked by: #154
 - [ ] **S2 · #155** `feat(web): cinematic arm + cueKill trigger` · `area:frontend` · `r3d-155` · blocked by: #154
 - [ ] **S3 · #156** `feat(web): cinematic copy overlay (survives H, beat-locked rule)` · `area:frontend` · `r3d-156` · blocked by: #155

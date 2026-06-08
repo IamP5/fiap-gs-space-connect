@@ -190,6 +190,61 @@ func TestExternal_YieldsNoRoversAndNoScriptedKills(t *testing.T) {
 	}
 }
 
+// TestCinematic_KeepsSwarmDisarmsAutoKillHoldsHeroWall is the Epic 07 Slice 1
+// acceptance (ADR-0011): Cinematic() arms NO early scripted kill (the operator owns
+// the Kill) but KEEPS the full in-process two-site swarm (unlike External, which
+// drops the in-proc rovers), and HOLDS the hero wall (lunar/wall-1) un-leasable
+// until a cueKill cue. The dome blueprint is otherwise byte-identical to the
+// rehearsal, so the cinematic only changes pacing/holds, never the structure.
+func TestCinematic_KeepsSwarmDisarmsAutoKillHoldsHeroWall(t *testing.T) {
+	cin := DomeScenario("nats://x", Cinematic())
+
+	// KEEPS the full swarm: both six-rover site swarms (12 total), unlike External.
+	if len(cin.Rovers) != 12 {
+		t.Fatalf("Cinematic scenario has %d in-process rovers, want 12 (the full two-site swarm is kept)", len(cin.Rovers))
+	}
+	// DISARMS the early auto-kill: KillTarget="" ⇒ no ScriptedKills (the operator
+	// fires the climax via cueKill, which the Coordinator arms at runtime).
+	if cin.ScriptedKills != nil {
+		t.Fatalf("Cinematic scenario has %d scripted kills, want none (the operator owns the Kill via cueKill)", len(cin.ScriptedKills))
+	}
+	// HOLDS the hero wall un-leasable until the cue, and carries a positive kill
+	// delay for once it is released.
+	if cin.HeldTask != SiteLunar+"/wall-1" {
+		t.Fatalf("Cinematic holds %q, want %q (the hero wall held until cueKill)", cin.HeldTask, SiteLunar+"/wall-1")
+	}
+	if cin.CueKillAfter <= 0 {
+		t.Fatalf("Cinematic CueKillAfter = %v, want > 0 (the kill fires after the released wall is leased)", cin.CueKillAfter)
+	}
+	// The held wall is a real, healable WALL present on the board (not the dome-cap):
+	// a same-site standby can seal it after the kill.
+	var found bool
+	for _, bt := range cin.Blueprint {
+		if bt.Task.ID == cin.HeldTask {
+			found = true
+			if bt.Task.Type != taskWall {
+				t.Fatalf("held task %s has type %q, want a wall (a standby must be able to heal it)", bt.Task.ID, bt.Task.Type)
+			}
+		}
+	}
+	if !found {
+		t.Fatalf("held task %q is not on the board", cin.HeldTask)
+	}
+
+	// The dome blueprint is otherwise byte-identical to the rehearsal: the cinematic
+	// changes pacing/holds, never the structure.
+	if !reflect.DeepEqual(cin.Blueprint, DomeScenario("nats://x", Rehearsal()).Blueprint) {
+		t.Fatal("Cinematic scenario builds a different blueprint than the rehearsal; only kills/holds should change")
+	}
+
+	// The widened windows carry over from the rehearsal so the operator-fired kill
+	// still heals in the legible arc (TTL > the kill delay).
+	ttl := cin.HeartbeatEvery * time.Duration(cin.TTLFactor)
+	if ttl <= cin.CueKillAfter {
+		t.Fatalf("lease TTL %v ≤ CueKillAfter %v: the orphan drain ring would not read before re-auction", ttl, cin.CueKillAfter)
+	}
+}
+
 // TestDomeScenario_IsTwoSite asserts the live demo board carries BOTH worksites
 // (epic 04): every task and every rover is tagged with one of the two site ids,
 // both sites build a full dome (13 tasks each, site-prefixed ids), and each site

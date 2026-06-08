@@ -82,6 +82,18 @@ type Config struct {
 	// scripted in-proc kill would be wrong here. The default (false) is the
 	// in-process swarm that the docker-compose demo runs, byte-for-byte unchanged.
 	NoInProcRovers bool
+
+	// HeldTask is the Epic 07 hero wall held un-leasable until an operator cueKill
+	// control arrives (ADR-0011): the dome builds everything it can EXCEPT this wall
+	// (and its dependents) so the climax target is always available when the operator
+	// fires the cue — no race. The cinematic sets it to the lunar hero wall; every
+	// other pacing leaves it empty (nothing held). DomeScenario folds it onto the
+	// coordinator Config.
+	HeldTask domain.TaskID
+	// CueKillAfter is how long after the released HeldTask is leased the cinematic
+	// fires the in-process kill on its holder (ADR-0011). Only consulted when
+	// HeldTask is set; the cueKill control arms it on the Coordinator.
+	CueKillAfter time.Duration
 }
 
 // Rehearsal is the default demo pacing: a kill→heal arc that reads in ~12–20 s.
@@ -111,6 +123,39 @@ func External() Config {
 	cfg := Rehearsal()
 	cfg.NoInProcRovers = true
 	cfg.KillTarget = "" // no scripted kill: kills are real pod deletes from outside
+	return cfg
+}
+
+// heroWall is the Epic 07 climax target: the lunar dome's first wall, held
+// un-leasable by the cinematic until the operator's cueKill cue (ADR-0011). It is
+// a WALL (a same-site standby can heal it), and the FIRST wall, so it becomes
+// ready early in the build and would otherwise be leased + DONE long before the
+// 1:36 climax mark.
+const heroWall = SiteLunar + "/wall-1"
+
+// Cinematic is the Epic 07 demo pacing (ADR-0011, supersedes ADR-0011's original):
+// a Rehearsal() copy that DISARMS the early scripted auto-kill (KillTarget="", the
+// exact suppression External() uses) but KEEPS the in-process six-rover swarm per
+// site (unlike External, it does NOT set NoInProcRovers). The demo therefore stops
+// self-killing — the operator owns the Kill.
+//
+// On top of the rehearsal it HOLDS the hero wall (lunar/wall-1) un-leasable until a
+// cueKill control arrives: the dome builds everything else first, then the operator
+// fires the cue at the climax — the Coordinator releases the hold, a Rover leases +
+// drives to the wall, and the Coordinator fires the in-process kill on it (the real
+// Self-heal — Expiry → Re-auction → a surviving Rover seals the dome). All the
+// widened windows (AuctionWindow 900ms, TTL 4.2s) carry over so the operator-fired
+// kill still heals in the legible arc. Selected behind COORDINATOR_ROVERS=cinematic.
+func Cinematic() Config {
+	cfg := Rehearsal()
+	cfg.KillTarget = "" // no EARLY auto-kill: the operator owns the Kill via cueKill
+	// Hold the hero wall un-leasable until the cueKill cue, so the climax target is
+	// always there (no race). The kill fires shortly after the released wall is
+	// leased — the rover has just started driving, so the orphan-and-heal is
+	// unmistakable. The widened TTL (4.2s) then drains a legible drain ring before
+	// the Re-auction seals the dome.
+	cfg.HeldTask = heroWall
+	cfg.CueKillAfter = cfg.KillAfterLeased
 	return cfg
 }
 
@@ -164,6 +209,12 @@ func DomeScenario(natsURL string, cfg Config) coordinator.Config {
 		TTLFactor:      cfg.TTLFactor,
 		SnapshotHz:     cfg.SnapshotHz,
 		ScriptedKills:  scripted,
+		// Epic 07 cinematic (ADR-0011): hold the hero wall un-leasable until a cueKill
+		// control releases it, then fire the in-process kill on its holder CueKillAfter
+		// later. Empty HeldTask (every non-cinematic pacing) ⇒ nothing held, the
+		// coordinator behaves exactly as before.
+		HeldTask:     cfg.HeldTask,
+		CueKillAfter: cfg.CueKillAfter,
 		// No static BuildSpecs (bh-02): the structure now rises op-by-op as each
 		// winning Rover STREAMS its deterministic build-op sequence on
 		// build.op.<task> (internal/agent/opsource.go stands in for the LLM). The
