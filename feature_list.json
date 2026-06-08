@@ -1568,14 +1568,17 @@
       "area": "demo-cinematic",
       "title": "Cinematic External pacing + hero-wall hold + cueKill orchestration",
       "user_visible_behavior": "On the k8s pod-per-rover swarm, the dome builds across the whole film (re-paced) instead of a ~20s sprint; lunar/wall-1 is held until the operator triggers cueKill, then the Coordinator fires the in-process kill on its holder and the real Self-heal seals the dome. The victim stays down through the seal (long recover-ms).",
-      "status": "not_started",
+      "status": "passing",
       "issue": 154,
       "depends_on": [],
       "verification": [
         "go build ./... && make lint && go test -race ./internal/... (cueKill orchestration deterministic; selfheal/liveheal/killcontrol stay green)",
         "chrome-devtools MCP on the k8s cinematic overlay (#160): build paces across time; send cueKill -> hero-wall holder dies in place, Expiry -> Re-auction -> survivor seals; victim stays down until after the seal; cross-check kubectl logs across all services"
       ],
-      "notes": "Epic 07. Reshaped 2026-06-08 (grilling): re-pace (coordinator windows + rover --op-every-ms) + hero-wall hold + cueKill (in-process kill, KILLER_ON_KILL=false) + long --recover-ms. Supersedes ADR-0011 (browser-raw-kill). See docs/07-demo-cinematic/."
+      "evidence": [
+        "Implemented on feat/07-154-backend. DoD green: `go build ./...` clean; `make lint` 0 issues; `go test -race ./internal/...` all packages OK (coordinator 164.6s incl. new cueKill tests + existing selfheal/liveheal/killcontrol); `cd web && npm run build` clean after wire.ts cueKill doc edit. Backend: demo.Cinematic() = Rehearsal copy with KillTarget=\"\" (no early auto-kill) keeping the in-proc swarm + HeldTask=lunar/wall-1 + CueKillAfter; selected via COORDINATOR_ROVERS=cinematic. Coordinator: Config.HeldTask/CueKillAfter, state hold (announceReady skips the held wall via isHeld), {cmd:\"cueKill\"} control -> onCueKill releases the hold + arms a ScriptedKill on the wall (reuses the tested kill path -> in-process kill, no pod delete) -> Expiry -> Re-auction -> survivor seals; onReload re-holds + disarms. Agent: --op-every-ms / Config.OpEvery threads through both work-phase op tickers (defaultOpEvery fallback). Tests: internal/demo/demo_test.go (Cinematic: 12 rovers, 0 scripted kills, hero wall held, blueprint byte-identical) + internal/coordinator/cuekill_test.go (held wall stays UNCLAIMED until cue; cueKill orchestrates release->lease(R1)->kill->expiry->re-auction->survivor(R2) seals deterministically; stray cue ignored when nothing held). E2E (k8s + chrome-mcp) deferred to the merged branch per #160 (overlay not yet built)."
+      ],
+      "notes": "Epic 07. Reshaped 2026-06-08 (grilling): re-pace (coordinator windows + rover --op-every-ms) + hero-wall hold + cueKill (in-process kill, KILLER_ON_KILL=false) + long --recover-ms. Supersedes ADR-0011 (browser-raw-kill). See docs/07-demo-cinematic/. E2E on k8s overlay (#160) runs later on the merged branch."
     },
     {
       "id": "r3d-155",

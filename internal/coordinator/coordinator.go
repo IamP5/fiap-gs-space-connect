@@ -77,6 +77,22 @@ type Config struct {
 	// KILL — so the heal that follows is entirely genuine. This reproduces the
 	// kill→heal money shot at the same beat every run. Empty in production.
 	ScriptedKills []ScriptedKill
+	// HeldTask is the hero wall (e.g. "lunar/wall-1") the Epic 07 cinematic holds
+	// OUT of the ready set — un-leasable — until an operator cueKill control arrives
+	// (ADR-0011). While held, the coordinator announces everything it can build
+	// EXCEPT this task (its dependents stay blocked behind it, since it never
+	// completes), so the climax target is ALWAYS available when the operator fires
+	// the cue — no race against the build. Empty ⇒ nothing is held (every other
+	// pacing, byte-for-byte unchanged).
+	HeldTask domain.TaskID
+	// CueKillAfter is how long after the released HeldTask is leased the cinematic
+	// fires the in-process kill on its holder (ADR-0011): release the hold → a Rover
+	// leases + drives to the wall → kill that Rover (the existing `kill` control
+	// path; the pod-agent darkens in place, KILLER_ON_KILL=false) → Expiry →
+	// Re-auction → a surviving Rover seals the dome. A short beat (the rover has just
+	// started driving) makes the orphan-and-heal unmistakable. Only consulted when
+	// HeldTask is set; the cueKill control arms it.
+	CueKillAfter time.Duration
 	// Catalog is the pre-authored Blueprint catalog the placeBlueprint control
 	// draws from (bh-05). Nil ⇒ blueprint.DefaultCatalog() is used, so a placed
 	// Blueprint always resolves against the shipped dome/solar-array/comms-mast.
@@ -211,6 +227,13 @@ type (
 	// (bounds/terrain/no-overlap) BEFORE the tasks go live and rejects an invalid
 	// placement; the Auction then feeds on any injected tasks exactly as today.
 	evPlaceBlueprint struct{ ctl wire.Control }
+	// evCueKill is the operator's Epic 07 climax cue (ADR-0011): RELEASE the held
+	// hero wall so the Auction may lease it, and ARM the in-process kill on whoever
+	// wins it (the existing scripted-kill machinery). Like every control that MUTATES
+	// owned state (the hold flag, the armed kills), it runs ONLY on the single writer
+	// — the NATS dispatcher merely enqueues it (TECHSPEC §8). A no-op when no task is
+	// held (nothing to release).
+	evCueKill struct{}
 )
 
 // auction is one open auction: the bids received so far for a task during its
@@ -238,6 +261,19 @@ type state struct {
 	pendingEvents []wire.Event
 	scriptedKills []ScriptedKill // demo rehearsal kills (config copy)
 	armedKills    []armedKill    // scripted kills counting down to fire
+
+	// heldTask is the Epic 07 hero wall held un-leasable until a cueKill control
+	// releases it (ADR-0011); empty ⇒ nothing held. While held AND not yet released,
+	// tick excludes it from the announce pass, so the Auction never leases it and its
+	// dependents stay blocked behind it — the climax target is always available when
+	// the operator fires the cue. holdReleased flips true on cueKill (the operator's
+	// climax cue); after that the held task auctions like any other. cueKillAfter is
+	// how long after the released task is leased the in-process kill fires on its
+	// holder (the existing scripted-kill machinery, armed by the cue). onReload
+	// re-holds the task and re-arms the cue so a reloaded board replays the climax.
+	heldTask     domain.TaskID
+	holdReleased bool
+	cueKillAfter time.Duration
 
 	// blueprint and cfgKills are pristine originals captured at Run, used ONLY by
 	// onReload to rebuild the board from scratch (reloadDemo). blueprint is the
@@ -372,6 +408,10 @@ func Run(ctx context.Context, cfg Config) error {
 		// Copy the scripted kills so arming them (setting fired) never mutates the
 		// caller's Config slice.
 		scriptedKills: append([]ScriptedKill(nil), cfg.ScriptedKills...),
+		// Epic 07 hero-wall hold (ADR-0011): held un-leasable until a cueKill control
+		// releases it. Empty HeldTask ⇒ holdReleased is irrelevant and nothing is held.
+		heldTask:     cfg.HeldTask,
+		cueKillAfter: cfg.CueKillAfter,
 		// Pristine originals for onReload (reloadDemo): the initial UNCLAIMED task
 		// set and an untouched copy of the scripted kills to re-arm from.
 		blueprint: append([]domain.Task(nil), tasks...),
@@ -571,6 +611,15 @@ func subscribeControl(ctx context.Context, conn *bus.Conn, shim *earthShim, even
 			case events <- evPlaceBlueprint{ctl: c}:
 			case <-ctx.Done():
 			}
+		case "cueKill":
+			// Epic 07 climax cue (ADR-0011): RELEASE the held hero wall and ARM the
+			// in-process kill on its leaseholder. It MUTATES owned state (the hold flag,
+			// the armed kills), so — like reloadDemo/placeBlueprint — it runs ONLY on the
+			// single writer; the dispatcher merely enqueues.
+			select {
+			case events <- evCueKill{}:
+			case <-ctx.Done():
+			}
 		}
 	})
 	if err != nil {
@@ -656,6 +705,8 @@ func (st *state) handle(ctx context.Context, e any) {
 		st.onReload(ctx)
 	case evPlaceBlueprint:
 		st.onPlaceBlueprint(ctx, ev.ctl)
+	case evCueKill:
+		st.onCueKill()
 	}
 }
 
@@ -853,17 +904,9 @@ func (st *state) tick(ctx context.Context) {
 		st.onExpired(ctx, id)
 	}
 
-	// Announce ready + unclaimed tasks that have no open auction yet.
-	for _, id := range st.plan.Ready() {
-		if _, open := st.auctions[id]; open {
-			continue
-		}
-		t, ok := st.model.Get(id)
-		if !ok || t.Status != domain.Unclaimed {
-			continue
-		}
-		st.openAuction(t)
-	}
+	// Announce ready + unclaimed tasks that have no open auction yet (skipping the
+	// Epic 07 held hero wall until its cue arrives).
+	st.announceReady()
 
 	// Close any auction whose window has elapsed. Process due auctions in a
 	// single deterministic (id-ordered) pass, tracking the rovers already awarded
@@ -887,6 +930,26 @@ func (st *state) tick(ctx context.Context) {
 		if winner, ok := st.closeAuction(ctx, id, st.auctions[id], busy); ok {
 			busy[winner] = struct{}{}
 		}
+	}
+}
+
+// announceReady opens an auction for every ready + UNCLAIMED task that has no open
+// auction yet, skipping the Epic 07 held hero wall until a cueKill cue releases it
+// (ADR-0011). Extracted from tick so tick stays under the cyclomatic gate; it is a
+// single-writer method like the rest, mutating only owned auction state.
+func (st *state) announceReady() {
+	for _, id := range st.plan.Ready() {
+		if st.isHeld(id) {
+			continue // hero wall held un-leasable until the cueKill cue (ADR-0011)
+		}
+		if _, open := st.auctions[id]; open {
+			continue
+		}
+		t, ok := st.model.Get(id)
+		if !ok || t.Status != domain.Unclaimed {
+			continue
+		}
+		st.openAuction(t)
 	}
 }
 
@@ -1018,6 +1081,47 @@ func (st *state) armScriptedKills(task domain.TaskID, holder domain.RobotID) {
 	}
 }
 
+// isHeld reports whether id is the Epic 07 hero wall currently held un-leasable
+// (ADR-0011): a non-empty heldTask that matches id AND has not yet been released
+// by a cueKill cue. While held, tick skips announcing it, so the Auction never
+// leases it and its dependents stay blocked behind it — the climax target stays
+// available for the operator. Every other task (and the held task once released)
+// returns false and auctions normally.
+func (st *state) isHeld(id domain.TaskID) bool {
+	return st.heldTask != "" && !st.holdReleased && id == st.heldTask
+}
+
+// onCueKill is the operator's Epic 07 climax cue (ADR-0011), run on the single
+// writer. It RELEASES the held hero wall so the next tick announces it and a Rover
+// leases + drives to it, and ARMS the in-process kill on whoever wins it by
+// appending a ScriptedKill on the released task — the EXACT same control path
+// (`{cmd:"kill",robot}`) a dashboard KILL uses, so the heal that follows is
+// genuine. On k8s pod-per-rover that kill reaches the victim's pod-agent as the
+// in-process outage (KILLER_ON_KILL=false): the Rover darkens in place, its Lease
+// Expires, the task Re-auctions, and a surviving Rover seals the dome.
+//
+// It is idempotent: a second cue (the wall already released, or no task held) is a
+// no-op — the hold is released once and the kill armed once (ScriptedKill.fired).
+func (st *state) onCueKill() {
+	if st.heldTask == "" {
+		slog.Info("cueKill ignored: no hero wall held")
+		return
+	}
+	if st.holdReleased {
+		slog.Info("cueKill ignored: hero wall already released", "task", st.heldTask)
+		return
+	}
+	st.holdReleased = true
+	// Arm a scripted kill on the now-released wall: armScriptedKills fires it once the
+	// wall is leased (the holder is killed CueKillAfter later). Appending to
+	// scriptedKills with fired=false reuses the deterministic, tested kill machinery.
+	st.scriptedKills = append(st.scriptedKills, ScriptedKill{
+		WhenTaskLeased: st.heldTask,
+		After:          st.cueKillAfter,
+	})
+	slog.Info("cueKill: hero wall released + kill armed", "task", st.heldTask, "kill_after", st.cueKillAfter)
+}
+
 // onExpired returns a swept (lease-expired) task to UNCLAIMED in the World Model
 // so it can be re-auctioned. Full re-auction choreography is slice 03; the state
 // transition is wired now and is harmless (Sweep returns nothing while rovers
@@ -1080,8 +1184,15 @@ func (st *state) onReload(ctx context.Context) {
 
 	// Re-arm the scripted kills from the pristine config copy (fired=false) so the
 	// kill→heal money shot replays in inproc mode. In external/k8s mode cfgKills is
-	// empty, so this is a harmless no-op.
+	// empty, so this is a harmless no-op. This also DROPS any cueKill-armed kill
+	// (onCueKill appended it to scriptedKills, not cfgKills), so a reloaded board
+	// starts with the climax kill disarmed again.
 	st.scriptedKills = append([]ScriptedKill(nil), st.cfgKills...)
+
+	// Re-hold the Epic 07 hero wall (ADR-0011): a reload replays the climax, so the
+	// wall must be un-leasable again until the operator re-fires the cue. A no-op
+	// when no task is held.
+	st.holdReleased = false
 
 	// Drop any drag-placed Blueprints (bh-05): a reload rebuilds the pristine board
 	// only. The Planner was just reloaded from st.blueprint alone (above), so the
