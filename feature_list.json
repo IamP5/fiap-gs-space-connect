@@ -1606,7 +1606,7 @@
       "area": "demo-cinematic",
       "title": "Cinematic copy overlay — burned-in PT-BR beats, survives H, beat-locked rule",
       "user_visible_behavior": "An operator-stepped on-screen copy layer renders the script PT-BR narration; mounted outside the HUD stage so H fades the HUD but the bookend wordmark/CTA survives. Beat-locked climax lines are landed after the real worksite event.",
-      "status": "not_started",
+      "status": "passing",
       "issue": 156,
       "depends_on": [
         "r3d-155"
@@ -1614,6 +1614,9 @@
       "verification": [
         "cd web && npm run build && npm test (TS-clean + vitest)",
         "chrome-devtools MCP: arm, step every copy variant, assert exact PT-BR text; press H -> HUD hidden but overlay text present; screenshot each variant for legible typography/fade/contrast"
+      ],
+      "evidence": [
+        "Implemented on feat/07-156-copy (base feat/07-demo-cinematic). DoD green: `cd web && npm run build` TS-clean (tsc -b + vite build OK); `npm test` 220 passed (18 files), incl. 14 new in src/lib/reel/copy.test.ts. New CinematicCopy.tsx (memoized, pointer-inert, aria-hidden) mounted as a SIBLING of .hud-stage in App.tsx, gated on the #155 `cinematic` arm flag; reel.css styles each variant distinctly (wordmark/stake/objective/card/thesis/cta) with prefers-reduced-motion respect. copy.ts holds the 14 script §6 beats VERBATIM (PT-BR), tags each free vs beat-locked (ROBO PERDIDO / RE-LEILAO->CUPULA FECHADA / +2.6s ATRAS = beat-locked), and documents the never-name-a-beat-early capture rule in a header comment; stepCursor clamps [-1, len-1] (no wrap), copyStepDir maps ]/[ (no collision with r/k/h/l/Escape). Additive client UI state only (ADR-0004): no new snapshot/wire fields. chrome-devtools MCP self-check (VITE_MOCK=1, ?reel=1): stepped all 14 beats forward via `]`, asserted each line's exact PT-BR text via evaluate_script (all matched §6); stepping back via `[` works and clamps to clean stage; pressing H set .hud-stage to opacity:0 + pointer-events:none while .reel-copy stayed opacity:1 with the bookend wordmark text intact (acceptance met); disarm (R) unmounts the overlay and ]/[ become no-ops (inert). Screenshots in .e2e-captures/ (wordmark, stake, objective, card, thesis-climax, cta, bookend-H-hidden) — all legible, well-positioned, high-contrast over the live scene."
       ],
       "notes": "Epic 07. Scenery (non-diegetic). copy.ts splits free narration vs beat-locked. See docs/07-demo-cinematic/."
     },
