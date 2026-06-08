@@ -1,6 +1,6 @@
 {
   "project": "SwarmBuild",
-  "last_updated": "2026-06-07",
+  "last_updated": "2026-06-08",
   "description": "Machine-readable source of truth for feature status. The scheduler picks the lowest-priority feature that is not 'passing'; the verifier gates the transition to 'passing'. Each feature that maps to the GitHub tracker carries `issue` (GitHub #) and `epic` (GitHub #); merging its PR closes the issue (the issue-sync Action) and the same PR flips the feature to 'passing' with evidence. See docs/harness/issue-tracking.md + docs/harness/README.md.",
   "rules": {
     "single_active_feature": true,
@@ -1561,6 +1561,128 @@
         "Implemented on feat/06-hud-redesign @ 2f275fb via a subagent swarm; tsc -b --noEmit clean + 195 web tests (vitest, +13 new: footprintGlyph/missionStats/dragDeltaToRadians) + vite build green. .hud-stage carries hud--surface/hud--orbit keyed on viewMode (tuned IN delay ~820ms after glare peak); composes with hud--hidden (parent opacity wins). Earth/Kill on .panel skin. OUTSTANDING: the 8-shot screenshot artifact capture (docs/06-hud-redesign/VERIFICATION.md) is deferred — blocked locally by the devtools MCP Chrome-profile lock."
       ],
       "notes": "Epic 06 P4. Deferred follow-up: capture verification screenshots; in-world orbit-marker fade-in."
+    },
+    {
+      "id": "r3d-154",
+      "priority": 75,
+      "area": "demo-cinematic",
+      "title": "Cinematic External pacing + hero-wall hold + cueKill orchestration",
+      "user_visible_behavior": "On the k8s pod-per-rover swarm, the dome builds across the whole film (re-paced) instead of a ~20s sprint; lunar/wall-1 is held until the operator triggers cueKill, then the Coordinator fires the in-process kill on its holder and the real Self-heal seals the dome. The victim stays down through the seal (long recover-ms).",
+      "status": "not_started",
+      "issue": 154,
+      "depends_on": [],
+      "verification": [
+        "go build ./... && make lint && go test -race ./internal/... (cueKill orchestration deterministic; selfheal/liveheal/killcontrol stay green)",
+        "chrome-devtools MCP on the k8s cinematic overlay (#160): build paces across time; send cueKill -> hero-wall holder dies in place, Expiry -> Re-auction -> survivor seals; victim stays down until after the seal; cross-check kubectl logs across all services"
+      ],
+      "notes": "Epic 07. Reshaped 2026-06-08 (grilling): re-pace (coordinator windows + rover --op-every-ms) + hero-wall hold + cueKill (in-process kill, KILLER_ON_KILL=false) + long --recover-ms. Supersedes ADR-0011 (browser-raw-kill). See docs/07-demo-cinematic/."
+    },
+    {
+      "id": "r3d-155",
+      "priority": 76,
+      "area": "demo-cinematic",
+      "title": "Cinematic arm + cueKill trigger (money shot trigger)",
+      "user_visible_behavior": "?reel=1 + a keybind arm cinematic mode (armed affordance shown); while armed, one key sends {cmd:'cueKill'} and the backend (#154) runs the whole climax. No snapshot-reading or rover-id logic in the browser.",
+      "status": "not_started",
+      "issue": 155,
+      "depends_on": [
+        "r3d-154"
+      ],
+      "verification": [
+        "cd web && npm run build && npm test (TS-clean + vitest)",
+        "chrome-devtools MCP on k8s (#160): load ?reel=1, assert armed affordance; press cue key -> real Self-heal runs (MissionHud dips then recovers; lunar/wall-1 LEASED->UNCLAIMED->LEASED-new; dome seals); screenshot kill + heal frames"
+      ],
+      "notes": "Epic 07. Reshaped 2026-06-08 (grilling): backend-orchestrated cueKill, so the browser only arms + triggers. See docs/07-demo-cinematic/ + ADR-0011."
+    },
+    {
+      "id": "r3d-156",
+      "priority": 77,
+      "area": "demo-cinematic",
+      "title": "Cinematic copy overlay — burned-in PT-BR beats, survives H, beat-locked rule",
+      "user_visible_behavior": "An operator-stepped on-screen copy layer renders the script PT-BR narration; mounted outside the HUD stage so H fades the HUD but the bookend wordmark/CTA survives. Beat-locked climax lines are landed after the real worksite event.",
+      "status": "not_started",
+      "issue": 156,
+      "depends_on": [
+        "r3d-155"
+      ],
+      "verification": [
+        "cd web && npm run build && npm test (TS-clean + vitest)",
+        "chrome-devtools MCP: arm, step every copy variant, assert exact PT-BR text; press H -> HUD hidden but overlay text present; screenshot each variant for legible typography/fade/contrast"
+      ],
+      "notes": "Epic 07. Scenery (non-diegetic). copy.ts splits free narration vs beat-locked. See docs/07-demo-cinematic/."
+    },
+    {
+      "id": "r3d-157",
+      "priority": 78,
+      "area": "demo-cinematic",
+      "title": "Marker lock-on cue + bookend label flip (Scenery)",
+      "user_visible_behavior": "An operator cue forces the markers' existing lock-on visual without mouse hover, and a bookend cue flips the Shackleton marker amber->cyan / em construcao -> operacional so both diamonds read operational on the final wide.",
+      "status": "not_started",
+      "issue": 157,
+      "depends_on": [
+        "r3d-155"
+      ],
+      "verification": [
+        "cd web && npm run build && npm test (TS-clean + vitest)",
+        "chrome-devtools MCP: orbit, fire lock-on on Lunar marker (assert locked state) + Shackleton flip (assert label=operacional); before/after screenshots of brackets/bloom + both diamonds cyan/operacional"
+      ],
+      "notes": "Epic 07. Markers are Scenery (operacional = site established, not dome-complete). See docs/07-demo-cinematic/."
+    },
+    {
+      "id": "r3d-158",
+      "priority": 79,
+      "area": "demo-cinematic",
+      "title": "Orbit-open camera-arc — found by light (fallback-ready)",
+      "user_visible_behavior": "On the cinematic open, the camera drifts along the dark lunar limb then arcs so the fixed sun's godrays crest into frame, settling at the orbit pose. Fallback: a static orbit hold + the descent glare carries found-by-light.",
+      "status": "not_started",
+      "issue": 158,
+      "depends_on": [
+        "r3d-155"
+      ],
+      "verification": [
+        "cd web && npm run build && npm test (TS-clean + vitest)",
+        "chrome-devtools MCP: arm + trigger open, sample camera position over time (drifts then arcs, end==orbit pose, sun position unchanged); screenshot sequence dark drift -> godrays cresting -> settle"
+      ],
+      "notes": "Epic 07. Scenery; camera-arc NOT sun-arc; reuses frameloop=always (ADR-0004 Wave-4). Fallback-ready (lowest priority, never blocks the climax). See docs/07-demo-cinematic/."
+    },
+    {
+      "id": "r3d-159",
+      "priority": 80,
+      "area": "demo-cinematic",
+      "title": "Dress rehearsal — deterministic pre-roll + full-beat chrome-mcp walkthrough",
+      "user_visible_behavior": "A one-press pre-roll resets the board to the known seed before a take; a capture checklist documents window size, replay mode, the beat-locked-copy rule, and the manual latency-to-2600ms drag. The full 15-beat reel is verified end-to-end.",
+      "status": "not_started",
+      "issue": 159,
+      "depends_on": [
+        "r3d-155",
+        "r3d-156",
+        "r3d-157",
+        "r3d-158",
+        "r3d-160"
+      ],
+      "verification": [
+        "cd web && npm run build && npm test; backend go test -race ./... green",
+        "chrome-devtools MCP on the k8s cinematic overlay (#160): pre-roll then walk all 15 beats end-to-end (open->descent->build->traverse->return->cueKill->Self-heal[victim stays down]->latency drag->H->ascent->bookend); two pre-roll runs match start framing; capture headline frames",
+        "e2e log verification: #160 helper tails all services; confirm the climax trail in kubectl logs (cueKill -> award -> in-process kill in place -> Expiry -> Re-auction -> survivor award -> DONE -> seal; revive only after seal) — screen and logs agree"
+      ],
+      "notes": "Epic 07 capstone. Runs on k8s pod-per-rover (#160). Latency = manual slider drag to 2600ms (no cue-key). See docs/07-demo-cinematic/."
+    },
+    {
+      "id": "r3d-160",
+      "priority": 81,
+      "area": "demo-cinematic",
+      "title": "k8s cinematic overlay (pod-per-rover) + chrome-mcp capture harness + log aggregation",
+      "user_visible_behavior": "The k8s pod-per-rover deploy gains a cinematic overlay wiring #154's pacing/flags + cueKill (up.sh -> web on localhost:5173); a chrome-mcp launch recipe (dedicated Chrome profile) resolves the Epic-06 profile lock; a logs helper tails all services for e2e confirmation. KILL stays the in-process outage (KILLER_ON_KILL=false).",
+      "status": "not_started",
+      "issue": 160,
+      "depends_on": [
+        "r3d-154"
+      ],
+      "verification": [
+        "deploy: up.sh brings up the cinematic overlay; port-forward web->localhost:5173; reloadDemo resets the board with no pod restart; default deploy unchanged",
+        "chrome-devtools MCP: navigate localhost:5173, screenshot live dashboard, confirm WS snapshot flowing; logs helper tails coordinator+gateway+nats+rovers+killer and shows the swarm auctioning/building"
+      ],
+      "notes": "Epic 07 infra prerequisite (type:task, area:infra). Reshaped/added 2026-06-08 (grilling): mock can't drive Self-heal, so all heal/e2e verification runs on k8s. See docs/07-demo-cinematic/."
     }
   ]
 }
