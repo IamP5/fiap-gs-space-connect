@@ -533,6 +533,47 @@ export function craterProfile(r: number): number {
   return 0;
 }
 
+// ---- LUNAR hero lava-tube skylight (milestone 08 / #173) -------------------
+//
+// A collapsed lava-tube SKYLIGHT — a dark, sheer-walled shaft punched into the
+// flat lunar plain as a hero immersion landform (the user explicitly asked for a
+// "cave"). Real lunar pits (Mare Tranquillitatis, Marius Hills) are near-circular
+// collapse holes ~50–100 m wide opening into sub-surface tubes; viewed from the
+// rim the floor is in deep shadow and reads bottomless. We stylize that: the
+// TERRAIN carves only a shallow recessed collar + a raised ejecta rim (this
+// profile), and a dedicated dark cylinder shaft + floor disc (LavaTubeSkylight
+// component) supplies the crisp vertical walls and the black void — so the read
+// is resolution-independent and doesn't need a hyper-tessellated ground.
+//
+// Placed SW of the worksite at ~27 u from origin: a hero landform in the
+// Earthrise camera beat, clear of the worksite centre (±10 u), every LUNAR
+// set-piece (nearest is the crawler at ~18 u), the NE launch flare, and the
+// Epic 07 climax at lunar/wall-1 (worksite centre). Scene-space (x, z).
+export const SKYLIGHT_CENTER: readonly [number, number] = [-26, -8];
+export const SKYLIGHT_MOUTH_RADIUS = 5.5; // the open shaft mouth (collar lands here)
+export const SKYLIGHT_RIM_RADIUS = 9; // raised ejecta rim crest
+export const SKYLIGHT_OUTER_RADIUS = 14; // rim eases back to the open plain by here
+export const SKYLIGHT_MOUTH_DROP = 1.8; // collar dip at the mouth (terrain; shaft goes deeper)
+export const SKYLIGHT_RIM_LIP = 0.8; // ejecta rim height above the plain
+export const SKYLIGHT_SHAFT_BOTTOM = 13; // depth (scene-y below 0) of the dark floor disc
+
+// Radial elevation delta (scene-y) at distance `dr` from the skylight centre: a
+// shallow recessed collar at the mouth (−MOUTH_DROP), a raised rim lip climbing
+// to +RIM_LIP at the rim crest, then easing back to the plain (0). ADDED on top
+// of the terrain noise by LunarTerrain (lunar only). The deep dark shaft itself
+// is NOT in this profile — a dedicated cylinder supplies it. Pure ⇒ unit-tested.
+export function skylightProfile(dr: number): number {
+  if (dr >= SKYLIGHT_OUTER_RADIUS) return 0;
+  if (dr <= SKYLIGHT_MOUTH_RADIUS) return -SKYLIGHT_MOUTH_DROP;
+  if (dr <= SKYLIGHT_RIM_RADIUS) {
+    // Collar floor (−MOUTH_DROP) climbing the inner rim wall to the crest (+RIM_LIP).
+    const t = smoothstep01(SKYLIGHT_MOUTH_RADIUS, SKYLIGHT_RIM_RADIUS, dr);
+    return -SKYLIGHT_MOUTH_DROP + (SKYLIGHT_MOUTH_DROP + SKYLIGHT_RIM_LIP) * t;
+  }
+  // Outer flank: ejecta rim crest easing back down to the plain.
+  return SKYLIGHT_RIM_LIP * (1 - smoothstep01(SKYLIGHT_RIM_RADIUS, SKYLIGHT_OUTER_RADIUS, dr));
+}
+
 // ---- habitat dome: rising-by-completion ordering ---------------------------
 
 // Construction tiers, lowest (built first) to highest. The dome rises

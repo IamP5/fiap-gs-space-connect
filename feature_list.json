@@ -1777,7 +1777,7 @@
       "area": "surface-immersion",
       "title": "Hero lava-tube cave skylight + boulder scatter (08-P6)",
       "user_visible_behavior": "The lunar site gains a focal landform — a collapsed lava-tube skylight (dark recessed mouth + carved rim) off-center — plus an instanced boulder scatter clustered near the rim and absent from structure footprints.",
-      "status": "not_started",
+      "status": "passing",
       "issue": 173,
       "milestone": 3,
       "depends_on": [
@@ -1787,8 +1787,8 @@
         "cd web && npm run build && npm test",
         "manual: lava-tube cave skylight present + reads as a tube mouth; boulders clustered, off footprints, instance-capped; no frame-time regression"
       ],
-      "evidence": "",
-      "notes": "Milestone 08. Plan WS-4 (landform). Decision locked: hero landform is a lava-tube cave skylight, not an impact crater. Reuses craterProfile machinery."
+      "evidence": "scene.ts: SKYLIGHT_* consts + skylightProfile() (collar + raised ejecta rim, pure, unit-tested). LunarTerrain: skylight prop gated activeSite==='lunar', seg 96->160, carve term + swell/micro fade in the pit. New LavaTube.tsx: <LavaTubeSkylight> dark BackSide cylinder shaft (mouth r5.5 -> floor r4.3, depth 13) + near-black floor disc = bottomless void; <LavaTubeBoulders> 30 instanced boulders (drei Instances frames=1, ~1 draw call), seeded ejecta cluster on the rim, seated via skylightProfile, raycast-suppressed. Centre (-26,-8) ~27u SW: hero in the Earthrise beat, clear of worksite/wall-1, set-pieces (crawler nearest at 18u), launch flare. 249 vitest pass (+6 skylightProfile incl. monotonicity/bounds/set-piece keep-out), tsc + lint clean. Verified live on lunar surface: dark void disc + boulder ring render on the regolith, no console/runtime errors. Carry-over: resurrection-flash guard hardened to isMeshStandardMaterial.",
+      "notes": "Milestone 08. Plan WS-4 (landform). Decision locked: hero landform is a lava-tube cave skylight, not an impact crater. Skylight is a dedicated dark cylinder+disc (resolution-independent) rather than carved purely into the terrain; the terrain only carves a shallow collar + ejecta rim via skylightProfile. User art-direction picks: SW mid-distance hero placement, bottomless black void, rim-cluster boulders only (worksite stays clean for the cinematic)."
     },
     {
       "id": "r3d-174",

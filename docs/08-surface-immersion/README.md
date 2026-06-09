@@ -19,7 +19,7 @@ feature to `passing`.
 - [x] #170 — 08-P2 Regolith overhaul: grey + 1K/2K + anti-tiling (WS-4) · `r3d-170` · _branch `feat/08-surface-immersion`_
 - [x] #171 — 08-P4 Robotic rover readability: scale 2.5–3× + load-fix + material (WS-3) · `r3d-171` · _branch `feat/08-surface-immersion`_
 - [x] #172 — 08-P3 Cinematic lunar lighting + exposure (WS-5) · `r3d-172` · _branch `feat/08-surface-immersion` (Earth-framing sub-task deferred)_
-- [ ] #173 — 08-P6 Hero lava-tube cave skylight + boulder scatter (WS-4) · `r3d-173` · _blocked by #170_
+- [x] #173 — 08-P6 Hero lava-tube cave skylight + boulder scatter (WS-4) · `r3d-173` · _branch `feat/08-surface-immersion`_
 - [ ] #174 — 08-P5 Composed base layout + NASA-PD assets [HITL] (WS-2+WS-6) · `r3d-174` · _blocked by #169_
 
 ---

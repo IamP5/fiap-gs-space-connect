@@ -73,11 +73,16 @@ import {
   REAL_METERS,
   SCENE_UNITS_PER_METER,
   SITE_FRAMES,
+  SKYLIGHT_CENTER,
+  SKYLIGHT_OUTER_RADIUS,
+  SKYLIGHT_MOUTH_RADIUS,
+  SKYLIGHT_RIM_RADIUS,
   type SceneMap,
   type SiteFrame,
   craterProfile,
   isBuilt,
   siteMap,
+  skylightProfile,
   tierHeight,
   tierOf,
 } from "../lib/scene";
@@ -111,6 +116,7 @@ import {
 } from "../lib/cameraFeel";
 import { OPEN_MS, openAzimuthOffset } from "../lib/reel/openArc";
 import { LaunchScenery } from "./LaunchScenery";
+import { LavaTubeSkylight, LavaTubeBoulders } from "./LavaTube";
 
 // Functional telemetry colors (DESIGN.md: live-data signals only — the brand
 // palette itself is black + white). Matched to the 2D canvas so the two
@@ -526,7 +532,12 @@ function RoverBody({
     // Brightness peaks early (1 - p) so the flash is strongest at the comeback.
     const intensity = p > 0 ? (1 - p) * 1.6 : 0;
     for (const sm of flashMats.current ?? []) {
-      if (!sm.emissive) continue;
+      // The clones are TYPED MeshStandardMaterial but a glTF can supply a non-
+      // standard material (unlit/basic, points/line) that lacks `emissive` — so
+      // narrow on the real type before touching standard-only fields, not just on
+      // the `emissive` field (#173 carry-over: keep the unsound cast from biting a
+      // future edit that reads more standard props here).
+      if (!sm.isMeshStandardMaterial) continue;
       sm.emissive.copy(REVIVE_FLASH);
       sm.emissiveIntensity = intensity;
     }
@@ -1688,7 +1699,15 @@ function applyRegolithMacro(shader: THREE.WebGLProgramParametersWithUniforms) {
     );
 }
 
-function LunarTerrain({ terrainTint, crater = false }: { terrainTint: string; crater?: boolean }) {
+function LunarTerrain({
+  terrainTint,
+  crater = false,
+  skylight = false,
+}: {
+  terrainTint: string;
+  crater?: boolean;
+  skylight?: boolean;
+}) {
   const matRef = useRef<THREE.MeshStandardMaterial>(null);
   const gl = useThree((s) => s.gl);
   const invalidate = useThree((s) => s.invalidate);
@@ -1698,8 +1717,10 @@ function LunarTerrain({ terrainTint, crater = false }: { terrainTint: string; cr
     // 96 segments a 700-unit plane is ~7.3 units/quad, too coarse for a clean rim
     // crest. Bump to 220 (≈3.2 units/quad) ONLY when the crater is on — still a
     // single mesh / single draw call (the only hygiene budget post-ADR-0004), and
-    // the one-time rebuild happens behind the site-swap dust veil.
-    const seg = crater ? 220 : 96;
+    // the one-time rebuild happens behind the site-swap dust veil. The lunar
+    // skylight collar (#173) is shallow + small, but bump lunar to 160 (≈4.4
+    // u/quad) when it's on so the recessed rim reads smooth, not stepped.
+    const seg = crater ? 220 : skylight ? 160 : 96;
     const g = new THREE.PlaneGeometry(GROUND_VISUAL, GROUND_VISUAL, seg, seg);
     const pos = g.attributes.position as THREE.BufferAttribute;
     for (let i = 0; i < pos.count; i++) {
@@ -1731,14 +1752,39 @@ function LunarTerrain({ terrainTint, crater = false }: { terrainTint: string; cr
       // worksite there). Suppress the rolling swell INSIDE the rim so it can't
       // corrugate the clean bowl wall; keep fine ripple + micro grain on the floor
       // and walls. The crater delta lifts a rim ring around the y≈0 floor.
-      const swellTerm = crater ? (r > CRATER_OUTER_RADIUS ? swell : 0) : swell;
-      pos.setZ(i, fine + swellTerm + micro + (crater ? craterProfile(r) : 0));
+      // Lunar lava-tube skylight (#173): carve a recessed collar + raised ejecta
+      // rim around an offset centre. Distance from the skylight centre, computed in
+      // SCENE space — plane-local (x, y) maps to scene (x, -y), so scene-z = -y.
+      let skyTerm = 0;
+      let skyWall = 1; // 1 = open plain, → 0 inside the collar (damps swell/micro)
+      if (skylight) {
+        const sdr = Math.hypot(x - SKYLIGHT_CENTER[0], -y - SKYLIGHT_CENTER[1]);
+        if (sdr < SKYLIGHT_OUTER_RADIUS) {
+          skyTerm = skylightProfile(sdr);
+          // Fade the rolling swell + micro grain out across the rim so the carved
+          // collar reads as a clean recessed mouth, not a noise-corrugated dip.
+          skyWall = THREE.MathUtils.smoothstep(sdr, SKYLIGHT_MOUTH_RADIUS, SKYLIGHT_RIM_RADIUS);
+        }
+      }
+      const swellTerm = crater
+        ? r > CRATER_OUTER_RADIUS
+          ? swell
+          : 0
+        : swell * (skylight ? skyWall : 1);
+      pos.setZ(
+        i,
+        fine * (skylight ? 0.4 + 0.6 * skyWall : 1) +
+          swellTerm +
+          micro * (skylight ? 0.3 + 0.7 * skyWall : 1) +
+          (crater ? craterProfile(r) : 0) +
+          skyTerm,
+      );
     }
     g.computeVertexNormals();
     // aoMap reads from uv2; PlaneGeometry's uv works directly as the second set.
     if (g.attributes.uv && !g.attributes.uv2) g.setAttribute("uv2", g.attributes.uv);
     return g;
-  }, [crater]);
+  }, [crater, skylight]);
   useEffect(() => () => geom.dispose(), [geom]);
 
   useEffect(() => {
@@ -2948,12 +2994,26 @@ function SceneContents({
           branch so the scenery above never remounts. */}
       {snapshot && taskById && onSurface && (
         <>
-          <LunarTerrain terrainTint={frame.terrainTint} crater={activeSite === "shackleton"} />
+          <LunarTerrain
+            terrainTint={frame.terrainTint}
+            crater={activeSite === "shackleton"}
+            skylight={activeSite === "lunar"}
+          />
 
           {/* Shackleton long-shadow fakes (Epic 04 P4): static decals raking AWAY
               from the grazing pole sun. Snapshot-independent + procedural (no asset),
               so they never pop in on descent. Lunar's high key light needs none. */}
           {activeSite === "shackleton" && <ShackletonShadows />}
+
+          {/* Lunar hero lava-tube skylight (#173): the dark void shaft + its ejecta
+              boulder rim, SW of the worksite. LUNAR only — Shackleton has its crater.
+              Snapshot-independent decoration; both are non-pickable (raycast off). */}
+          {activeSite === "lunar" && (
+            <>
+              <LavaTubeSkylight />
+              <LavaTubeBoulders />
+            </>
+          )}
 
           {/* Contact shadows (#104) — drei bakes a soft ambient-occlusion-like
               contact shadow under the rovers + domes so they read as GROUNDED, not

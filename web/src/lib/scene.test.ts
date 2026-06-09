@@ -15,12 +15,19 @@ import {
   REAL_METERS,
   SCENE_UNITS_PER_METER,
   SITE_FRAMES,
+  SKYLIGHT_CENTER,
+  SKYLIGHT_MOUTH_RADIUS,
+  SKYLIGHT_MOUTH_DROP,
+  SKYLIGHT_OUTER_RADIUS,
+  SKYLIGHT_RIM_LIP,
+  SKYLIGHT_RIM_RADIUS,
   computeBounds,
   craterProfile,
   isBuilt,
   latLonToGlobeNormal,
   latLonToGlobePoint,
   siteMap,
+  skylightProfile,
   tierHeight,
   tierOf,
 } from "./scene";
@@ -322,6 +329,59 @@ describe("craterProfile (Shackleton carved crater)", () => {
     for (let r = 0; r <= 400; r += 1) {
       expect(craterProfile(r)).toBeLessThanOrEqual(CRATER_RIM_HEIGHT + 1e-9);
       expect(craterProfile(r)).toBeGreaterThanOrEqual(0);
+    }
+  });
+});
+
+describe("skylightProfile (lunar lava-tube skylight, #173)", () => {
+  it("drops to the recessed collar across the mouth, then returns to the plain far out", () => {
+    expect(skylightProfile(0)).toBe(-SKYLIGHT_MOUTH_DROP);
+    expect(skylightProfile(SKYLIGHT_MOUTH_RADIUS)).toBe(-SKYLIGHT_MOUTH_DROP);
+    expect(skylightProfile(SKYLIGHT_OUTER_RADIUS)).toBe(0);
+    expect(skylightProfile(300)).toBe(0); // far field is the flat plain
+  });
+
+  it("rises to a raised ejecta rim lip at the rim crest", () => {
+    expect(skylightProfile(SKYLIGHT_RIM_RADIUS)).toBeCloseTo(SKYLIGHT_RIM_LIP, 5);
+  });
+
+  it("climbs monotonically up the inner wall (mouth → rim crest)", () => {
+    let prev = -Infinity;
+    for (let dr = SKYLIGHT_MOUTH_RADIUS; dr <= SKYLIGHT_RIM_RADIUS; dr += 0.5) {
+      const h = skylightProfile(dr);
+      expect(h).toBeGreaterThanOrEqual(prev - 1e-9);
+      prev = h;
+    }
+  });
+
+  it("eases the rim lip back down to the plain on the outer flank (rim → outer)", () => {
+    let prev = Infinity;
+    for (let dr = SKYLIGHT_RIM_RADIUS; dr <= SKYLIGHT_OUTER_RADIUS; dr += 0.5) {
+      const h = skylightProfile(dr);
+      expect(h).toBeLessThanOrEqual(prev + 1e-9);
+      prev = h;
+    }
+  });
+
+  it("never carves below the collar nor lifts above the rim lip anywhere", () => {
+    for (let dr = 0; dr <= 60; dr += 0.5) {
+      expect(skylightProfile(dr)).toBeGreaterThanOrEqual(-SKYLIGHT_MOUTH_DROP - 1e-9);
+      expect(skylightProfile(dr)).toBeLessThanOrEqual(SKYLIGHT_RIM_LIP + 1e-9);
+    }
+  });
+
+  it("sits clear of the worksite centre and every LUNAR set-piece (no structure in the pit)", () => {
+    const [cx, cz] = SKYLIGHT_CENTER;
+    const WORKSITE_HALF_EXTENT = 10; // rovers/tasks + the Epic 07 climax at wall-1
+    // The pit's nearest approach to the origin (centre distance − outer radius)
+    // must clear the worksite, so nothing interactive ever falls into the collar.
+    const nearestApproach = Math.hypot(cx, cz) - SKYLIGHT_OUTER_RADIUS;
+    expect(nearestApproach).toBeGreaterThan(WORKSITE_HALF_EXTENT);
+    // No lunar set-piece may fall inside the skylight outer radius (it would sink
+    // into the carved collar). Nearest is the crawler.
+    for (const p of SITE_FRAMES.lunar.pieces) {
+      const d = Math.hypot(p.position[0] - cx, p.position[2] - cz);
+      expect(d).toBeGreaterThan(SKYLIGHT_OUTER_RADIUS);
     }
   });
 });
