@@ -111,24 +111,31 @@ https://www.nasa.gov/nasa-brand-center/images-and-media/.
 
 ## PBR texture sets — regolith (CC0)
 
-The lunar terrain (and the PBR `SpecPrimitive` slot) is clothed with Poly Haven's
-**Moon 01** set (issue #53): the full diffuse / normal (OpenGL) / roughness / AO
-maps, downloaded as 1K jpg and **resized to 512×512** for bundle size (otherwise
-unmodified). The jpg `nor_gl` normal map is used (no EXR dependency).
+The lunar terrain is clothed with Poly Haven's **Moon 01** set (issue #53; upgraded
+to 2K in milestone 08 / #170): the full diffuse / normal (OpenGL) / roughness / AO
+maps. WS-4 (#170) upgraded the terrain set from 512 to **true 2048×2048**; the heavy
+normal + AO maps are **re-encoded at jpg quality ≈68** (resolution unchanged) so the
+full set lands ≈5 MB instead of ~10 MB. The jpg `nor_gl` normal map is used (no EXR
+dependency). The small 512 set below is retained for the low-detail `SpecPrimitive`
+block slot (mock scene), which does not need 2K.
 
 | File | Source map | Authors | Source URL | License |
 |------|-----------|---------|-----------|---------|
+| `textures/regolith_diff_2k.jpg` | "Moon 01" — 2K diffuse | Greg Zaal, Rico Cilliers, Jenelle van Heerden (photography), Dario Barresi (processing) | https://polyhaven.com/a/moon_01 | CC0 1.0 |
+| `textures/regolith_nor_gl_2k.jpg` | "Moon 01" — 2K normal (OpenGL), re-encoded jpg q≈68 | Greg Zaal, Rico Cilliers, Jenelle van Heerden (photography), Dario Barresi (processing) | https://polyhaven.com/a/moon_01 | CC0 1.0 |
+| `textures/regolith_rough_2k.jpg` | "Moon 01" — 2K roughness | Greg Zaal, Rico Cilliers, Jenelle van Heerden (photography), Dario Barresi (processing) | https://polyhaven.com/a/moon_01 | CC0 1.0 |
+| `textures/regolith_ao_2k.jpg` | "Moon 01" — 2K ambient occlusion, re-encoded jpg q≈68 | Greg Zaal, Rico Cilliers, Jenelle van Heerden (photography), Dario Barresi (processing) | https://polyhaven.com/a/moon_01 | CC0 1.0 |
 | `textures/regolith_diff_512.jpg` | "Moon 01" — 1K diffuse, resized to 512 | Greg Zaal, Rico Cilliers, Jenelle van Heerden (photography), Dario Barresi (processing) | https://polyhaven.com/a/moon_01 | CC0 1.0 |
 | `textures/regolith_nor_gl_512.jpg` | "Moon 01" — 1K normal (OpenGL), resized to 512 | Greg Zaal, Rico Cilliers, Jenelle van Heerden (photography), Dario Barresi (processing) | https://polyhaven.com/a/moon_01 | CC0 1.0 |
 | `textures/regolith_rough_512.jpg` | "Moon 01" — 1K roughness, resized to 512 | Greg Zaal, Rico Cilliers, Jenelle van Heerden (photography), Dario Barresi (processing) | https://polyhaven.com/a/moon_01 | CC0 1.0 |
 | `textures/regolith_ao_512.jpg` | "Moon 01" — 1K ambient occlusion, resized to 512 | Greg Zaal, Rico Cilliers, Jenelle van Heerden (photography), Dario Barresi (processing) | https://polyhaven.com/a/moon_01 | CC0 1.0 |
 
-Original 1K downloads (resized down to 512; otherwise unmodified):
+Original 2K downloads (normal + AO re-encoded at jpg q≈68; otherwise unmodified):
 
-- `https://dl.polyhaven.org/file/ph-assets/Textures/jpg/1k/moon_01/moon_01_diff_1k.jpg`
-- `https://dl.polyhaven.org/file/ph-assets/Textures/jpg/1k/moon_01/moon_01_nor_gl_1k.jpg`
-- `https://dl.polyhaven.org/file/ph-assets/Textures/jpg/1k/moon_01/moon_01_rough_1k.jpg`
-- `https://dl.polyhaven.org/file/ph-assets/Textures/jpg/1k/moon_01/moon_01_ao_1k.jpg`
+- `https://dl.polyhaven.org/file/ph-assets/Textures/jpg/2k/moon_01/moon_01_diff_2k.jpg`
+- `https://dl.polyhaven.org/file/ph-assets/Textures/jpg/2k/moon_01/moon_01_nor_gl_2k.jpg`
+- `https://dl.polyhaven.org/file/ph-assets/Textures/jpg/2k/moon_01/moon_01_rough_2k.jpg`
+- `https://dl.polyhaven.org/file/ph-assets/Textures/jpg/2k/moon_01/moon_01_ao_2k.jpg`
 
 Poly Haven publishes all of its assets under CC0 1.0
 (https://polyhaven.com/license); the set's authors are confirmed via the Poly
@@ -168,7 +175,7 @@ as a courtesy. Downloaded: 2026-06-06.
 |------|-------------|--------------|--------|-----------|---------|--------------|
 | `models/solar-panel.glb` | `solar-panel` | NASA 3D Resources → `3D Models/Solar Sail Concept/Solar Sail Concept.glb` | NASA / NASA 3D Resources | https://github.com/nasa/NASA-3D-Resources/tree/master/3D%20Models/Solar%20Sail%20Concept | NASA / US-gov public domain | up=z + recenter + fit-to-unit + `--compress draco` (238 KB → 54 KB) |
 | `models/comms-mast.glb` | `comms-mast` | NASA 3D Resources → `3D Models/Tether/Tether.glb` | NASA / NASA 3D Resources | https://github.com/nasa/NASA-3D-Resources/tree/master/3D%20Models/Tether | NASA / US-gov public domain | up=z + recenter + fit-to-unit + `--compress draco` (492 KB → 14 KB) |
-| `models/comms-dish.glb` | `comms-dish` | NASA 3D Resources → `3D Models/70-meter Dish/70 meter dish.glb` | NASA / NASA 3D Resources | https://github.com/nasa/NASA-3D-Resources/tree/master/3D%20Models/70-meter%20Dish | NASA / US-gov public domain | textures detached (no embedded images at runtime) + up=z + recenter + fit-to-unit + `--compress draco` (2.2 MB → 90 KB) |
+| `models/nasa_dish_70m.glb` | `comms-dish` / `dish-70m` | NASA 3D Resources → `3D Models/70-meter Dish/70 meter dish.glb` | NASA / NASA 3D Resources | https://github.com/nasa/NASA-3D-Resources/tree/master/3D%20Models/70-meter%20Dish | NASA / US-gov public domain | Milestone 08: re-conditioned WITH its baseColor texture kept (the prior `comms-dish.glb` detached it → flat grey) via `gltf-transform optimize --compress draco --texture-compress webp` (2.2 MB → 207 KB). Shared by the lunar comms ridge (hero) + Shackleton, scaled per site. Replaces `comms-dish.glb`. |
 
 Source repository (the `.glb` files above are fetched verbatim from branch
 `master`, then conditioned offline as noted): `https://github.com/nasa/NASA-3D-Resources`.
@@ -294,7 +301,7 @@ ESA/Hubble publishes its images under **CC-BY 4.0**
 here verbatim. **Attribution:** NASA, ESA, and the Hubble Heritage
 (STScI/AURA)-ESA/Hubble Collaboration. Acknowledgment: J. Hester (ASU).
 
-## Rover model (NASA-PD)
+## Rover model (NASA-PD — milestone 08 / #171)
 
 Used by `<Rover3D>` (issue #54) as the realistic worker-entity render — every
 rover swaps its primitive box body for this one configured glTF. It is NOT a
@@ -305,9 +312,19 @@ Draco-compressed by `scripts/condition-asset.mjs` (recentered, fit-to-unit);
 fitted + ground-seated at load. The loaded tree is raycast-suppressed so the
 rover's invisible hit-proxy sphere stays the SOLE pickable surface.
 
+WS-3 (#171) swapped the **active** rover to NASA's iconic **Mars 2020
+Perseverance** — the featureless `rassor_rover.glb` "shrinkwrap" hull read as a
+smooth pod, and a stop-gap low-poly CC0 rover read as a toy, so neither sold
+"real rover." Perseverance is the genuine NASA rover silhouette. The RASSOR row
+is retained below for provenance (file still present, no longer referenced).
+
 | File | Source asset | Author | Source URL | License |
 |------|--------------|--------|-----------|---------|
-| `models/rassor_rover.glb` | "Regolith Advanced Surface Systems Operations Robot (RASSOR)" — NASA's lunar regolith excavation/construction robot. Draco-decompressed, decimated (~2.1M → render-light), conditioned (Y-up, recentered, fit-to-unit), then Draco-recompressed (6.3 MB → 2.0 MB). | NASA | https://github.com/nasa/NASA-3D-Resources/tree/master/3D%20Models/Regolith%20Advanced%20Surface%20Systems%20Operations%20Robot%20(RASSOR) | NASA-PD |
+| `models/rover_nasa.glb` | "Mars 2020 Perseverance Rover" — NASA's iconic 6-wheel rover (detailed chassis + rocker-bogie suspension + Mastcam-Z/NavCam camera mast + robotic arm + antennas). **Body PBR textures KEPT** (real white/tan livery via the `mars_2020_*` atlases). Draco-decoded, then `gltf-transform optimize --compress draco --texture-compress webp --texture-size 1024` (Y-up, no recenter/fit — the renderer's `fitAndSeatRover` fits + seats at load): 4.76 MB source → 1.47 MB. 44 meshes / ~126k verts, 22 webp textures embedded — NOT a flat-grey blob. **Insignia painted out (ImageMagick, astronaut.glb method):** the `blade` atlas's US flag + NASA meatball + JPL logo and the `arm_graphics` atlas's NASA meatball + JPL logo were flat-filled with the surrounding panel colour before re-packing; science calibration targets/fiducials and the "MARS 2020/PERSEVERANCE" mission text retained. No insignia/worm/seal/flag in the shipped `.glb` (re-verified post-encode). | NASA / Brian Kumanchik, NASA/JPL-Caltech | https://science.nasa.gov/3d-resources/mars-2020-perseverance-rover/ | NASA-PD |
+| `models/rassor_rover.glb` | "Regolith Advanced Surface Systems Operations Robot (RASSOR)" — NASA's lunar regolith excavation/construction robot. Draco-decompressed, decimated (~2.1M → render-light), conditioned (Y-up, recentered, fit-to-unit), then Draco-recompressed (6.3 MB → 2.0 MB). _Retained for provenance; no longer the active rover (#171)._ | NASA | https://github.com/nasa/NASA-3D-Resources/tree/master/3D%20Models/Regolith%20Advanced%20Surface%20Systems%20Operations%20Robot%20(RASSOR) | NASA-PD |
+
+Original download (Perseverance; conditioned, not committed as-is):
+`https://assets.science.nasa.gov/content/dam/science/cds/3d/resources/model/mars-2020-perseverance-rover/Mars%202020%20Perseverance%20Rover.glb`
 
 NASA's 3D Resources are released into the public domain (NASA-PD); see
 https://github.com/nasa/NASA-3D-Resources (Usage Guidelines). No NASA insignia
@@ -341,6 +358,7 @@ Downloaded & converted: 2026-06-07.
 | File | Source asset | Author | Source URL | License |
 |------|--------------|--------|-----------|---------|
 | `starmap_2020_8k_gal.jpg` | Deep Star Maps 2020 (SVS 4851) → `starmap_2020_8k_gal.exr`, converted offline to 8192×4096 sRGB JPG (warm-graded) | NASA/Goddard SVS (Gaia DR2: ESA/Gaia/DPAC) | https://svs.gsfc.nasa.gov/4851/ | Public Domain (NASA-PD) + ESA/Gaia co-credit |
+| `starmap_2020_16k_gal.ktx2` | SAME Deep Star Maps 2020 source at **16384×8192**, GPU-compressed to Basis-LZ/ETC1S KTX2 (tone-matched to the 8k JPG above) | NASA/Goddard SVS (Gaia DR2: ESA/Gaia/DPAC) | https://svs.gsfc.nasa.gov/4851/ | Public Domain (NASA-PD) + ESA/Gaia co-credit |
 
 Original download (8192×4096 EXR; converted offline, not committed as-is):
 `https://svs.gsfc.nasa.gov/vis/a000000/a004800/a004851/starmap_2020_8k_gal.exr`
@@ -352,6 +370,41 @@ bring out the brown dust band):
 magick starmap_2020_8k_gal.exr -set colorspace RGB -colorspace sRGB \
   -modulate 112,125,100 -depth 8 -quality 82 \
   web/public/assets/starmap_2020_8k_gal.jpg
+```
+
+### 16k KTX2 upgrade (`starmap_2020_16k_gal.ktx2`) — PRIMARY backdrop
+
+The PRIMARY space backdrop is now the **16k** Deep Star Maps render, GPU-compressed
+to a Basis-LZ/ETC1S `.ktx2` so the 4× linear resolution (crisp pinpoint stars +
+finer dust) ships **without** a VRAM cost: on desktop it transcodes to BC7
+(~1 byte/texel), so 16384×8192 with mips is ~179 MB on the GPU — the same as the
+8k RGBA8 it replaces. The real saving comes from HOW it renders: the starmap is
+sampled directly on a sky-sphere mesh (`SpaceEnvironment.tsx <SkySphere>`), NOT
+via `scene.background` — three r169 converts equirect backgrounds to a cubemap
+render target sized `image.height` (8192³×6 ≈ 1.6 GB for this map, and the RT
+inherits a mipmap filter with no mipmaps from the CompressedTexture, so it samples
+black), meaning the background slot is both broken for KTX2 and was silently
+costing the old 8k JPG path a ~536 MB cubemap. The 8k JPG above stays as the
+ADR-0004 fallback (used if the GPU can't transcode KTX2). The transcoder
+(`basis_transcoder.js` + `.wasm`, three's copy) is vendored to `assets/basis/`.
+
+Original download (16384×8192 EXR, 366 MB; ImageMagick can't decode its
+compression, so ffmpeg does the EXR→PNG step):
+`https://svs.gsfc.nasa.gov/vis/a000000/a004800/a004851/starmap_2020_16k_gal.exr`
+
+Offline conversion (ffmpeg applies the linear→sRGB transfer the EXR carries; the
+`-gamma 1.30` is tuned so the result's luminance/contrast/saturation MATCH the 8k
+JPG above, so the per-view `backgroundIntensity` grades need no re-tuning; `basisu`
+= Basis Universal v2.10):
+
+```sh
+# 1. EXR (linear half-float) → 16k sRGB PNG
+ffmpeg -apply_trc iec61966_2_1 -i starmap_2020_16k_gal.exr starmap_16k_srgb.png
+# 2. tone-match the established 8k look
+magick starmap_16k_srgb.png -gamma 1.30 -depth 8 starmap_16k_final.png
+# 3. ETC1S KTX2 + mipmaps (sRGB-correct mip filtering), y-flipped for equirect
+basisu -q 255 -comp_level 2 -mipmap -mip_srgb -ktx2 -y_flip \
+  -output_file starmap_2020_16k_gal.ktx2 starmap_16k_final.png
 ```
 
 NASA's Deep Star Maps are derived from ESA's Gaia DR2 (plus Hipparcos/Tycho)
@@ -399,3 +452,26 @@ carried no insignia (its only decal was an undistributed external diffuse map,
 which was stripped). The Astronaut's remaining grey patches are mechanical EVA
 suit hardware (chest controls / valves), not insignia. NASA's image and media
 usage guidelines: https://www.nasa.gov/nasa-brand-center/images-and-media/.
+
+## Composed base — EVA suit + comms dish (NASA-PD — milestone 08 / #174)
+
+Two NASA 3D Resources models added (the EMU) / re-conditioned (the 70-m dish) for
+the composed lunar base layout (Milestone 08, WS-2/WS-6). Both are decorative,
+snapshot-independent **Scenery** rendered by `LaunchScenery.tsx`, each with a
+mandatory primitive fallback (ADR-0004) and raycast-suppressed (non-pickable). US
+public-domain works; this project is **not** affiliated with or endorsed by NASA,
+and **no NASA insignia or US flag is displayed**. Downloaded & conditioned 2026-06-08.
+
+| File | Source asset | Author | Source URL | License | Conditioning |
+|------|--------------|--------|-----------|---------|--------------|
+| `models/nasa_emu.glb` | NASA 3D Resources → `3D Models/Extravehicular Mobility Unit/Extravehicular Mobility Unit.glb` (EVA spacesuit, a scale figure near the worksite) | NASA / NASA 3D Resources | https://github.com/nasa/NASA-3D-Resources/tree/master/3D%20Models/Extravehicular%20Mobility%20Unit | NASA / US-gov public domain | **ALL textures stripped** (the source baseColor atlases carried a US flag + a mission patch + EVA-control labels; per §7 the flag/insignia must not ship, so every texture slot was removed and the suit renders from a neutral grey baseColorFactor — same approach as `base-station.glb`); then `gltf-transform optimize --compress draco` (3.45 MB → 352 KB). Shipped `.glb` has **0 textures** (re-verified post-encode). |
+| `models/nasa_dish_70m.glb` | NASA 3D Resources → `3D Models/70-meter Dish/70 meter dish.glb` | NASA / NASA 3D Resources | https://github.com/nasa/NASA-3D-Resources/tree/master/3D%20Models/70-meter%20Dish | NASA / US-gov public domain | Textured re-condition of the dish that previously shipped (with textures detached → flat grey) as `comms-dish.glb`: kept its baseColor texture via `gltf-transform optimize --compress draco --texture-compress webp` (2.2 MB → 207 KB). Its single texture is the antenna's metal/structure surface (no insignia/flag). **Replaces `comms-dish.glb`**; shared by the lunar comms ridge (hero, scaled large) + Shackleton. See the props table above. |
+
+Original downloads (raw `master`; conditioned, not committed as-is):
+
+- `https://raw.githubusercontent.com/nasa/NASA-3D-Resources/master/3D%20Models/Extravehicular%20Mobility%20Unit/Extravehicular%20Mobility%20Unit.glb`
+- `https://raw.githubusercontent.com/nasa/NASA-3D-Resources/master/3D%20Models/70-meter%20Dish/70%20meter%20dish.glb`
+
+NASA's 3D Resources are released into the public domain; the NASA insignia/worm/
+seal and US flag are excluded and are NOT shipped here. See
+https://www.nasa.gov/nasa-brand-center/images-and-media/.

@@ -240,12 +240,19 @@ func contractsFor(tasks []Task) map[domain.TaskID]Contract {
 }
 
 // domeBlueprint is the lunar habitat dome as a catalog Blueprint, matching
-// internal/demo.DomeBlueprint's task shapes (four foundations, eight walls each
-// on its foundation, a dome-cap needing all walls) so a placed dome injects the
-// same DAG the demo rovers already build.
+// internal/demo.DomeBlueprint's task shapes (four foundations, six walls each on a
+// foundation, a dome-cap needing all walls) so a placed dome injects the same DAG
+// the demo rovers already build. The wall ring is deliberately sparse (six, not a
+// tight octagon) so the dome shell reads through the gaps — matching the refined
+// mock hero (web/src/mocks/snapshot.ts).
 func domeBlueprint() Blueprint {
-	wallPos := ring(8, 46, 90)
-	foundationPos := ring(4, 24, 68)
+	// Ring radii are worksite units; the renderer draws 1 unit ≈ 0.3 scene units
+	// (SCENE_UNITS_PER_METER·worksiteUnitsToMeters), so these compact radii ring the
+	// walls/foundations snugly around the dome skirt instead of scattering them
+	// across the plain. The dome shell occupies ~10 worksite units of radius, so the
+	// wall ring sits just outside it.
+	wallPos := ring(6, 12, 90)
+	foundationPos := ring(4, 11, 68)
 
 	footEnv := Envelope{Center: domain.Vec3{}, Size: domain.Vec3{X: 14, Y: 14, Z: 4}}
 	wallEnv := Envelope{Center: domain.Vec3{}, Size: domain.Vec3{X: 12, Y: 12, Z: 14}}
@@ -260,11 +267,11 @@ func domeBlueprint() Blueprint {
 			Envelope: footEnv,
 		})
 	}
-	wallIDs := make([]domain.TaskID, 0, 8)
-	for i := 1; i <= 8; i++ {
+	wallIDs := make([]domain.TaskID, 0, 6)
+	for i := 1; i <= 6; i++ {
 		id := domain.TaskID(fmt.Sprintf("wall-%d", i))
 		wallIDs = append(wallIDs, id)
-		foundation := domain.TaskID(fmt.Sprintf("foundation-%d", (i-1)/2+1))
+		foundation := domain.TaskID(fmt.Sprintf("foundation-%d", (i-1)%4+1))
 		tasks = append(tasks, Task{
 			ID:       id,
 			Type:     TypeWall,
@@ -284,7 +291,7 @@ func domeBlueprint() Blueprint {
 	return Blueprint{
 		ID:          "dome",
 		Name:        "Habitat dome",
-		Description: "Pressurised lunar habitat: 4 foundations, 8 walls, a sealing cap.",
+		Description: "Pressurised lunar habitat: 4 foundations, 6 walls, a sealing cap.",
 		Tasks:       tasks,
 		Contracts:   contractsFor(tasks),
 	}
@@ -297,11 +304,14 @@ func solarArrayBlueprint() Blueprint {
 	footEnv := Envelope{Center: domain.Vec3{}, Size: domain.Vec3{X: 16, Y: 12, Z: 3}}
 	panelEnv := Envelope{Center: domain.Vec3{Z: 6}, Size: domain.Vec3{X: 18, Y: 14, Z: 8}}
 
+	// Pads sit ±5 worksite units off the origin (≈3 scene units apart) so the two
+	// sun-tracking panels stand shoulder-to-shoulder as one array, not two isolated
+	// panels marooned across the plain.
 	tasks := []Task{
-		{ID: "pad-1", Type: TypeFoundation, Pos: domain.Vec2{X: -16, Y: 0}, Envelope: footEnv},
-		{ID: "pad-2", Type: TypeFoundation, Pos: domain.Vec2{X: 16, Y: 0}, Envelope: footEnv},
-		{ID: "panel-1", Type: TypePanel, Deps: []domain.TaskID{"pad-1"}, Pos: domain.Vec2{X: -16, Y: 0}, Envelope: panelEnv},
-		{ID: "panel-2", Type: TypePanel, Deps: []domain.TaskID{"pad-2"}, Pos: domain.Vec2{X: 16, Y: 0}, Envelope: panelEnv},
+		{ID: "pad-1", Type: TypeFoundation, Pos: domain.Vec2{X: -5, Y: 0}, Envelope: footEnv},
+		{ID: "pad-2", Type: TypeFoundation, Pos: domain.Vec2{X: 5, Y: 0}, Envelope: footEnv},
+		{ID: "panel-1", Type: TypePanel, Deps: []domain.TaskID{"pad-1"}, Pos: domain.Vec2{X: -5, Y: 0}, Envelope: panelEnv},
+		{ID: "panel-2", Type: TypePanel, Deps: []domain.TaskID{"pad-2"}, Pos: domain.Vec2{X: 5, Y: 0}, Envelope: panelEnv},
 	}
 	return Blueprint{
 		ID:          "solar-array",

@@ -11,7 +11,6 @@ import {
   useCallback,
   useEffect,
   useMemo,
-  useRef,
   useState,
 } from "react";
 import { useSnapshot } from "./hooks/useSnapshot";
@@ -262,11 +261,19 @@ export default function App() {
     // chunk parse doesn't add a stall after the bar fills.
     void import("./components/Scene3D");
     // Kick the asset preload via a dynamic import (keeps three out of the shell).
-    void import("./lib/assets").then(({ preloadAllAssets }) =>
-      preloadAllAssets((loaded, total) => {
-        setProgress(total > 0 ? loaded / total : 1);
-      }).then(reveal),
-    );
+    // preloadAllAssets never rejects (per-asset failures settle), so the only
+    // rejection here is the dynamic CHUNK import failing — in which case the
+    // safety timeout still reveals the scene, but we log so a 9s splash hang has a
+    // cause instead of being silent.
+    void import("./lib/assets")
+      .then(({ preloadAllAssets }) =>
+        preloadAllAssets((loaded, total) => {
+          setProgress(total > 0 ? loaded / total : 1);
+        }).then(reveal),
+      )
+      .catch((err) => {
+        console.error("[asset] preload chunk failed to load:", err);
+      });
     return () => window.clearTimeout(timer);
   }, []);
 
@@ -289,34 +296,6 @@ export default function App() {
     [send],
   );
   const dismiss = useCallback(() => setSelected(null), []);
-
-  // Reload-demo: a single global control frame that resets the board so the
-  // swarm rebuilds the dome from scratch (the Coordinator re-seeds the
-  // worksite). This is a CONTROL, not world state — it stays out of the
-  // snapshot re-render path (ADR-0004). The only local state is a brief
-  // disabled "Reloading…" pulse so the operator sees the click registered; the
-  // authoritative result still arrives via the next snapshot.
-  const [reloading, setReloading] = useState(false);
-  const reloadTimer = useRef<ReturnType<typeof setTimeout> | undefined>(
-    undefined,
-  );
-  const reloadDemo = useCallback(() => {
-    // Browser → server control frame; the gateway relays it onto NATS
-    // `control.command` and the Coordinator resets the board → the dome rebuilds.
-    send({ cmd: "reloadDemo" });
-    setReloading(true);
-    if (reloadTimer.current) clearTimeout(reloadTimer.current);
-    reloadTimer.current = setTimeout(() => setReloading(false), 1200);
-  }, [send]);
-
-  // Clear the feedback timer on unmount so a pending setState never fires on a
-  // gone component.
-  useEffect(
-    () => () => {
-      if (reloadTimer.current) clearTimeout(reloadTimer.current);
-    },
-    [],
-  );
 
   // --- Drag-to-place (bh-05). The active placement is transient CLIENT state —
   // it never enters the snapshot re-render path; placed tasks appear via the next
@@ -478,8 +457,6 @@ export default function App() {
         url={url}
         viewMode={viewMode}
         onViewModeChange={setViewMode}
-        reloading={reloading}
-        onReload={reloadDemo}
       />
 
       <main className="stage">

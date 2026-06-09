@@ -1,7 +1,7 @@
 ---
 version: alpha
 name: Spasex-design-analysis
-description: An inspired interpretation of Spasex's design language — a mission-oriented aerospace brand built on pure black canvas, full-bleed photographic and video heroes of rockets and Mars landscapes, and uppercase D-DIN display type set in tight vertical leading. UI chrome is intentionally minimal: a single ghost outlined pill button per band, all-caps eyebrow microtext, and a fixed top nav over photography. The system is unapologetically austere — black, white, and the imagery itself.
+description: An inspired interpretation of Spasex's design language — a mission-oriented aerospace brand built on pure black canvas, full-bleed photographic and video heroes of rockets and Mars landscapes, and uppercase D-DIN display type set in tight vertical leading. UI chrome is intentionally minimal: a single ghost outlined pill button per band, all-caps eyebrow microtext, and a fixed top nav over photography. The system is unapologetically austere — black, white, and the imagery itself. The same negation extends to the live product — an in-world, No Man's Sky–style diegetic Mission HUD that renders as emitted light — type, hairlines, line-art glyphs, and bloom-lit reticles over the 3D scene — never as opaque boxed panels.
 
 colors:
   primary: "#000000"
@@ -17,6 +17,12 @@ colors:
   link-on-dark: "#ffffff"
   link-blue-fallback: "#0000ee"
   ink-mute: "#5a5a5f"
+  hud-cyan: "#3fd0e6"
+  hud-amber: "#f5a623"
+  signal-ok: "#2ecc71"
+  signal-warn: "#f5a623"
+  signal-down: "#e74c3c"
+  signal-idle: "#9aa4b2"
 
 typography:
   display-xxl:
@@ -146,6 +152,48 @@ components:
     typography: "{typography.caption}"
     rounded: "{rounded.xs}"
     padding: 32px 24px
+  hud-readout:
+    backgroundColor: "transparent"
+    textColor: "{colors.on-primary}"
+    typography: "{typography.micro-cap}"
+    rounded: "{rounded.xs}"
+    padding: 0px
+  hud-hairline-rule:
+    backgroundColor: "transparent"
+    textColor: "{colors.on-primary}"
+    typography: "{typography.micro-cap}"
+    rounded: "{rounded.xs}"
+    padding: 0px
+  hud-progress-thread:
+    backgroundColor: "transparent"
+    textColor: "{colors.hud-cyan}"
+    typography: "{typography.caption}"
+    rounded: "{rounded.full}"
+    padding: 0px
+  hud-reticle:
+    backgroundColor: "transparent"
+    textColor: "{colors.hud-cyan}"
+    typography: "{typography.micro-cap}"
+    rounded: "{rounded.xs}"
+    padding: 0px
+  hud-corner-frame:
+    backgroundColor: "transparent"
+    textColor: "{colors.on-primary}"
+    typography: "{typography.micro-cap}"
+    rounded: "{rounded.xs}"
+    padding: 0px
+  hud-glyph:
+    backgroundColor: "transparent"
+    textColor: "{colors.on-primary}"
+    typography: "{typography.caption}"
+    rounded: "{rounded.xs}"
+    padding: 0px
+  hud-scrim:
+    backgroundColor: "{colors.canvas-night}"
+    textColor: "{colors.on-primary}"
+    typography: "{typography.body-md}"
+    rounded: "{rounded.full}"
+    padding: 0px
 ---
 
 ## Overview
@@ -164,6 +212,7 @@ Typography splits between **D-DIN-Bold** for display tiers (uppercase, tight tra
 - All-caps eyebrow microtext (`{typography.micro-cap}` and `{typography.button-cap}`) with positive 0.96–1.17px tracking — every chrome element shouts in caps.
 - Fixed top nav overlaid on photography — no opaque background, just white-on-image.
 - Tight 0.95 line-height on the 80px display — vertical compression is the engineering aesthetic.
+- **In-world Mission HUD is diegetic** — type, hairlines, line-art glyphs, and bloom-lit reticles emitted directly over the live 3D scene, with no opaque panels (see *In-World Mission HUD (Diegetic)*).
 
 ## Colors
 
@@ -189,6 +238,14 @@ The brand has no accent colors. Black and white do all the chromatic work; photo
 ### Link
 - **Link on Dark** (`{colors.link-on-dark}` — `#ffffff`): Underlined inline link on dark canvas.
 - **Link Blue Fallback** (`{colors.link-blue-fallback}` — `#0000ee`): The browser default that appears in unstyled fallback contexts — documented for completeness, not used as a brand color.
+
+### Diegetic HUD Signal Tints
+
+> **In-world product only — not marketing-brand accents.** The black-and-white rule still governs every marketing surface. The live dashboard admits a tightly-rationed set of *signal tints*, used **only as emitted light** (stroke, glow, text) over the 3D scene — never as fills, never on marketing pages. This mirrors No Man's Sky's monochrome-plus-single-tint HUD.
+
+- **HUD Cyan** (`{colors.hud-cyan}` — `#3fd0e6`): Primary holographic tint — the active / Lunar-Base context and interactive affordances (active hotbar slot, focus, the build thread).
+- **HUD Amber** (`{colors.hud-amber}` — `#f5a623`): Secondary tint — the Shackleton context and caution.
+- **Signal OK / Warn / Down / Idle** (`{colors.signal-ok}` `#2ecc71` · `{colors.signal-warn}` `#f5a623` · `{colors.signal-down}` `#e74c3c` · `{colors.signal-idle}` `#9aa4b2`): Live-telemetry status — working/done, bidding/leased, dead/kill-target, idle/unclaimed. These encode *data*, not chrome.
 
 ## Typography
 
@@ -242,12 +299,15 @@ The marketing pages have minimal traditional whitespace — the photograph occup
 | Level | Treatment | Use |
 |---|---|---|
 | 0 | Flat | Default — and the only level on marketing surfaces |
-| 1 | Photographic — full-bleed image or video | The primary depth medium; photographs do all the lifting |
+| 1 | Photographic — full-bleed image or video | The primary depth medium on marketing; photographs do all the lifting |
+| 2 | Holographic — bloom / additive glow / parallax | Depth medium for the **in-world HUD only**: light, not shadow (see *In-World Mission HUD*) |
 
-The brand does not use drop shadows, blurs, glows, or gradient overlays. Depth is photographic: a rocket launching at twilight has natural atmospheric depth that no CSS shadow could simulate. When type needs separation from imagery, the image is graded darker rather than scrimmed.
+On **marketing surfaces** the brand does not use drop shadows, blurs, glows, or gradient overlays. Depth is photographic: a rocket launching at twilight has natural atmospheric depth that no CSS shadow could simulate. When type needs separation from imagery, the image is graded darker rather than scrimmed.
+
+The **in-world HUD inverts this**: its depth medium *is* emitted light — bloom, additive glow, and parallax against the 3D scene — never a plate with a drop shadow. A diegetic readout reads as instrumentation glowing on the inside of a visor, not a card floating above the render.
 
 ### Decorative Depth
-Photography and autoplaying rocket-launch video are the only decorative depth. There are no illustrations, no icons beyond a few minimal SVG arrow chevrons in nav and CTA hover states.
+On marketing, photography and autoplaying rocket-launch video are the only decorative depth — no illustrations, no icons beyond a few minimal SVG arrow chevrons in nav and CTA hover states. In the live product, the diegetic vocabulary is thin **line-art glyphs** (blueprint footprints, hazard ⚠, latency ⏱, site 📍) and **bloom-lit reticles** — stroke-only, never filled.
 
 ## Shapes
 
@@ -310,6 +370,112 @@ Every photograph is full-viewport-bleed, edge-to-edge, never inset in a card on 
 **`footer-dark`** — site-wide footer.
 - Background `{colors.canvas-night}`, text `{colors.on-primary}`, type `{typography.caption}`, padding `{spacing.xxl} {spacing.xl}` (32px 24px). Holds nav columns in `{typography.micro-cap}` (uppercase), and a small legal/copyright row at the bottom.
 
+## In-World Mission HUD (Diegetic)
+
+> **Revision — supersedes the Epic 06 opaque-panel HUD** (`docs/06-hud-redesign/`). The `.panel` plate — `{colors.canvas-night-soft}` fill, 1px `{colors.hairline-on-dark}` border, bevel + drop shadow — is **retired as a HUD container**. Telemetry now renders diegetically, as light over the live scene.
+
+The marketing language is an exercise in negation; the live SwarmBuild dashboard applies the same discipline to a moving 3D scene. The reference is the **No Man's Sky** HUD: the centre of the viewport stays clear, information clusters into the screen's corners and edges, and every element reads as **emitted light** — thin strokes, uppercase micro-type, line-art glyphs, and bloom-lit reticles — rather than a window laid over the render. Hello Games' stated aim was a UI "as minimal as they could have it, so as not to take away from the game itself." Ours is identical: the swarm and the lunar surface are the hero; the HUD is instrumentation glowing on the inside of a visor.
+
+### Diegesis target (Fagerholt–Lorentzon)
+
+The canonical game-UI taxonomy (Fagerholt & Lorentzon, *Beyond the HUD*, 2009) sorts every element on two axes — **fiction** (is it part of the world?) and **geometry** (is it in 3D space, or a 2D overlay?):
+
+| Type | In 3D space? | In the fiction? | SwarmBuild use |
+|---|---|---|---|
+| **Diegetic** | yes | yes | In-world worksite reticles + labels; the build "thread" tracing the dome — light that lives in the scene |
+| **Spatial** | yes | no | Placement ghost + cursor validity tick, selection rings — world-anchored, but the rovers can't "see" them |
+| **Meta** | no | implied | Screen-edge glow / vignette on a Failure spike; the surface↔orbit view-glare |
+| **Non-diegetic** | no | no | **Minimised.** Unavoidable corner readouts (`build N / total`, `rovers N/M`) render type-on-scene with no plate — so they read as visor instrumentation, not a windowed overlay |
+
+The redesign moves the HUD **down-and-right** on that grid: kill the non-diegetic *plates*, keep the non-diegetic *text* but make it look diegetic (emitted, corner-anchored, bloom-touched), and push everything that can move into spatial / diegetic 3D.
+
+### Principles (No Man's Sky, distilled)
+
+1. **Centre stays clear.** The middle of the viewport is for the scene. Readouts cluster in the corners and along the edges (NMS keeps the centre open and pushes its sections to the screen edges). Zones: top-left = mission state · top-right = selected rover · bottom-centre = hotbar · bottom-right = Earth uplink.
+2. **Light, not boxes.** No fills, no borders, no rounded rectangles. Legibility comes from the type — a four-way outline + soft halo — not a plate behind it. The only permitted background is a localised, edgeless **scrim** behind dense text (**`hud-scrim`**); never a bordered card.
+3. **Monochrome + one tint.** Default ink is `{colors.on-primary}` white. Colour is rationed and only ever appears as emitted light (stroke / glow / text), never a fill: `{colors.hud-cyan}` for the active / Lunar context and interactive affordances, `{colors.hud-amber}` for the Shackleton context and caution; live status uses the signal set (`{colors.signal-ok}` / `{colors.signal-warn}` / `{colors.signal-down}` / `{colors.signal-idle}`). This mirrors NMS's monochrome-plus-single-tint scheme.
+4. **Geometric line vocabulary.** Forms are stroked, not filled: the **diamond reticle**, **corner brackets** (a frame implied by its four corners, never closed), thin **hairline rules** that underline a value, **hexagon** status pips. Radius is effectively zero — the diegetic HUD does not use `{rounded.sm}`+ rounded-rectangle chrome.
+5. **It belongs to the scene.** HUD light is additive and bloom-touched (it blooms on the same pass as the celestial bodies), carries a faint scanline / flicker, and — where world-anchored — parallaxes and occludes with the geometry. It should look projected onto a helmet visor, catching the scene's light.
+6. **Restraint over completeness.** Show only what the current view needs (the Epic-06 surface / orbit view-gating stays). Detail is revealed on demand (expand, hover), never resident; let bloom, motion, and audio carry state that would otherwise need a label.
+
+### Legibility without a panel
+
+A box exists to make text readable over a busy render. Replace the box with type treatment:
+
+- **Outline** — a four-way `text-shadow` (`-1px 0`, `1px 0`, `0 -1px`, `0 1px` in `{colors.canvas-night}`) draws a 1px ink contour so white type holds over a bright lunar highlight.
+- **Halo** — a zero-offset blurred shadow (`0 0 6px` + `0 0 16px` `{colors.canvas-night}` at ~70%) floats a soft dark glow behind the glyphs.
+- **Hairline anchor** — instead of a border, a single 1px `{colors.hairline-on-dark}` rule under a value gives the eye a baseline without enclosing it (**`hud-hairline-rule`**).
+- **Localised scrim (last resort)** — only when a cluster is genuinely unreadable, a soft `{colors.canvas-night}` gradient fading to transparent sits *behind the text only* (**`hud-scrim`**). No edge, no radius, no rectangle.
+
+### Layout zones
+
+| Zone | Element (current class) | Diegetic treatment |
+|---|---|---|
+| Top-left | Mission readout (`.mission-hud`) | Title · `build N / total` · `rovers N/M` as type-on-scene; progress is a thin glowing **thread** (**`hud-progress-thread`**), not the boxed `.progress-bar`; `.panel` removed |
+| Top-right | Selected rover (`.kill-panel`) | Rover id in display caps inside **`hud-corner-frame`**, keyed to `{colors.signal-down}` when KILL is armed; the action is a ghost-stroke control, no plate |
+| Bottom-centre | Hotbar (`.hotbar`) | Line-art footprint glyphs (**`hud-glyph`**) on one hairline baseline; active slot glows `{colors.hud-cyan}`; panel fill dropped, glow / active states kept |
+| Bottom-right | Earth uplink (`.earth-panel`) | Lag value + rows as type-on-scene with hairline rules; tinted `{colors.signal-ok}` / `{colors.signal-warn}` by live / lagging |
+| World-space | Worksite reticles + labels (`SkyBodies`) | **Already diegetic — the model for everything else:** billboarded line-diamond + bloom halo + SDF caption |
+| Centre | — | Always clear. Only the cursor-anchored placement tick may briefly enter it |
+
+### Components
+
+**`hud-readout`** — type-on-scene telemetry. No background. Labels in `{typography.micro-cap}` (uppercase, 0.96px tracking), values in `{typography.body-md}` or a display tier; white `{colors.on-primary}` by default, tinted only to signal live state. Legibility via the outline + halo above.
+
+**`hud-hairline-rule`** — the anchor that replaces the panel border. A single 1px `{colors.hairline-on-dark}` line under or beside a readout; may glow to its context tint on focus.
+
+**`hud-progress-thread`** — build progress as a ~2px glowing line in `{colors.hud-cyan}`, filling left-to-right with a soft bloom at the leading edge — no track plate. Dips and recovers live (snapshot-pure, ADR-0004).
+
+**`hud-reticle`** — the canonical diegetic element (already shipped in `SkyBodies`). Billboarded line-diamond at a worksite, stroked in the site tint (`{colors.hud-cyan}` Lunar / `{colors.hud-amber}` Shackleton), bloom halo, subtle pulse, hover lock-on, SDF caption.
+
+**`hud-corner-frame`** — four short 1px strokes marking only the corners of a region (the NMS bracket). Implies containment with no closed box and no fill; used for the selected-rover cluster, tinting `{colors.signal-down}` when armed.
+
+**`hud-glyph`** — stroke-only line-art icon at `currentColor` (blueprint footprint, ⚠ hazard, ⏱ latency, 📍 site). Never filled; the active state is carried by stroke colour + glow, not a filled chip.
+
+**`hud-scrim`** — the single permitted background: a soft `{colors.canvas-night}` gradient fading to transparent behind dense text only. No border, no radius edge, no rectangle. Use sparingly.
+
+### Migration from the Epic-06 panels
+
+| Current | Now |
+|---|---|
+| `.panel` — opaque `#0d0f14` fill, 1px `#2b313c` border, bevel + drop shadow | **Removed as a container.** No fill, no border, no bevel; legibility via outline / halo, structure via hairline rules + corner brackets |
+| `.progress-bar` / `.progress-bar-fill` — boxed track | **`hud-progress-thread`** — trackless glowing line |
+| `.badge` — bordered status chip | Hexagon / diamond status **pip** in the signal tint, or a tinted word + hairline — no bordered box |
+| `.hotbar` panel fill | Hairline baseline + glowing active slot; fill removed |
+| `.kill-panel` plate | **`hud-corner-frame`** + type-on-scene |
+| `.topbar-pill` — bordered pill | Status **dot** + caps label, pill outline removed |
+| `--panel-bg` / `--panel-edge` tokens | Retired for the HUD; replaced by outline / halo + `{colors.hairline-on-dark}` |
+
+### Motion
+
+- Keep the Epic-06 surface↔orbit slide + fade (`.hud-surface-panel`; surface readouts land *after* the descent glare peaks).
+- Reticles pulse softly and lock-on at hover (existing).
+- State changes ramp **glow**, not a background: a rover dies → its corner frame flares `{colors.signal-down}` then fades; a task completes → the progress thread's leading bloom ticks.
+- HUD light blooms on the celestial pass. Keep `dpr ≤ ~1.5` and bounded draw calls (AGENTS.md render hygiene).
+
+### HUD Do's and Don'ts
+
+**Do**
+- Render every readout as type-on-scene with an outline + halo for legibility.
+- Keep the viewport centre clear; cluster to corners and edges.
+- Use colour only as emitted light (stroke / glow / text), and only the cyan / amber / signal set.
+- Imply structure with hairlines, corner brackets, and the diamond reticle — stroke, never fill.
+- Reveal detail on demand; let bloom, motion, and audio carry state.
+
+**Don't**
+- Don't wrap a readout in an opaque panel, bordered card, or rounded-rectangle chip — that is the retired `.panel`.
+- Don't reach for `backdrop-filter` blur or a beveled plate to gain legibility — use the type outline / halo.
+- Don't fill glyphs or badges, and don't add colour beyond the signal set.
+- Don't let HUD elements drift into the centre or occlude the swarm during the money shot.
+- Don't reintroduce `{rounded.sm}`+ rounded-rectangle containers on the in-world HUD.
+
+### References
+
+- No Man's Sky HUD — diegetic ship display + helmet-projected suit readouts, "as minimal as they could have it": [Interface In Game](https://interfaceingame.com/games/no-mans-sky/) · [Game UI Database](https://www.gameuidatabase.com/gameData.php?id=293) · [NMS Wiki — Heads-Up Display](https://nomanssky.fandom.com/wiki/Heads-Up_Display) · [NMS Universal Font](https://github.com/NMSCD/No-Mans-Sky-Universal-Font).
+- Fagerholt & Lorentzon, *Beyond the HUD: User Interfaces for Increased Player Immersion in FPS Games* (2009) — the diegetic / non-diegetic / spatial / meta framework: [thesis](https://www.semanticscholar.org/paper/Beyond-the-HUD-User-Interfaces-for-Increased-Player-Fagerholt-Lorentzon/16ee02a8839923752c6bc93f294bec67d73a586e) · [4-type explainer](https://nastyrodent.com/diegetic-and-non-diegetic-ui/) · [Diegetic Interface (TV Tropes)](https://tvtropes.org/pmwiki/pmwiki.php/Main/DiegeticInterface).
+- *Dead Space* — the canonical fully-diegetic HUD (RIG-spine health, holographic inventory): "instrument, not overlay."
+- Legibility without a panel — four-way `text-shadow` outline + zero-offset glow halo: [W3C text-shadow](https://www.w3.org/Style/Examples/007/text-shadow.en.html) · [text-shadow & accessibility](https://mrec.github.io/blog/2025/text-shadow/).
+
 ## Do's and Don'ts
 
 ### Do
@@ -318,6 +484,7 @@ Every photograph is full-viewport-bleed, edge-to-edge, never inset in a card on 
 - Use a single `{button-ghost-on-dark}` per band — the brand does NOT show two CTAs side by side on marketing surfaces.
 - Pair every photograph with type that respects the imagery — no scrims, no gradients, no overlays. Grade the photo, not the canvas.
 - Keep nav overlay-style (transparent, white-on-image) on marketing pages.
+- In the live product, render the Mission HUD diegetically — type, hairlines, line-art glyphs, and bloom-lit reticles over the scene (see *In-World Mission HUD (Diegetic)*).
 
 ### Don't
 - Don't introduce brand accent colors — black, white, and photography are the entire palette.
@@ -325,6 +492,7 @@ Every photograph is full-viewport-bleed, edge-to-edge, never inset in a card on 
 - Don't render display tiers in sentence-case or title-case — uppercase is the brand.
 - Don't put filled buttons on marketing surfaces — the ghost outlined pill is the only marketing CTA.
 - Don't use serif or humanist sans alternatives — the condensed industrial DIN cut is non-negotiable.
+- Don't wrap the in-world Mission HUD in opaque or boxed panels — it renders diegetically as light over the scene (the retired `.panel`; see *In-World Mission HUD (Diegetic)*).
 
 ## Responsive Behavior
 
@@ -361,3 +529,5 @@ Marketing photography uses `srcset` for desktop / tablet / mobile with art-direc
 5. Default body to `{typography.body-md}`; reserve `{typography.body-lg}` for marketing leads.
 6. The black-and-white-only rule is load-bearing — adding a brand accent color breaks the system.
 7. Ghost pill is the only marketing CTA; filled buttons live exclusively on the shop site.
+8. The black-and-white rule governs **marketing**. The in-world HUD's cyan / amber / signal tints are the one sanctioned exception — functional, in-world, and only ever emitted as light (stroke / glow / text), never fills.
+9. For the live product, design to *In-World Mission HUD (Diegetic)*: type-on-scene with an outline + halo, hairlines and corner brackets instead of panels, and the diamond reticle as the canonical element. Removing a `.panel` is a feature, not a regression.

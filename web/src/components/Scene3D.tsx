@@ -60,9 +60,11 @@ import {
 import * as THREE from "three";
 import type { RoverView, Snapshot, TaskView, Vec2 } from "../types/wire";
 import { batteryPercent } from "../lib/format";
+import { roverStandoffPos } from "../lib/roverStandoff";
 import { suppressRaycast } from "../lib/suppressRaycast";
 import { applyGltfTextureFidelity, polishGltfMaterials } from "../lib/textureFidelity";
 import { loadTexture, preloadTexture } from "../lib/textureCache";
+import { reportAssetError, reportAssetWarning } from "../lib/assetLog";
 import {
   CRATER_OUTER_RADIUS,
   EARTH_POSITION,
@@ -72,11 +74,16 @@ import {
   REAL_METERS,
   SCENE_UNITS_PER_METER,
   SITE_FRAMES,
+  SKYLIGHT_CENTER,
+  SKYLIGHT_OUTER_RADIUS,
+  SKYLIGHT_MOUTH_RADIUS,
+  SKYLIGHT_RIM_RADIUS,
   type SceneMap,
   type SiteFrame,
   craterProfile,
   isBuilt,
   siteMap,
+  skylightProfile,
   tierHeight,
   tierOf,
 } from "../lib/scene";
@@ -97,18 +104,27 @@ import {
   type ModelDesc,
   type PrimitiveDesc,
   interpretBuildSpec,
+  interpretModuleSpec,
 } from "../lib/buildspec";
-import { type Ghost, dragDeltaToRadians, footprintOf } from "../lib/placement";
+import { type Ghost, dragDeltaToRadians } from "../lib/placement";
 import {
   IDLE_DELAY_MS,
   ORBIT_EXPOSURE_SCALE,
+  SURFACE_EXPOSURE_SCALE,
   PARALLAX_SETTLE_EPS,
   advanceParallax,
   idleSwayOffset,
   zoomExposure,
 } from "../lib/cameraFeel";
-import { OPEN_MS, openAzimuthOffset } from "../lib/reel/openArc";
+import {
+  OPEN_MS,
+  alignOpenCameraElevation,
+  openAzimuthOffset,
+} from "../lib/reel/openArc";
 import { LaunchScenery } from "./LaunchScenery";
+import { LavaTubeSkylight, LavaTubeBoulders } from "./LavaTube";
+import { LunarBaseDecals } from "./BaseDecals";
+import { StructurePiece, kindFootprintRadius, kindOf, type StructurePhase } from "./Structures";
 
 // Functional telemetry colors (DESIGN.md: live-data signals only — the brand
 // palette itself is black + white). Matched to the 2D canvas so the two
@@ -205,12 +221,19 @@ function SpaceLights({
   const craterFill = onSurface && crater;
   return (
     <>
+      {/* WS-5 (#172): CRUSH the lunar fill so shadows fall near-black for the hard-
+          sun, high-contrast look (no atmosphere = no scatter fill). Ambient 0.12 →
+          0.05. The Shackleton crater floor KEEPS its lifted cool fill (it's in
+          permanent rim shadow, lit only by reflected light — a different place). */}
       <ambientLight
         color={craterFill ? "#1a2230" : "#0e1014"}
-        intensity={onSurface ? (craterFill ? 0.34 : 0.12) : 0.01}
+        intensity={onSurface ? (craterFill ? 0.34 : 0.05) : 0.01}
       />
+      {/* Lunar hemisphere fill cooled (#ffe9cc warm → neutral cool) + dimmed
+          (0.25 → 0.1): the warm sky-fill was part of the "muddy brown" cast and it
+          lifted shadows. Shackleton's craterFill branch unchanged. */}
       <hemisphereLight
-        args={[craterFill ? "#aebfd6" : "#ffe9cc", "#1a1814", onSurface ? (craterFill ? 0.6 : 0.25) : 0.0]}
+        args={[craterFill ? "#aebfd6" : "#cdd6e2", "#1a1814", onSurface ? (craterFill ? 0.6 : 0.1) : 0.0]}
       />
       <directionalLight
         ref={lightRef}
@@ -244,8 +267,12 @@ function SpaceLights({
       />
       {onSurface && (
         <>
-          <directionalLight position={[-40, 26, -30]} color="#9fb6d8" intensity={0.35} />
-          <directionalLight position={[36, 22, 28]} color="#ffd9b0" intensity={0.22} />
+          {/* WS-5 (#172): the secondary fills are crushed too (cool 0.35 → 0.16,
+              warm 0.22 → 0.07) — they were the "muddy mid-grey wash" lifting the
+              shadow side. A whisper of cool earthshine fill stays so shadow detail
+              isn't pure black; the warm bounce is nearly gone (it browned the grey). */}
+          <directionalLight position={[-40, 26, -30]} color="#9fb6d8" intensity={0.16} />
+          <directionalLight position={[36, 22, 28]} color="#ffd9b0" intensity={0.07} />
         </>
       )}
     </>
@@ -267,9 +294,6 @@ type SceneGeo = {
   won: THREE.RingGeometry;
   sel: THREE.RingGeometry;
   battery: THREE.BoxGeometry; // unit box, scaled in x by charge
-  foundation: THREE.BoxGeometry;
-  wall: THREE.BoxGeometry;
-  dome: THREE.SphereGeometry;
   // Unit primitives for the Build-spec interpreter (ADR-0006): each interpreted
   // op reuses one of these and is scaled per-op, so a spec of N ops still costs
   // only these 3 shared GPU buffers (r3f-geometry "Reuse geometries").
@@ -298,9 +322,6 @@ function makeSceneGeo(): SceneGeo {
     won: new THREE.RingGeometry(0.82, 0.98, 40),
     sel: new THREE.RingGeometry(0.9, 1.02, 48),
     battery: new THREE.BoxGeometry(1, 0.06, 0.06),
-    foundation: new THREE.BoxGeometry(1.1, 0.3, 1.1),
-    wall: new THREE.BoxGeometry(0.9, 1.1, 0.9),
-    dome: new THREE.SphereGeometry(1.0, 24, 16, 0, Math.PI * 2, 0, Math.PI / 2),
     // Unit primitives (edge/diameter 1) so a Build op's scale maps directly.
     // withUV2 gives each a uv2 channel so a Material.aoMap renders (three reads
     // aoMap from uv2). uv2 == uv, so it is harmless when no aoMap is present.
@@ -338,9 +359,14 @@ function roverHaloColor(r: RoverView): string {
 // The one configured rover model. Self-hosted, conditioned + Draco-compressed by
 // scripts/condition-asset.mjs (recentered, fit-to-unit). A missing file just
 // keeps the primitive fallback below.
+// WS-3 (#171): the active rover is NASA's iconic Mars 2020 Perseverance — a real
+// NASA-PD asset (detailed chassis + rocker-bogie 6-wheel suspension + Mastcam-Z/NavCam
+// mast + robotic arm), 116 meshes / ~126k verts, insignia-clean, 1.47 MB Draco+webp. Replaces
+// the earlier featureless `rassor_rover.glb` shrinkwrap (read as a pod) and a stop-gap
+// CC0 low-poly rover (read as a toy). Source + provenance in CREDITS.md.
 // Exported so the preload manifest (lib/assets.ts) references the SAME URL the
 // renderer uses — the manifest can't drift from the component (Epic 05 P1).
-export const ROVER_MODEL_REF = "/assets/models/rassor_rover.glb";
+export const ROVER_MODEL_REF = "/assets/models/rover_nasa.glb";
 // The native (authored) size the rover body, primitive fallback, hit-proxy, and
 // halos were all laid out at — the model's LARGEST bbox dim fits to this, and the
 // primitive box/mast/wheels + hit sphere + halo rings are all proportioned around
@@ -356,7 +382,20 @@ const ROVER_BASE_SIZE = ROVER_MODEL_FIT;
 // ROVER_SCALE), so a click can never miss the rover the user sees — the proxy and
 // the body scale together (Epic 04 P0; ADR-0004).
 const ROVER_SCENE_SIZE = REAL_METERS.rover * SCENE_UNITS_PER_METER;
-const ROVER_SCALE = ROVER_SCENE_SIZE / ROVER_BASE_SIZE;
+// WS-3 (#171) INTENTIONAL REALISM BREAK — readability over strict scale, for the
+// HERO ACTORS only. A literal 2.5 m rover is 0.3 u, a speck against the 4.8–14.4 u
+// launch infra, so it reads as neither robot nor agent. We bump the *rover only* by
+// ROVER_HERO_SCALE so it lands at ~0.81 u — unmistakably a machine, still smaller
+// than the habitats. Structure proportions stay literal (REAL_METERS × units/m); do
+// NOT "fix" this back. The whole rover group (body + hit-proxy + halos) scales by
+// ROVER_SCALE together, so the invisible pick sphere grows with the body — the
+// no-missed-click invariant (ADR-0004) is preserved.
+// 5.5× (operator: at 4× the 6-wheel rocker-bogie smeared into "two wheels" — too
+// small + softened by the surface DoF to resolve the wheels). The Perseverance bbox
+// is long+low (length 1.0 vs height 0.59 of a unit), so it reads lower than a tall
+// pod; this lands it as a clearly-present hero machine with its wheels legible.
+const ROVER_HERO_SCALE = 5.5;
+const ROVER_SCALE = (ROVER_SCENE_SIZE / ROVER_BASE_SIZE) * ROVER_HERO_SCALE;
 
 // fitAndSeatRover normalizes a loaded model in place (mirrors LaunchScenery's
 // fitAndSeat): scale its largest dimension to `fit`, recenter on x/z, and seat
@@ -366,7 +405,15 @@ const ROVER_SCALE = ROVER_SCENE_SIZE / ROVER_BASE_SIZE;
 function fitAndSeatRover(obj: THREE.Object3D, fit: number) {
   obj.updateMatrixWorld(true);
   const box = new THREE.Box3().setFromObject(obj);
-  if (box.isEmpty()) return;
+  if (box.isEmpty()) {
+    // Degenerate glTF (no renderable geometry → empty bbox): seat at the group
+    // origin and apply the target scale so it still lands sanely rather than at raw
+    // native coords/scale (#171 audit carry-over). Logged so the cause is visible.
+    obj.scale.setScalar(fit);
+    obj.position.set(0, 0, 0);
+    reportAssetWarning("fitAndSeatRover", "empty bounding box (no renderable geometry)");
+    return;
+  }
   const size = box.getSize(new THREE.Vector3());
   const center = box.getCenter(new THREE.Vector3());
   const maxDim = Math.max(size.x, size.y, size.z) || 1;
@@ -441,6 +488,10 @@ function RoverBody({
   // per-mesh materials, but we clone uniformly so the reset path is identical.
   const flashMats = useRef<THREE.MeshStandardMaterial[] | null>(null);
   const flashing = useRef(false);
+  // WS-3 (#171) idle articulation: a per-rover phase so a live swarm doesn't sway in
+  // lockstep. Seeded once on mount; drives a tiny continuous yaw + bob in useFrame so
+  // an alive rover reads as an *active* machine scanning the site, not a parked prop.
+  const idlePhase = useRef(Math.random() * Math.PI * 2);
 
   // Resurrection body flash (#107): pulse every body mesh's emissive toward bright
   // cyan at the comeback and ease back as the shockwave ring expands. A no-op when
@@ -449,6 +500,14 @@ function RoverBody({
   useFrame(() => {
     const group = bodyRef.current;
     if (!group) return;
+    // Idle articulation (alive rovers only): a subtle scanning yaw + settle bob,
+    // local to the body group (so it composes with the snapshot-driven world move).
+    // Ref-mutation only — never a re-render. A dead rover holds still.
+    if (!dim) {
+      const t = performance.now() / 1000;
+      group.rotation.y = Math.sin(t * 0.55 + idlePhase.current) * 0.09;
+      group.position.y = Math.sin(t * 1.2 + idlePhase.current) * 0.012;
+    }
     const p = revived.current ?? 0;
     if (p <= 0) {
       if (!flashing.current) return; // already idle — nothing to reset
@@ -483,7 +542,12 @@ function RoverBody({
     // Brightness peaks early (1 - p) so the flash is strongest at the comeback.
     const intensity = p > 0 ? (1 - p) * 1.6 : 0;
     for (const sm of flashMats.current ?? []) {
-      if (!sm.emissive) continue;
+      // The clones are TYPED MeshStandardMaterial but a glTF can supply a non-
+      // standard material (unlit/basic, points/line) that lacks `emissive` — so
+      // narrow on the real type before touching standard-only fields, not just on
+      // the `emissive` field (#173 carry-over: keep the unsound cast from biting a
+      // future edit that reads more standard props here).
+      if (!sm.isMeshStandardMaterial) continue;
       sm.emissive.copy(REVIVE_FLASH);
       sm.emissiveIntensity = intensity;
     }
@@ -540,8 +604,10 @@ function RoverBody({
         setScene(obj);
         invalidate(); // wake the demand loop once so the model shows when loaded
       })
-      .catch(() => {
-        // Missing/failed glTF ⇒ keep the primitive fallback below (never crash).
+      .catch((err) => {
+        // Missing/failed glTF ⇒ keep the primitive fallback below (never crash),
+        // but surface WHY (404 / Draco decode / network) so a box isn't a mystery.
+        reportAssetError("rover", ROVER_MODEL_REF, err);
       });
     return () => {
       disposed = true;
@@ -1118,21 +1184,30 @@ export function loadGLTF(url: string): Promise<THREE.Group> {
       gltfLoader.load(
         url,
         (g) => {
-          // Suppress raycast on every child of the CACHED SOURCE once. This keeps
-          // the source itself non-pickable and documents the asset-wide intent.
-          // NOTE: Object3D.clone(true) does NOT copy this own-property override
-          // onto clones (raycast is normally a prototype method), so each
-          // placement must ALSO re-suppress its clone — see suppressRaycast() use
-          // in SpecModel. Doing both keeps glTF child meshes unpickable so only a
-          // rover's invisible hit-proxy sphere stays pickable, keeping
-          // click-to-kill deterministic and letting onPointerMissed deselect on
-          // empty space.
-          suppressRaycast(g.scene);
-          // Material tier polish (#111): clearcoat on metal, solar glint when the
-          // URL names a panel, warm emissive on *window* submeshes (bloom layer).
-          // Run ONCE on the cached source so every clone inherits it (clone(true)
-          // shares materials + copies the per-mesh layers mask).
-          polishGltfMaterials(g.scene, { bloomLayer: CELESTIAL_BLOOM_LAYER, url });
+          try {
+            // Suppress raycast on every child of the CACHED SOURCE once. This keeps
+            // the source itself non-pickable and documents the asset-wide intent.
+            // NOTE: Object3D.clone(true) does NOT copy this own-property override
+            // onto clones (raycast is normally a prototype method), so each
+            // placement must ALSO re-suppress its clone — see suppressRaycast() use
+            // in SpecModel. Doing both keeps glTF child meshes unpickable so only a
+            // rover's invisible hit-proxy sphere stays pickable, keeping
+            // click-to-kill deterministic and letting onPointerMissed deselect on
+            // empty space.
+            suppressRaycast(g.scene);
+            // Material tier polish (#111): clearcoat on metal, solar glint when the
+            // URL names a panel, warm emissive on *window* submeshes (bloom layer).
+            // Run ONCE on the cached source so every clone inherits it (clone(true)
+            // shares materials + copies the per-mesh layers mask).
+            polishGltfMaterials(g.scene, { bloomLayer: CELESTIAL_BLOOM_LAYER, url });
+          } catch (err) {
+            // Decorate/polish must NEVER reject: this promise is already in
+            // gltfCache, so a rejection caches the FAILURE and poisons every later
+            // consumer into a permanent primitive fallback (#171 — a single
+            // material throw blanked every rover). Log it and resolve the raw,
+            // un-polished model — a slightly-less-shiny model beats a box forever.
+            reportAssetError("glTF polish", url, err);
+          }
           resolve(g.scene);
         },
         undefined,
@@ -1310,8 +1385,10 @@ function SpecModel({
         setScene(obj);
         invalidate();
       })
-      .catch(() => {
-        // Missing/failed glTF ⇒ keep the box fallback below (never crash).
+      .catch((err) => {
+        // Missing/failed glTF ⇒ keep the box fallback below (never crash), but
+        // log WHICH spec model ref failed so a stray box has a traceable cause.
+        reportAssetError("spec model", desc.modelRef, err);
       });
     return () => {
       disposed = true;
@@ -1377,40 +1454,40 @@ function TaskBlock({
   geo: SceneGeo;
   beats: React.RefObject<ActiveBeat[]>;
 }) {
-  const tier = tierOf(task.type);
-  const h = tierHeight(tier);
   const p = map.at(task.pos, 0);
   const built = isBuilt(task);
 
+  // Status → render phase + status tint. The immersive structure reads its own
+  // built palette; `color` tints the rising shell and the UNCLAIMED footprint
+  // scribe. UNCLAIMED is a faint planned footprint (WS-1 #169 — no squatting blob);
+  // LEASED is the structure rising (semi-transparent); DONE is solid + shadowing.
+  const phase: StructurePhase = built ? "built" : task.status === "LEASED" ? "rising" : "ghost";
   const color = built ? "#cfcfd6" : task.status === "LEASED" ? SIGNAL_WARN : SIGNAL_IDLE;
-  const opacity = built ? 1 : task.status === "LEASED" ? 0.5 : 0.28;
-
-  // The dome cap reads as a hemisphere; foundations/walls as low blocks.
-  const isCap = tier === "dome";
-  const blockGeo = isCap ? geo.dome : tier === "foundation" ? geo.foundation : geo.wall;
-
-  // Per-tier roughness (#111): the polished pressurised cap reads smoothest, the
-  // walls matte fabric/panel, the foundation roughest poured regolith-crete — so
-  // the rising habitat reads as distinct materials, not one uniform grey block.
-  const tierRoughness = isCap ? 0.75 : tier === "foundation" ? 0.95 : 0.88;
+  const isUnclaimedGhost = !built && task.status === "UNCLAIMED";
+  // The interpreted (server Build-spec) path still fades by opacity; the procedural
+  // structures carry their own per-phase look (Structures.tsx).
+  const opacity = built ? 1 : task.status === "LEASED" ? 0.5 : 0.1;
 
   // Interpret the Task's Build spec (ADR-0006), if any, into renderable meshes.
-  // EMPTY ⇒ the Task has no (renderable) spec, so we render EXACTLY today's
-  // primitive — the fallback this slice must keep pixel-identical. Memoized on
-  // the spec identity so the pure pass stays allocation-light (~12 Hz snapshots).
+  // EMPTY ⇒ the Task has no (renderable) spec, so it falls back to the immersive
+  // procedural structure below. Memoized on the spec identity so the pure pass
+  // stays allocation-light (~12 Hz snapshots).
   const specMeshes = useMemo<MeshDesc[]>(
     () => interpretBuildSpec(task),
     [task],
   );
   const interpreted = specMeshes.length > 0;
 
-  // Solidify-pop refs. The PRIMITIVE path animates its single mesh + material
-  // EXACTLY as before (meshRef/matRef). The INTERPRETED path has no single
-  // material to flash, so it pops the whole structure group (groupRef) by scale
-  // alone, keeping each op's procedural material intact. Only one path's refs are
-  // populated per render, so the unused branch is a harmless no-op.
-  const meshRef = useRef<THREE.Mesh>(null);
-  const matRef = useRef<THREE.MeshStandardMaterial>(null);
+  // Milestone 08: a "module" Build spec means the Task's geometry is one of the
+  // immersive procedural structures (Structures.tsx) built step-by-step. We render
+  // the real StructurePiece below, revealing as many build steps as module ops have
+  // streamed in — so the live agent-built structure rises op-by-op and resumes
+  // after a kill, exactly like the old primitive courses did.
+  const moduleSpec = useMemo(() => interpretModuleSpec(task), [task]);
+
+  // Solidify-pop: the structure group pops by SCALE on a `solidify` beat (the
+  // procedural materials carry their own emissive, so we no longer flash a single
+  // material). Driven by mutating the ref in useFrame — never a React re-render.
   const groupRef = useRef<THREE.Group>(null);
 
   const id = task.id;
@@ -1427,29 +1504,13 @@ function TaskBlock({
       }
     }
     const popScale = solidify > 0 ? 1 + Math.sin(solidify * Math.PI) * 0.25 : 1;
-
-    // Interpreted structure: pop the group (scale only — procedural mats stay).
     if (groupRef.current) groupRef.current.scale.setScalar(popScale);
-
-    // Primitive: pop the single mesh + green-flash its material (unchanged).
-    const mesh = meshRef.current;
-    const mat = matRef.current;
-    if (mesh && mat) {
-      mesh.scale.setScalar(popScale);
-      if (solidify > 0) {
-        mat.emissive.set(SIGNAL_OK);
-        mat.emissiveIntensity = 1.5 * (1 - solidify);
-      } else if (mat.emissiveIntensity !== 0) {
-        mat.emissiveIntensity = 0;
-      }
-    }
   });
 
-  // INTERPRETED PATH — the richer structure. Each op is drawn by <SpecMesh>,
-  // which renders a primitive (optionally textured, bh-07b) or a glTF model
-  // (model_ref, bh-07b) with a primitive fallback. The group sits at the same
-  // ground point as the primitive; built/ghost opacity is shared so an unfinished
-  // interpreted Task still reads as a ghost, like the primitive.
+  // INTERPRETED (server Build-spec) path: no resting ghost for an UNCLAIMED task
+  // (WS-1 killed the pre-placed blob); it reappears the instant build begins. Each
+  // op is drawn by <SpecMesh> (primitive or glTF, with a primitive fallback).
+  if (interpreted && isUnclaimedGhost) return null;
   if (interpreted) {
     return (
       <group ref={groupRef} position={[p.x, 0, p.z]}>
@@ -1467,31 +1528,22 @@ function TaskBlock({
     );
   }
 
-  // PRIMITIVE FALLBACK — EXACTLY today's tierOf block (unchanged).
+  // IMMERSIVE PROCEDURAL STRUCTURE (milestone 08) — the purpose-built habitat
+  // hardware that replaced the grey tierOf box/sphere: a paneled pressurised dome,
+  // ribbed hab-wall modules, regolith-crete pads, sun-tracking solar arrays, a
+  // lattice comms tower + dish. StructurePiece picks the building from the Task's
+  // (type,id) and renders it in its status phase; the group pops on a solidify
+  // beat. Fully procedural ⇒ can never fail to load (ADR-0004).
+  //
+  // `reveal` drives the op-by-op rise: a module spec reveals as many steps as ops
+  // have streamed in (the live agent-built path); a LEASED task with no ops yet
+  // shows nothing (reveal 0) so it never flashes the finished structure before
+  // building; everything else (built, UNCLAIMED ghost, mock hero tasks) renders the
+  // whole structure (reveal undefined).
+  const reveal = moduleSpec ? moduleSpec.shown : task.status === "LEASED" ? 0 : undefined;
   return (
-    <group position={[p.x, 0, p.z]}>
-      {/* castShadow/receiveShadow only once BUILT (#104): a transparent blueprint
-          ghost shouldn't throw a solid sun shadow — it grounds only when finished. */}
-      <mesh
-        ref={meshRef}
-        geometry={blockGeo}
-        position={[0, h, 0]}
-        raycast={() => null}
-        castShadow={built}
-        receiveShadow={built}
-      >
-        <meshStandardMaterial
-          ref={matRef}
-          color={color}
-          roughness={tierRoughness}
-          metalness={0.05}
-          transparent
-          opacity={opacity}
-          emissive="#000000"
-          emissiveIntensity={0}
-          toneMapped={false}
-        />
-      </mesh>
+    <group ref={groupRef} position={[p.x, 0, p.z]}>
+      <StructurePiece type={task.type} id={task.id} phase={phase} color={color} reveal={reveal} />
     </group>
   );
 }
@@ -1507,18 +1559,23 @@ export const REGOLITH_MAPS: {
   key: "map" | "normalMap" | "roughnessMap" | "aoMap";
   colorSpace: THREE.ColorSpace;
 }[] = [
-  { url: "/assets/textures/regolith_diff_512.jpg", key: "map", colorSpace: THREE.SRGBColorSpace },
+  // WS-4 (#170): upgraded 512 → 2K (Poly Haven Moon 01, CC0). The heavy normal/AO
+  // maps are re-encoded at jpg q68 so the full set lands ≈5 MB (vs ~10 MB raw) while
+  // keeping true 2048² near-field crunch. Tiled grain is broken by the macro-variation
+  // shader below, not by resolution. (Small spec-primitive blocks still use the 512
+  // set via mocks — they don't need 2K.)
+  { url: "/assets/textures/regolith_diff_2k.jpg", key: "map", colorSpace: THREE.SRGBColorSpace },
   {
-    url: "/assets/textures/regolith_nor_gl_512.jpg",
+    url: "/assets/textures/regolith_nor_gl_2k.jpg",
     key: "normalMap",
     colorSpace: THREE.NoColorSpace,
   },
   {
-    url: "/assets/textures/regolith_rough_512.jpg",
+    url: "/assets/textures/regolith_rough_2k.jpg",
     key: "roughnessMap",
     colorSpace: THREE.NoColorSpace,
   },
-  { url: "/assets/textures/regolith_ao_512.jpg", key: "aoMap", colorSpace: THREE.NoColorSpace },
+  { url: "/assets/textures/regolith_ao_2k.jpg", key: "aoMap", colorSpace: THREE.NoColorSpace },
 ];
 
 // The VISIBLE ground extends FAR past the worksite so its edge falls beyond the
@@ -1528,11 +1585,38 @@ export const REGOLITH_MAPS: {
 // is unchanged. Worksite detail lives in the central ~±16 units; the rest is plain.
 const GROUND_VISUAL = 700;
 
-// Tile count across the visible ground. Scaled WITH the ground size (~0.3 tiles
-// per world unit) so the regolith grain stays the same size whether the plane is
-// 32 or 700 units (Moon 01 is authored to tile). Tune the factor if grain reads
-// too large/small.
-const REGOLITH_REPEAT = Math.round(GROUND_VISUAL * 0.3);
+// Tile count across the visible ground. Scaled WITH the ground size so the regolith
+// grain stays the same size whether the plane is 32 or 700 units (Moon 01 is authored
+// to tile). WS-4 (#170): factor 0.3 → 0.22 — with the new 2K maps each tile can cover
+// more ground (larger, more natural boulder-field grain) and still stay crisp, and the
+// lower repeat frequency is easier for the macro-variation shader to hide. Tune if
+// grain reads too large/small.
+const REGOLITH_REPEAT = Math.round(GROUND_VISUAL * 0.22);
+
+// WS-4 (#170) anti-tiling. A regolith map tiled ~150× over the ground reads as an
+// obvious repeating grid — the classic "this is a tiled texture" tell. We break it
+// with a MACRO-VARIATION pass injected into the MeshStandard shader: a large-scale
+// (tens-of-units) procedural value-noise modulates the albedo brightness + a touch of
+// roughness, so meter-scale light/dark blotches drift across the surface and the tile
+// seams stop reading as a lattice. Pure shader math — no extra texture, no draw call,
+// runs entirely on the GPU. World-space sampled so the variation is stable as the
+// camera moves (it's "painted on the ground", not screen-space).
+const REGOLITH_MACRO_VERT_DECL = `varying vec3 vRegoWPos;`;
+const REGOLITH_MACRO_VERT_ASSIGN = `vRegoWPos = (modelMatrix * vec4(transformed, 1.0)).xyz;`;
+const REGOLITH_MACRO_FRAG_DECL = `
+varying vec3 vRegoWPos;
+float regoHash(vec2 p){ p = fract(p * vec2(123.34, 456.21)); p += dot(p, p + 45.32); return fract(p.x * p.y); }
+float regoVN(vec2 p){
+  vec2 i = floor(p); vec2 f = fract(p); vec2 u = f * f * (3.0 - 2.0 * f);
+  float a = regoHash(i), b = regoHash(i + vec2(1.0, 0.0));
+  float c = regoHash(i + vec2(0.0, 1.0)), d = regoHash(i + vec2(1.0, 1.0));
+  return mix(mix(a, b, u.x), mix(c, d, u.x), u.y);
+}
+// Two octaves of low-frequency world-space noise → broad blotches (~30 u) plus a
+// finer drift (~12 u). Returns ~[0,1] centred near 0.5.
+float regoMacro(vec2 wxz){
+  return regoVN(wxz * 0.034) * 0.62 + regoVN(wxz * 0.11 + 17.3) * 0.38;
+}`;
 
 // Deterministic 2D value noise (#105): a cheap integer-lattice hash plus
 // bilinear interpolation with a smoothstep fade. No asset, no RNG state — the
@@ -1567,7 +1651,38 @@ function valueNoise2(x: number, y: number): number {
 // by the snapshot. Subtle deterministic vertex displacement gives a regolith
 // feel, and a tiling CC0 regolith PBR set (issue #53) clothes it. A missing/
 // failed texture leaves the flat fallback color, so the scene never breaks.
-function LunarTerrain({ terrainTint, crater = false }: { terrainTint: string; crater?: boolean }) {
+// Inject the WS-4 macro-variation into a MeshStandardMaterial's compiled shader.
+// Hooks the stock chunks: declare a world-pos varying, fill it in begin_vertex, then
+// after map_fragment modulate albedo and after roughnessmap_fragment nudge roughness.
+// Average multiplier ≈1.0 (centred), so it adds texture without darkening the surface.
+function applyRegolithMacro(shader: THREE.WebGLProgramParametersWithUniforms) {
+  shader.vertexShader = shader.vertexShader
+    .replace("#include <common>", `#include <common>\n${REGOLITH_MACRO_VERT_DECL}`)
+    .replace(
+      "#include <begin_vertex>",
+      `#include <begin_vertex>\n  ${REGOLITH_MACRO_VERT_ASSIGN}`,
+    );
+  shader.fragmentShader = shader.fragmentShader
+    .replace("#include <common>", `#include <common>\n${REGOLITH_MACRO_FRAG_DECL}`)
+    .replace(
+      "#include <map_fragment>",
+      `#include <map_fragment>\n  { float m = regoMacro(vRegoWPos.xz); diffuseColor.rgb *= mix(0.82, 1.18, m); }`,
+    )
+    .replace(
+      "#include <roughnessmap_fragment>",
+      `#include <roughnessmap_fragment>\n  roughnessFactor *= mix(0.94, 1.06, regoMacro(vRegoWPos.xz));`,
+    );
+}
+
+function LunarTerrain({
+  terrainTint,
+  crater = false,
+  skylight = false,
+}: {
+  terrainTint: string;
+  crater?: boolean;
+  skylight?: boolean;
+}) {
   const matRef = useRef<THREE.MeshStandardMaterial>(null);
   const gl = useThree((s) => s.gl);
   const invalidate = useThree((s) => s.invalidate);
@@ -1577,8 +1692,10 @@ function LunarTerrain({ terrainTint, crater = false }: { terrainTint: string; cr
     // 96 segments a 700-unit plane is ~7.3 units/quad, too coarse for a clean rim
     // crest. Bump to 220 (≈3.2 units/quad) ONLY when the crater is on — still a
     // single mesh / single draw call (the only hygiene budget post-ADR-0004), and
-    // the one-time rebuild happens behind the site-swap dust veil.
-    const seg = crater ? 220 : 96;
+    // the one-time rebuild happens behind the site-swap dust veil. The lunar
+    // skylight collar (#173) is shallow + small, but bump lunar to 160 (≈4.4
+    // u/quad) when it's on so the recessed rim reads smooth, not stepped.
+    const seg = crater ? 220 : skylight ? 160 : 96;
     const g = new THREE.PlaneGeometry(GROUND_VISUAL, GROUND_VISUAL, seg, seg);
     const pos = g.attributes.position as THREE.BufferAttribute;
     for (let i = 0; i < pos.count; i++) {
@@ -1610,14 +1727,39 @@ function LunarTerrain({ terrainTint, crater = false }: { terrainTint: string; cr
       // worksite there). Suppress the rolling swell INSIDE the rim so it can't
       // corrugate the clean bowl wall; keep fine ripple + micro grain on the floor
       // and walls. The crater delta lifts a rim ring around the y≈0 floor.
-      const swellTerm = crater ? (r > CRATER_OUTER_RADIUS ? swell : 0) : swell;
-      pos.setZ(i, fine + swellTerm + micro + (crater ? craterProfile(r) : 0));
+      // Lunar lava-tube skylight (#173): carve a recessed collar + raised ejecta
+      // rim around an offset centre. Distance from the skylight centre, computed in
+      // SCENE space — plane-local (x, y) maps to scene (x, -y), so scene-z = -y.
+      let skyTerm = 0;
+      let skyWall = 1; // 1 = open plain, → 0 inside the collar (damps swell/micro)
+      if (skylight) {
+        const sdr = Math.hypot(x - SKYLIGHT_CENTER[0], -y - SKYLIGHT_CENTER[1]);
+        if (sdr < SKYLIGHT_OUTER_RADIUS) {
+          skyTerm = skylightProfile(sdr);
+          // Fade the rolling swell + micro grain out across the rim so the carved
+          // collar reads as a clean recessed mouth, not a noise-corrugated dip.
+          skyWall = THREE.MathUtils.smoothstep(sdr, SKYLIGHT_MOUTH_RADIUS, SKYLIGHT_RIM_RADIUS);
+        }
+      }
+      const swellTerm = crater
+        ? r > CRATER_OUTER_RADIUS
+          ? swell
+          : 0
+        : swell * (skylight ? skyWall : 1);
+      pos.setZ(
+        i,
+        fine * (skylight ? 0.4 + 0.6 * skyWall : 1) +
+          swellTerm +
+          micro * (skylight ? 0.3 + 0.7 * skyWall : 1) +
+          (crater ? craterProfile(r) : 0) +
+          skyTerm,
+      );
     }
     g.computeVertexNormals();
     // aoMap reads from uv2; PlaneGeometry's uv works directly as the second set.
     if (g.attributes.uv && !g.attributes.uv2) g.setAttribute("uv2", g.attributes.uv);
     return g;
-  }, [crater]);
+  }, [crater, skylight]);
   useEffect(() => () => geom.dispose(), [geom]);
 
   useEffect(() => {
@@ -1658,7 +1800,13 @@ function LunarTerrain({ terrainTint, crater = false }: { terrainTint: string; cr
       {/* Per-site tint (Epic 04 P2): multiplies the regolith map once loaded (and
           is the flat fallback colour before/if it fails) — lunar reads warm grey,
           Shackleton darker/cooler. */}
-      <meshStandardMaterial ref={matRef} color={terrainTint} roughness={1} metalness={0} />
+      <meshStandardMaterial
+        ref={matRef}
+        color={terrainTint}
+        roughness={1}
+        metalness={0}
+        onBeforeCompile={applyRegolithMacro}
+      />
     </mesh>
   );
 }
@@ -1775,9 +1923,10 @@ function ShackletonShadows() {
 //                      Its intensity is spiked above base during a bid-war (#107).
 //   3. SelectiveBloom (celestial) — Sun core + Earth limb, lower threshold,
 //                      wider kernel, SCREEN blend + smoothed luminance.
-//   4. DepthOfField  — surface-only (mounted only on the surface): the distant
-//                      Earth/horizon fall soft while the worksite stays sharp. In
-//                      orbit it is OFF so the Moon hero stays deep-focus/crisp.
+//   4. DepthOfField  — surface-only, extremely gentle: focus on the foreground +
+//                      a very wide in-focus band, so close AND medium distances read
+//                      as if there's no DoF; only the far horizon softens, gradually.
+//                      Off in orbit (Moon hero stays deep-focus/crisp).
 //   5. ChromaticAberration — orbit-only (mounted only in orbit): a subtle lens
 //                      fringe on the deep-space vista; off on the surface so the
 //                      worksite UI/telemetry stays clean.
@@ -1944,13 +2093,17 @@ const CinematicFX = memo(function CinematicFX({
       ) : (
         <></>
       )}
-      {/* Surface-gated DoF — distant Earth/horizon soften while the worksite stays
-          sharp. Mounted ONLY on the surface; in orbit the Moon hero stays crisp. */}
+      {/* Surface-gated DoF — tuned so close AND medium distances read as if there's
+          no DoF at all: focus sits right on the foreground and the in-focus band is
+          very wide, so everything from the rover out through the mid-ground stays
+          crisp. Only the far distance/horizon — well past the band — eases into a
+          soft, very gradual blur. Surface only; in orbit the Moon hero stays
+          deep-focus. */}
       {onSurface ? (
         <DepthOfField
-          focusDistance={0.0}
-          focalLength={0.02}
-          bokehScale={2.2}
+          focusDistance={0.02}
+          focalLength={0.45}
+          bokehScale={0.6}
           height={480}
         />
       ) : (
@@ -2167,10 +2320,11 @@ const INTRO_MS = 4500;
 // (SKIM_OUT_DIST units, at SKIM_ALTITUDE) toward the horizon, flips the rendered site
 // under a dust-brownout peak, then races back in and settles on the destination
 // surface pose (for Shackleton, cresting the rim into the crater). Long enough to
-// read as a journey, not a cut.
-const TRAVERSE_MS = 2900;
+// read as a journey, not a cut — paced slow so the gentle dust haze (raised-cosine
+// envelope) has room to ease in and out either side of the swap.
+const TRAVERSE_MS = 3600;
 const SKIM_ALTITUDE = 4; // scene-y of the low ground-skim race
-const SKIM_OUT_DIST = 120; // how far out across the plain the drive races
+const SKIM_OUT_DIST = 100; // how far out across the plain the drive races
 
 // ---- ground-traverse envelope (cinematic site drive) -----------------------
 // The surface→surface site swap is a cinematic GROUND DRIVE (not a lateral whip):
@@ -2183,12 +2337,15 @@ const SKIM_OUT_DIST = 120; // how far out across the plain the drive races
 // covered (peak ≈ 1 with a plateau), not just a brief flash.
 export function traverseEnvelope(t: number) {
   const c = Math.min(1, Math.max(0, t));
-  // Dust brownout: a flat-topped peak around the t=0.5 swap. DUST_HALF widens the
-  // window and the gentle power keeps it near-opaque across the peak so the swap is
-  // never glimpsed; it still falls to 0 at both ends so the regolith reads clean
-  // before and after the drive.
-  const DUST_HALF = 0.3;
-  const veil = Math.pow(Math.max(0, 1 - Math.abs(c - 0.5) / DUST_HALF), 1.25);
+  // Dust haze: a RAISED-COSINE bell centred on the t=0.5 swap. The wide window
+  // (DUST_HALF) spreads the haze across almost the whole drive, and the cosine
+  // shape has ZERO slope at both ends — so the dust eases in and out gently
+  // (the camera is never seen whipping through clean air, the old abrupt part)
+  // while still climbing to a fully-opaque core that hides the single swap frame.
+  // Reads as driving INTO and OUT OF a regolith cloud, not a brown curtain slam.
+  const DUST_HALF = 0.46;
+  const x = Math.min(1, Math.abs(c - 0.5) / DUST_HALF); // 0 at swap → 1 at edge
+  const veil = 0.5 * (1 + Math.cos(Math.PI * x)); // 1 at swap, 0 at window edge
   // Path easing: ease-in-out so the drive accelerates out of the old framing and
   // decelerates HARD into the new one (settles cleanly, no overshoot).
   const k = c * c * (3 - 2 * c);
@@ -2261,45 +2418,39 @@ const GHOST_BAD = "#e74c3c";
 
 // ---- drag-to-place ghost + placement plane (bh-05) -------------------------
 
-// BlueprintGhost draws the transient placement preview: each ghost Task's Build
-// envelope as a flat footprint quad on the ground, plus a thin upright box hinting
-// the envelope height. Tinted green when valid, red when the client gate rejects
-// the spot. It is CLIENT-ONLY transient state (never from the snapshot), so the
-// scene stays a pure function of the snapshot for everything authoritative — the
-// placed tasks themselves arrive via the next snapshot (ADR-0004).
+// BlueprintGhost draws the transient placement preview. It now previews the ACTUAL
+// construction: each ghost Task renders its real procedural structure (translucent,
+// via StructurePiece's "rising" phase) at the spot it will land, with a thin
+// validity-tinted footprint scribed under it — green/cyan when the spot is valid,
+// red when the client gate rejects it. The footprint is sized to the structure's
+// real on-ground radius (kindFootprintRadius), NOT the much larger clearance
+// envelope the server validates against, so "what you preview is what you build"
+// at the right size (was: a field of oversized envelope quads + tall boxes).
+// CLIENT-ONLY transient state (never from the snapshot) — the placed tasks
+// themselves arrive via the next snapshot (ADR-0004).
 function BlueprintGhost({ ghost, map }: { ghost: Ghost; map: SceneMap }) {
-  const color = ghost.invalid ? GHOST_BAD : GHOST_OK;
+  const tint = ghost.invalid ? GHOST_BAD : GHOST_OK;
   return (
     <group>
       {ghost.tasks.map((t) => {
-        const f = footprintOf(t);
-        const center = map.at({ X: f.cx, Y: f.cy }, 0.06);
-        const w = f.halfX * 2 * map.scale;
-        const d = f.halfY * 2 * map.scale;
-        const h = Math.max(0.05, (t.envelope.size.Z * map.scale) / 2);
+        const center = map.at(t.pos, 0);
+        const kind = kindOf(t.type, t.id);
+        const r = kindFootprintRadius(kind);
         return (
           <group key={t.id} position={[center.x, 0, center.z]}>
-            {/* Footprint quad flat on the ground. */}
-            <mesh position={[0, 0.06, 0]} rotation={[-Math.PI / 2, 0, 0]} raycast={() => null}>
-              <planeGeometry args={[w, d]} />
-              <meshBasicMaterial
-                color={color}
-                transparent
-                opacity={0.35}
-                side={THREE.DoubleSide}
-                depthWrite={false}
-              />
+            {/* validity-tinted ground footprint, sized to the real structure */}
+            <mesh position={[0, 0.05, 0]} rotation={[-Math.PI / 2, 0, 0]} raycast={() => null}>
+              <ringGeometry args={[r * 0.84, r, 44]} />
+              <meshBasicMaterial color={tint} transparent opacity={0.6} side={THREE.DoubleSide} depthWrite={false} />
             </mesh>
-            {/* A faint envelope box, so the ghost reads as a volume not just a pad. */}
-            <mesh position={[0, h, 0]} raycast={() => null}>
-              <boxGeometry args={[w, h * 2, d]} />
-              <meshBasicMaterial
-                color={color}
-                transparent
-                opacity={0.12}
-                depthWrite={false}
-              />
+            <mesh position={[0, 0.05, 0]} rotation={[-Math.PI / 2, 0, 0]} raycast={() => null}>
+              <circleGeometry args={[r * 0.84, 32]} />
+              <meshBasicMaterial color={tint} transparent opacity={0.12} side={THREE.DoubleSide} depthWrite={false} />
             </mesh>
+            {/* the real structure, translucent — a true preview of what gets built.
+                `preview` renders it untextured (flat-tinted) so the ghost that redraws
+                every drag frame stays cheap. */}
+            <StructurePiece type={t.type} id={t.id} phase="rising" color="#cfcfd6" preview />
           </group>
         );
       })}
@@ -2753,6 +2904,19 @@ function SceneContents({
     [snapshot, siteTasks],
   );
 
+  // Render-only build standoff: a rover's real position is the block CENTRE it drives
+  // to and rests on, so the hero-scaled body would otherwise be drawn embedded in the
+  // block (stuck inside it at the end of a build). Nudge each rover's DRAWN position
+  // out in front of its nearest block — a pure derivation of the snapshot that leaves
+  // the rover's real position (and the auction/lease/choreography) untouched (ADR-0004).
+  // Keyed on the same site-filtered slices the lease-beam and rover loops render from.
+  const roverDisplayPos = useMemo(() => {
+    const blocks = siteTasks.map((t) => t.pos);
+    const m = new Map<string, Vec2>();
+    for (const r of siteRovers) m.set(r.id, roverStandoffPos(r.pos, blocks));
+    return m;
+  }, [siteRovers, siteTasks]);
+
   // `viewMode` here is the RENDERED mode (Scene3D's `shown`, which flips at the
   // glare peak). In orbit the worksite is hidden — you see only the Moon globe,
   // distant Earth, and stars — so it never floats as a square in space.
@@ -2821,12 +2985,30 @@ function SceneContents({
           branch so the scenery above never remounts. */}
       {snapshot && taskById && onSurface && (
         <>
-          <LunarTerrain terrainTint={frame.terrainTint} crater={activeSite === "shackleton"} />
+          <LunarTerrain
+            terrainTint={frame.terrainTint}
+            crater={activeSite === "shackleton"}
+            skylight={activeSite === "lunar"}
+          />
 
           {/* Shackleton long-shadow fakes (Epic 04 P4): static decals raking AWAY
               from the grazing pole sun. Snapshot-independent + procedural (no asset),
               so they never pop in on descent. Lunar's high key light needs none. */}
           {activeSite === "shackleton" && <ShackletonShadows />}
+
+          {/* Lunar hero lava-tube skylight (#173): the dark void shaft + its ejecta
+              boulder rim, SW of the worksite. LUNAR only — Shackleton has its crater.
+              Snapshot-independent decoration; both are non-pickable (raycast off). */}
+          {activeSite === "lunar" && (
+            <>
+              <LavaTubeSkylight />
+              <LavaTubeBoulders />
+              {/* Graded pads + rover tracks anchoring the composed base zones to
+                  the regolith (Milestone 08, WS-2). Lunar only — Shackleton's
+                  crater bowl already grounds its outpost. */}
+              <LunarBaseDecals />
+            </>
+          )}
 
           {/* Contact shadows (#104) — drei bakes a soft ambient-occlusion-like
               contact shadow under the rovers + domes so they read as GROUNDED, not
@@ -2852,26 +3034,34 @@ function SceneContents({
             <TaskBlock key={t.id} task={t} map={map} geo={geo} beats={beats} />
           ))}
 
-          {/* Lease beams (rover → held task), under the rovers — active site only. */}
+          {/* Lease beams (rover → held task), under the rovers — active site only.
+              The beam starts from the rover's DISPLAYED (standoff) position so it
+              stays attached to the rendered body, then runs to the block it builds. */}
           {siteRovers.map((r) => {
             if (!r.alive || !r.task) return null;
             const held = taskById.get(r.task);
             if (!held) return null;
-            return <LeaseBeam key={`beam-${r.id}`} from={r} to={held} map={map} />;
+            const pos = roverDisplayPos.get(r.id) ?? r.pos;
+            const from = pos === r.pos ? r : { ...r, pos };
+            return <LeaseBeam key={`beam-${r.id}`} from={from} to={held} map={map} />;
           })}
 
-          {/* Rovers — active site only. */}
-          {siteRovers.map((r) => (
-            <Rover3D
-              key={r.id}
-              rover={r}
-              map={map}
-              geo={geo}
-              selected={selected === r.id}
-              beats={beats}
-              onPick={onPick}
-            />
-          ))}
+          {/* Rovers — active site only. Drawn at the standoff position so the body
+              parks IN FRONT of the block it builds instead of embedding in it. */}
+          {siteRovers.map((r) => {
+            const pos = roverDisplayPos.get(r.id) ?? r.pos;
+            return (
+              <Rover3D
+                key={r.id}
+                rover={pos === r.pos ? r : { ...r, pos }}
+                map={map}
+                geo={geo}
+                selected={selected === r.id}
+                beats={beats}
+                onPick={onPick}
+              />
+            );
+          })}
 
           {/* Launch infrastructure set-pieces (#56) — static NASA-PD Scenery at the
               worksite edge. Snapshot-INDEPENDENT decoration, raycast-suppressed.
@@ -3152,7 +3342,7 @@ function CameraFeel({ active, onSurface }: { active: boolean; onSurface: boolean
         controls.getDistance(),
         controls.minDistance,
         controls.maxDistance,
-      ) * (onSurface ? 1 : ORBIT_EXPOSURE_SCALE);
+      ) * (onSurface ? SURFACE_EXPOSURE_SCALE : ORBIT_EXPOSURE_SCALE);
 
     const azimuth = controls.getAzimuthalAngle();
 
@@ -3258,20 +3448,25 @@ function CinematicOpen({
     // (the cold-hold fallback) and controls/CameraFeel keep their current state.
     if (!active || onSurface || !controls || !camera) return;
 
-    // Capture the LIVE rest pose at the moment the cue fires — NOT the hardcoded
-    // ORBIT_POSE. The open is a there-and-back: it must settle EXACTLY where it
-    // started so the world-fixed backdrop (the Milky-Way equirect band + NebulaHero)
-    // is byte-identical on return. The equirect background is sampled purely by
-    // camera ORIENTATION, so even a few degrees of idle-sway azimuth between the live
-    // pose and the canonical ORBIT_POSE would rotate the warm dust band out of frame
-    // on settle (the reported "dust gone after the arc"). Snapping back to the live
-    // start pose removes that drift entirely.
+    // Capture the LIVE target + horizontal berth at the moment the cue fires. The
+    // equirect background is sampled by camera orientation, so preserving the live
+    // X/Z offset avoids the old azimuth snap that rotated the warm dust band away.
+    // The Y offset is intentionally restored to ORBIT_POSE's startup elevation:
+    // regardless of a prior polar drag, the reveal sees the Sun and Moon with the
+    // same vertical alignment as the default app view.
     const startTarget = controls.target.clone();
     const startPos = camera.position.clone();
-    // The rest offset (position − target) the arc rotates a CLONE of around the
-    // target's up-axis so the radius + pitch are preserved and only the azimuth
-    // swings (CAMERA-ARC, not sun-arc).
-    const restOffset = startPos.clone().sub(startTarget);
+    const liveOffset = startPos.clone().sub(startTarget);
+    const defaultOffset = ORBIT_POSE.position.clone().sub(ORBIT_POSE.target);
+    const alignedOffset = alignOpenCameraElevation(
+      [liveOffset.x, liveOffset.y - 10, liveOffset.z],
+      [defaultOffset.x, defaultOffset.y -20, defaultOffset.z],
+    );
+    // The arc rotates this aligned offset around the target's up-axis. Its elevation
+    // stays fixed at the startup value while only azimuth changes (CAMERA-ARC, not
+    // sun-arc); the final pose retains the live horizontal framing.
+    const restOffset = new THREE.Vector3(...alignedOffset);
+    const settledPos = startTarget.clone().add(restOffset);
     const up = camera.up.clone(); // world-up (0,1,0) in orbit — the azimuth axis
     const tmpOffset = new THREE.Vector3();
     const tmpQuat = new THREE.Quaternion();
@@ -3310,17 +3505,17 @@ function CinematicOpen({
       if (t < 1) {
         raf = requestAnimationFrame(step);
       } else {
-        // Settle EXACTLY on the live start pose (openAzimuthOffset(1) === 0, but snap
-        // to the captured pose so there is zero residual), re-enable controls, and
-        // hand the camera back to CameraFeel via onTransition(false) — idle drift
-        // eases in. Returning to the SAME pose keeps the backdrop dust band intact.
+        // Settle EXACTLY on the aligned rest pose (openAzimuthOffset(1) === 0, but
+        // snap so there is zero residual), re-enable controls, and hand the camera
+        // back to CameraFeel. The live azimuth keeps the backdrop continuous while
+        // the canonical Y keeps the Sun/Moon composition matched to app startup.
         finish();
       }
     };
 
     const finish = () => {
       finished = true;
-      camera.position.copy(startPos);
+      camera.position.copy(settledPos);
       camera.up.set(0, 1, 0);
       camera.lookAt(startTarget);
       controls.target.copy(startTarget);
@@ -3342,11 +3537,11 @@ function CinematicOpen({
       // back to CameraFeel/OrbitControls — there is nothing to cancel, so DON'T touch
       // the camera (the operator may have orbited away since). Only an INTERRUPTED arc
       // (prop flips false / unmount mid-run) needs the restore: settle back to the
-      // live start pose and re-enable controls so nothing is left stuck-disabled or
-      // half-rotated.
+      // aligned rest pose and re-enable controls so nothing is left stuck-disabled
+      // or half-rotated.
       if (!finished) {
         if (controls) {
-          camera.position.copy(startPos);
+          camera.position.copy(settledPos);
           camera.up.set(0, 1, 0);
           camera.lookAt(startTarget);
           controls.target.copy(startTarget);

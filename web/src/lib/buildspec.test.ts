@@ -11,6 +11,7 @@ import {
   fold,
   hasBuildSpec,
   interpretBuildSpec,
+  interpretModuleSpec,
   opToMesh,
 } from "./buildspec";
 import { tierHeight, tierOf } from "./scene";
@@ -296,4 +297,56 @@ describe("fallback maps to the unchanged primitive tier geometry", () => {
       expect(tierHeight(tierOf(task.type))).toBe(tierHeight(c.tier as ReturnType<typeof tierOf>));
     });
   }
+});
+
+// interpretModuleSpec — the milestone-08 live path: a "module" Build spec means the
+// Task's geometry is a procedural immersive structure (Structures.tsx) revealed
+// step-by-step. `shown` is the count of folded module ops (the reveal cursor); the
+// kind comes from the ops' `part`. This is what makes the REAL agent-built path
+// (k8s) render the immersive structures instead of the old primitives.
+const moduleOp = (id: string, part: string): BuildOp => ({
+  op: "place",
+  id,
+  shape: "module",
+  part,
+  pos: v3(0, 0, 0),
+  rot: v3(0, 0, 0),
+  scale: v3(1, 1, 1),
+  material: { color: "#cfcfd6" },
+});
+
+describe("interpretModuleSpec", () => {
+  it("returns null for a Task with no build_spec (falls back to the full structure)", () => {
+    expect(interpretModuleSpec({})).toBeNull();
+    expect(interpretModuleSpec({ build_spec: [] })).toBeNull();
+  });
+
+  it("returns null for a primitive/glTF spec (those render via SpecMesh, not reveal)", () => {
+    expect(interpretModuleSpec({ build_spec: [box] })).toBeNull();
+  });
+
+  it("reports the kind and the number of folded module steps (the reveal count)", () => {
+    const spec = [
+      moduleOp("op-0", "wall"),
+      moduleOp("op-1", "wall"),
+      moduleOp("op-2", "wall"),
+    ];
+    expect(interpretModuleSpec({ build_spec: spec })).toEqual({ kind: "wall", shown: 3 });
+  });
+
+  it("grows monotonically as ops stream and stays stable on duplicate redeliveries", () => {
+    const one = [moduleOp("op-0", "dome")];
+    const two = [moduleOp("op-0", "dome"), moduleOp("op-1", "dome")];
+    expect(interpretModuleSpec({ build_spec: one })?.shown).toBe(1);
+    expect(interpretModuleSpec({ build_spec: two })?.shown).toBe(2);
+    // A re-placed id folds to itself (resume-on-kill convergence), not a double count.
+    const dup = [moduleOp("op-0", "dome"), moduleOp("op-0", "dome")];
+    expect(interpretModuleSpec({ build_spec: dup })?.shown).toBe(1);
+  });
+
+  it("a module spec yields NO primitive meshes, so the SpecMesh path stays empty", () => {
+    const spec = [moduleOp("op-0", "panel"), moduleOp("op-1", "panel")];
+    expect(interpretBuildSpec({ build_spec: spec })).toEqual([]);
+    expect(hasBuildSpec({ build_spec: spec })).toBe(false);
+  });
 });

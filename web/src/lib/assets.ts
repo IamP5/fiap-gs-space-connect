@@ -30,9 +30,10 @@
 import { RGBELoader } from "three/examples/jsm/loaders/RGBELoader.js";
 
 import { preloadTexture } from "./textureCache";
+import { reportAssetWarning } from "./assetLog";
 import { ROVER_MODEL_REF, REGOLITH_MAPS, loadGLTF } from "../components/Scene3D";
 import { SCENERY_MODEL_REFS, loadScenery } from "../components/LaunchScenery";
-import { HDR_FILE, STAR_BG_FILE } from "../components/SpaceEnvironment";
+import { HDR_FILE, STAR_BG_FILE, STAR_BG_KTX2 } from "../components/SpaceEnvironment";
 import {
   MOON_COLOR,
   MOON_NORMAL,
@@ -43,6 +44,7 @@ import {
   NEBULA_VEIL,
 } from "../components/SkyBodies";
 import { ROCK_DIFF, ROCK_NORMAL, ROCK_ROUGH } from "../components/DecorRocks";
+import { STRUCTURE_TEXTURES } from "../components/Structures";
 
 // --- the manifest, partitioned by loader -----------------------------------
 
@@ -72,15 +74,25 @@ export const TEXTURE_ASSETS: readonly string[] = [
   ROCK_DIFF,
   ROCK_NORMAL,
   ROCK_ROUGH,
+  // milestone 08 structures: the metal/solar/regolith PBR sets cladding the
+  // procedural habitat hardware (dome, walls, pads, solar arrays, comms tower).
+  ...STRUCTURE_TEXTURES,
 ];
 
 // HDR environment maps — loaded with RGBELoader (the .hdr decoder). IBL only.
 export const HDR_ASSETS: readonly string[] = [HDR_FILE];
 
+// Binary assets warmed by a plain fetch (no decoder runs at preload — a renderer
+// is needed to transcode KTX2, and there is none until the Canvas mounts). The 16k
+// Basis-UASTC starmap rides here so its bytes land in the HTTP cache behind the
+// splash; SpaceEnvironment's <StarBackground> does the GPU transcode at mount, off
+// that warm cache. The 8k JPG (in TEXTURE_ASSETS) stays warmed as the fallback.
+export const BINARY_ASSETS: readonly string[] = [STAR_BG_KTX2];
+
 // The flat list of every asset URL (deduped). Exported so assets.test.ts can
 // assert it is non-empty and free of duplicate URLs.
 export const ALL_ASSETS: readonly string[] = Array.from(
-  new Set<string>([...GLB_ASSETS, ...TEXTURE_ASSETS, ...HDR_ASSETS]),
+  new Set<string>([...GLB_ASSETS, ...TEXTURE_ASSETS, ...HDR_ASSETS, ...BINARY_ASSETS]),
 );
 
 // --- per-loader preloaders (each SETTLES — never rejects, ADR-0004) ---------
@@ -94,7 +106,13 @@ function preloadGLB(url: string): Promise<void> {
   const loader = SCENERY_MODEL_REFS.includes(url) ? loadScenery : loadGLTF;
   return loader(url).then(
     () => undefined,
-    () => undefined, // ADR-0004: a failed model keeps its in-scene box fallback
+    (err) => {
+      // ADR-0004: a failed model keeps its in-scene box fallback. The same
+      // rejected promise is memoised, so the in-scene loader's own .catch logs it
+      // again at mount — but log here too so a preload-phase failure is visible
+      // before the user ever reaches the surface.
+      reportAssetWarning("preload glTF", url, err);
+    },
   );
 }
 
@@ -110,9 +128,30 @@ function preloadHDR(url: string): Promise<void> {
         resolve();
       },
       undefined,
-      () => resolve(), // ADR-0004: a failed HDR → the error boundary keeps the scene
+      (err) => {
+        // ADR-0004: a failed HDR → the scene keeps its non-IBL lighting. Log which
+        // .hdr failed so "the scene looks flat/unlit" has a traceable cause.
+        reportAssetWarning("HDR environment", url, err);
+        resolve();
+      },
     );
   });
+}
+
+// Warm a binary asset into the browser HTTP cache (no decode). Used for the KTX2
+// starmap, whose GPU transcode is deferred to scene mount (it needs a renderer).
+// SETTLES on failure (ADR-0004): a miss just means <StarBackground> falls back to
+// the 8k JPG, so we log and count it done rather than rejecting the batch.
+function preloadBinary(url: string): Promise<void> {
+  return fetch(url)
+    .then((r) => {
+      if (!r.ok) throw new Error(`HTTP ${r.status}`);
+      return r.arrayBuffer();
+    })
+    .then(
+      () => undefined,
+      (err) => reportAssetWarning("binary", url, err),
+    );
 }
 
 /**
@@ -135,6 +174,7 @@ export function preloadAllAssets(
     ...GLB_ASSETS.map((url) => preloadGLB(url).then(tick)),
     ...TEXTURE_ASSETS.map((url) => preloadTexture(url).then(tick)),
     ...HDR_ASSETS.map((url) => preloadHDR(url).then(tick)),
+    ...BINARY_ASSETS.map((url) => preloadBinary(url).then(tick)),
   ];
 
   // Report the initial 0/total so the bar renders immediately (before the first

@@ -65,6 +65,11 @@ const { GLTFExporter } = await import(
   pathToFileURL(join(threeJsmDir, "exporters", "GLTFExporter.js")).href
 );
 
+// three's GLTFLoader embedded-texture path references the browser `self` global,
+// which Node does not define — alias it to globalThis so conditioning glbs with
+// embedded textures doesn't throw `self is not defined` under Node 22.
+if (typeof globalThis.self === "undefined") globalThis.self = globalThis;
+
 // three's GLTFExporter binary path uses the browser FileReader API. Node 22 has
 // Blob but not FileReader, so provide a minimal async polyfill.
 if (typeof globalThis.FileReader === "undefined") {

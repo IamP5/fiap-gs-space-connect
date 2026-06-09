@@ -10,17 +10,27 @@ import {
   CRATER_RIM_HEIGHT,
   CRATER_RIM_RADIUS,
   DEFAULT_SITE_FRAME,
+  LUNAR_BASE_PADS,
+  LUNAR_ROVER_TRACKS,
+  LUNAR_SET_PIECES,
   MOON_POSITION,
   MOON_RADIUS,
   REAL_METERS,
   SCENE_UNITS_PER_METER,
   SITE_FRAMES,
+  SKYLIGHT_CENTER,
+  SKYLIGHT_MOUTH_RADIUS,
+  SKYLIGHT_MOUTH_DROP,
+  SKYLIGHT_OUTER_RADIUS,
+  SKYLIGHT_RIM_LIP,
+  SKYLIGHT_RIM_RADIUS,
   computeBounds,
   craterProfile,
   isBuilt,
   latLonToGlobeNormal,
   latLonToGlobePoint,
   siteMap,
+  skylightProfile,
   tierHeight,
   tierOf,
 } from "./scene";
@@ -167,17 +177,24 @@ describe("SITE_FRAMES (two-site surface, Epic 04 P2)", () => {
     expect(s[1]).toBeLessThan(Math.abs(s[2]));
   });
 
-  it("each site carries DISTINCT scenery hardware (different structures per site, no empties)", () => {
+  it("each site carries a DISTINCT composition (own keys/positions; no empties)", () => {
     expect(SITE_FRAMES.lunar.pieces.length).toBeGreaterThan(0);
     expect(SITE_FRAMES.shackleton.pieces.length).toBeGreaterThan(0);
-    // The two sites render genuinely different hardware: Shackleton is a research /
-    // ISRU outpost, NOT the lunar launch complex — so no Shackleton modelRef appears
-    // in the lunar set (and vice versa). This is the deliberate reversal of the old
-    // "reuse the same GLBs" rule.
-    const lunarRefs = new Set(SITE_FRAMES.lunar.pieces.map((p) => p.modelRef));
+    // Milestone 08 (WS-2) composes the lunar site into a full BASE — it now reuses
+    // some of the same NASA GLBs as Shackleton (habitats, dish, solar, comms-mast),
+    // which is the SetPiece design intent ("reuse the same GLBs, reposition/retint
+    // per site"). So the sites are no longer disjoint by modelRef; instead they must
+    // be distinct by COMPOSITION: disjoint piece KEYS and a different overall layout.
+    const lunarKeys = new Set(SITE_FRAMES.lunar.pieces.map((p) => p.key));
     for (const p of SITE_FRAMES.shackleton.pieces) {
-      expect(lunarRefs.has(p.modelRef)).toBe(false);
+      expect(lunarKeys.has(p.key)).toBe(false); // no key collides across sites
     }
+    // Each site still has hardware UNIQUE to it (lunar: the launch complex; shackleton:
+    // the ISRU plant) so they never read as the same base twice.
+    const lunarRefs = new Set(SITE_FRAMES.lunar.pieces.map((p) => p.modelRef));
+    const shkRefs = new Set(SITE_FRAMES.shackleton.pieces.map((p) => p.modelRef));
+    expect([...lunarRefs].some((r) => !shkRefs.has(r))).toBe(true); // lunar-only models
+    expect([...shkRefs].some((r) => !lunarRefs.has(r))).toBe(true); // shackleton-only models
     // No empty modelRefs, and each site's piece keys are unique.
     for (const key of ["lunar", "shackleton"] as const) {
       const pieces = SITE_FRAMES[key].pieces;
@@ -322,6 +339,124 @@ describe("craterProfile (Shackleton carved crater)", () => {
     for (let r = 0; r <= 400; r += 1) {
       expect(craterProfile(r)).toBeLessThanOrEqual(CRATER_RIM_HEIGHT + 1e-9);
       expect(craterProfile(r)).toBeGreaterThanOrEqual(0);
+    }
+  });
+});
+
+describe("skylightProfile (lunar lava-tube skylight, #173)", () => {
+  it("drops to the recessed collar across the mouth, then returns to the plain far out", () => {
+    expect(skylightProfile(0)).toBe(-SKYLIGHT_MOUTH_DROP);
+    expect(skylightProfile(SKYLIGHT_MOUTH_RADIUS)).toBe(-SKYLIGHT_MOUTH_DROP);
+    expect(skylightProfile(SKYLIGHT_OUTER_RADIUS)).toBe(0);
+    expect(skylightProfile(300)).toBe(0); // far field is the flat plain
+  });
+
+  it("rises to a raised ejecta rim lip at the rim crest", () => {
+    expect(skylightProfile(SKYLIGHT_RIM_RADIUS)).toBeCloseTo(SKYLIGHT_RIM_LIP, 5);
+  });
+
+  it("climbs monotonically up the inner wall (mouth → rim crest)", () => {
+    let prev = -Infinity;
+    for (let dr = SKYLIGHT_MOUTH_RADIUS; dr <= SKYLIGHT_RIM_RADIUS; dr += 0.5) {
+      const h = skylightProfile(dr);
+      expect(h).toBeGreaterThanOrEqual(prev - 1e-9);
+      prev = h;
+    }
+  });
+
+  it("eases the rim lip back down to the plain on the outer flank (rim → outer)", () => {
+    let prev = Infinity;
+    for (let dr = SKYLIGHT_RIM_RADIUS; dr <= SKYLIGHT_OUTER_RADIUS; dr += 0.5) {
+      const h = skylightProfile(dr);
+      expect(h).toBeLessThanOrEqual(prev + 1e-9);
+      prev = h;
+    }
+  });
+
+  it("never carves below the collar nor lifts above the rim lip anywhere", () => {
+    for (let dr = 0; dr <= 60; dr += 0.5) {
+      expect(skylightProfile(dr)).toBeGreaterThanOrEqual(-SKYLIGHT_MOUTH_DROP - 1e-9);
+      expect(skylightProfile(dr)).toBeLessThanOrEqual(SKYLIGHT_RIM_LIP + 1e-9);
+    }
+  });
+
+  it("sits clear of the worksite centre and every LUNAR set-piece (no structure in the pit)", () => {
+    const [cx, cz] = SKYLIGHT_CENTER;
+    const WORKSITE_HALF_EXTENT = 10; // rovers/tasks + the Epic 07 climax at wall-1
+    // The pit's nearest approach to the origin (centre distance − outer radius)
+    // must clear the worksite, so nothing interactive ever falls into the collar.
+    const nearestApproach = Math.hypot(cx, cz) - SKYLIGHT_OUTER_RADIUS;
+    expect(nearestApproach).toBeGreaterThan(WORKSITE_HALF_EXTENT);
+    // No lunar set-piece may fall inside the skylight outer radius (it would sink
+    // into the carved collar). Nearest is the crawler.
+    for (const p of SITE_FRAMES.lunar.pieces) {
+      const d = Math.hypot(p.position[0] - cx, p.position[2] - cz);
+      expect(d).toBeGreaterThan(SKYLIGHT_OUTER_RADIUS);
+    }
+  });
+});
+
+describe("composed lunar base layout (Milestone 08, WS-2 / #174)", () => {
+  const WORKSITE_HALF_EXTENT = 10; // rovers/tasks + the Epic 07 climax at wall-1
+  const [skx, skz] = SKYLIGHT_CENTER;
+
+  it("renders the full designed roster (launch + landing + habitat + comms + power + figures)", () => {
+    const keys = new Set(LUNAR_SET_PIECES.map((p) => p.key));
+    // Zones that must each be present for the base to read as composed, not scattered.
+    for (const k of [
+      "crawler", "mobile-launcher", "gantry", // launch complex
+      "lander", // landing pad
+      "habitat-1", "habitat-2", "radome", "base-station", // habitat cluster
+      "dish-70m", "comms-mast", // comms ridge
+      "solar-1", "solar-2", "solar-3", "solar-4", // power farm (a ROW)
+      "astronaut", "emu", // scale figures
+    ]) {
+      expect(keys).toContain(k);
+    }
+  });
+
+  it("has a unique key + a real model ref + a positive realMeters for every piece", () => {
+    const seen = new Set<string>();
+    for (const p of LUNAR_SET_PIECES) {
+      expect(seen.has(p.key)).toBe(false); // no dup keys (React + merge-cache safety)
+      seen.add(p.key);
+      expect(p.modelRef).toMatch(/^\/assets\/models\/.+\.glb$/);
+      expect(p.realMeters).toBeGreaterThan(0);
+    }
+  });
+
+  it("keeps the worksite-centre stage clear of every STRUCTURE (figures may stand at the edge)", () => {
+    // Structures must not crowd the centre stage; the two scale figures (astronaut,
+    // emu) are deliberately allowed near the edge to anchor scale.
+    const figures = new Set(["astronaut", "emu"]);
+    for (const p of LUNAR_SET_PIECES) {
+      if (figures.has(p.key)) continue;
+      const d = Math.hypot(p.position[0], p.position[2]);
+      expect(d).toBeGreaterThan(WORKSITE_HALF_EXTENT);
+    }
+  });
+
+  it("seats every grading pad clear of the skylight pit and within the ground span", () => {
+    for (const pad of LUNAR_BASE_PADS) {
+      const d = Math.hypot(pad.center[0] - skx, pad.center[1] - skz);
+      expect(pad.radius).toBeGreaterThan(0);
+      // The pad's nearest EDGE must clear the skylight outer radius — its disc must
+      // not clip into the carved collar/void.
+      expect(d - pad.radius).toBeGreaterThan(SKYLIGHT_OUTER_RADIUS);
+    }
+  });
+
+  it("routes every rover track between two distinct points, clear of the skylight void", () => {
+    for (const t of LUNAR_ROVER_TRACKS) {
+      const len = Math.hypot(t.to[0] - t.from[0], t.to[1] - t.from[1]);
+      expect(len).toBeGreaterThan(0); // a track has length
+      expect(t.width).toBeGreaterThan(0);
+      // Neither endpoint sits inside the skylight mouth (a track must not run into
+      // the open shaft). Endpoints are zone anchors, comfortably outside.
+      for (const pt of [t.from, t.to]) {
+        const d = Math.hypot(pt[0] - skx, pt[1] - skz);
+        expect(d).toBeGreaterThan(SKYLIGHT_MOUTH_RADIUS);
+      }
     }
   });
 });

@@ -33,8 +33,11 @@ function ring(n: number, radius: number, startDeg: number): { X: number; Y: numb
 }
 
 function domeBlueprint(): CatalogBlueprint {
-  const wallPos = ring(8, 46, 90);
-  const foundationPos = ring(4, 24, 68);
+  // Compact ring radii (worksite units; 1 unit ≈ 0.3 scene units) so the walls and
+  // foundations ring the dome skirt snugly instead of scattering across the plain —
+  // kept in sync with Go's blueprint.domeBlueprint.
+  const wallPos = ring(8, 12, 90);
+  const foundationPos = ring(4, 11, 68);
   const footEnv = { center: { X: 0, Y: 0, Z: 0 }, size: { X: 14, Y: 14, Z: 4 } };
   const wallEnv = { center: { X: 0, Y: 0, Z: 0 }, size: { X: 12, Y: 12, Z: 14 } };
   const capEnv = { center: { X: 0, Y: 0, Z: 0 }, size: { X: 40, Y: 40, Z: 26 } };
@@ -63,10 +66,12 @@ function solarArrayBlueprint(): CatalogBlueprint {
     name: "Solar array",
     description: "Two pads, then sun-tracking panels.",
     tasks: [
-      { id: "pad-1", type: "foundation", rel: { X: -16, Y: 0 }, envelope: footEnv },
-      { id: "pad-2", type: "foundation", rel: { X: 16, Y: 0 }, envelope: footEnv },
-      { id: "panel-1", type: "panel", rel: { X: -16, Y: 0 }, envelope: panelEnv },
-      { id: "panel-2", type: "panel", rel: { X: 16, Y: 0 }, envelope: panelEnv },
+      // ±5 worksite units (≈3 scene units apart) so the two panels stand
+      // shoulder-to-shoulder as one array — kept in sync with Go's solarArrayBlueprint.
+      { id: "pad-1", type: "foundation", rel: { X: -5, Y: 0 }, envelope: footEnv },
+      { id: "pad-2", type: "foundation", rel: { X: 5, Y: 0 }, envelope: footEnv },
+      { id: "panel-1", type: "panel", rel: { X: -5, Y: 0 }, envelope: panelEnv },
+      { id: "panel-2", type: "panel", rel: { X: 5, Y: 0 }, envelope: panelEnv },
     ],
   };
 }

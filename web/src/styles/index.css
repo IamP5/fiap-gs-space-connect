@@ -36,6 +36,45 @@
   --panel-bg: #0d0f14;
   --panel-edge: #2b313c;
 
+  /* ---- diegetic HUD tokens (Milestone 08 — DESIGN.md "In-World Mission HUD") ----
+     The panel plate is retired as a HUD container; legibility now comes from the
+     TYPE itself. --hud-ink-shadow is the four-way ink outline + soft dark halo that
+     floats white type over a bright lunar highlight (inherits to all child text).
+     --hud-glow-* are the additive bloom around the cyan build thread / amber state,
+     emitted as light, never a fill. (Lab cards still use --panel-bg/--panel-edge.) */
+  --hud-ink-shadow:
+    -1px 0 0 rgba(0, 0, 0, 0.9), 1px 0 0 rgba(0, 0, 0, 0.9),
+    0 -1px 0 rgba(0, 0, 0, 0.9), 0 1px 0 rgba(0, 0, 0, 0.9),
+    0 0 8px rgba(0, 0, 0, 0.7), 0 0 20px rgba(0, 0, 0, 0.45);
+  --hud-glow-cyan: 0 0 6px color-mix(in srgb, var(--hud-accent) 65%, transparent),
+    0 0 16px color-mix(in srgb, var(--hud-accent) 32%, transparent);
+  --hud-glow-amber: 0 0 6px color-mix(in srgb, var(--hud-warn) 65%, transparent),
+    0 0 16px color-mix(in srgb, var(--hud-warn) 32%, transparent);
+
+  /* Diegetic muted ink — the secondary-text tier for the plateless HUD. On the
+     black marketing canvas "muted" is a DARK gray (--ink-mute #5a5a5f): dimmer than
+     white, lower in the hierarchy. But the in-world HUD floats over a BRIGHT lunar
+     surface, where dark-gray text vanishes — the --hud-ink-shadow outline is itself
+     black, so a dark fill + dark outline merge into an illegible smudge (only the
+     WHITE primary tier held). Over the scene "muted" must instead read as a DIMMED
+     WHITE: light enough that the same black outline + halo give it contrast, dim
+     enough to stay a clear notch below the white values. Scoped onto the HUD roots
+     in dashboard.css; dark-plate lab cards keep the original --ink-mute. */
+  --hud-ink-mute: #c8ccd8;
+
+  /* Diegetic divider — the hairline tier for the plateless HUD. Same story as
+     --hud-ink-mute: the dark-canvas hairlines (--hairline-on-dark / --panel-edge,
+     near-black) vanish or smear over the bright lunar surface. A divider over the
+     scene reads as EMITTED LIGHT instead — a dimmed-white rule that holds on bright
+     regolith and the dark orbit vista alike. --hud-divider-glow is the soft dark
+     halo that floats a standalone divider off the surface, so the light-core +
+     dark-halo pairing reads with depth (applied via `filter`, so it's for dedicated
+     divider elements, not border-based rules). Monochrome by design — structure is
+     never tinted; the cyan/amber tint stays reserved for active/data. */
+  --hud-divider: color-mix(in srgb, var(--on-primary) 42%, transparent);
+  --hud-divider-strong: color-mix(in srgb, var(--on-primary) 60%, transparent);
+  --hud-divider-glow: drop-shadow(0 0 1.5px rgba(0, 0, 0, 0.6));
+
   /* ---- type families ---- */
   --display: "D-DIN-Bold", "Arial Narrow", Arial, Verdana, sans-serif;
   --ui: "D-DIN", "Inter", Arial, Verdana, sans-serif;

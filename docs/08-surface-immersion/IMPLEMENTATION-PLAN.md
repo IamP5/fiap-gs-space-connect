@@ -252,6 +252,28 @@ Recommended issue breakdown (tracer-bullet vertical slices):
 P1–P4 are pure code/data + texture swaps (no new GLB downloads), so they can land
 fast. P5 carries the NASA download/condition/audit work.
 
+### Carry-over hardening (from the #171 glTF-pipeline audit)
+
+The #171 fix (`f56fb92`, `a7a6465`) closed the silent cache-poisoning crash class
+and added asset-fallback logging. A two-agent sweep surfaced three LOW-severity,
+non-crashing follow-ups — all touch files the remaining slices already edit, so
+they ride along rather than getting their own issue:
+
+- **#174 (touches `LaunchScenery.tsx` for the base layout):**
+  - `fitAndSeat` / `fitAndSeatRover` silently no-op on an empty bounding box (a
+    points/lines-only glTF) → model left at raw native coords/scale. Add a
+    fallback: seat at origin + target scale so a degenerate asset still lands
+    sanely. (also in `Scene3D.tsx`)
+  - `mergeSetPiece` pairs geometry slices to materials by sequential index, not
+    `geometry.groups[g].materialIndex` → wrong material on a non-sequential glTF.
+    Switch to `group.materialIndex` lookup while reworking set-pieces.
+- **#173 (touches `Scene3D.tsx` for the cave/boulder landform):**
+  - The resurrection-flash clone is cast `as MeshStandardMaterial` unsoundly;
+    guard the `.emissive` write on `isMeshStandardMaterial` (latent unsafe-read
+    landmine) when next editing that region.
+
+Each is a small guard; fold into the slice's commits, not a standalone PR.
+
 ---
 
 ## Risks & guardrails

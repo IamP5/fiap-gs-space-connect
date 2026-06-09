@@ -117,8 +117,8 @@ func TestPlace_TranslatesAndRotates(t *testing.T) {
 }
 
 // TestPlace_RotationMovesOffsetTasks checks that a non-origin task actually
-// rotates: the solar array's pad-2 sits at relative (16,0); a 90° rotation should
-// move it to (origin.X, origin.Y+16) (world +Y), proving rotation is applied.
+// rotates: the solar array's pad-2 sits at relative (5,0); a 90° rotation should
+// move it to (origin.X, origin.Y+5) (world +Y), proving rotation is applied.
 func TestPlace_RotationMovesOffsetTasks(t *testing.T) {
 	cat := blueprint.DefaultCatalog()
 	solar, _ := cat.Get("solar-array")
@@ -131,9 +131,9 @@ func TestPlace_RotationMovesOffsetTasks(t *testing.T) {
 			pad2 = p
 		}
 	}
-	// (16,0) rotated +90° → (0,16).
-	if math.Abs(pad2.Pos.X-0) > 1e-6 || math.Abs(pad2.Pos.Y-16) > 1e-6 {
-		t.Fatalf("pad-2 after 90° rotation = %v, want ~(0,16)", pad2.Pos)
+	// (5,0) rotated +90° → (0,5).
+	if math.Abs(pad2.Pos.X-0) > 1e-6 || math.Abs(pad2.Pos.Y-5) > 1e-6 {
+		t.Fatalf("pad-2 after 90° rotation = %v, want ~(0,5)", pad2.Pos)
 	}
 }
 

@@ -1505,7 +1505,7 @@ function SiteMarkers({
   );
 }
 
-// --- Nebula hero (orbit view only) — a deep-space vista accent ---------------
+// --- Nebula hero (both views) — a deep-space vista accent --------------------
 // A 3-layer ADDITIVE sprite stack using the ESA/Hubble Veil Nebula ("Witch's
 // Broom", heic0712a — CC-BY 4.0). The raw image has a BRIGHT, busy background, so
 // it is conditioned OFFLINE for additive use: the dark background is crushed to
@@ -1514,20 +1514,26 @@ function SiteMarkers({
 // that, additive over the sky shows only the bright filaments as faint nebulosity
 // hanging in deep space (space-view-realism.md §4), against the Milky-Way band.
 //
-// Orbit-view-only — gated exactly like MoonGlobe (the worksite is ON the Moon, so
-// a deep-space accent only belongs in the orbit vista). Demand-loop safe: the
-// image loads imperatively (no Suspense throw), invalidate()s once on load and
-// once on every visibility toggle; NO useFrame (three.Sprite billboards on the GPU
-// with no per-frame work). All layers toneMapped:false, depthWrite:false,
-// fog:false, raycast={()=>null}; NOT on the bloom layer.
+// PER-VIEW BERTH (milestone 08): the accent shows in BOTH views, re-berthed when
+// the rendered view flips (behind the descent's glare peak, like the sky sphere's
+// yaw). Demand-loop safe: the image loads imperatively (no Suspense throw),
+// invalidate()s once on load and once on every visibility/berth toggle; NO
+// useFrame (three.Sprite billboards on the GPU with no per-frame work). All
+// layers toneMapped:false, depthWrite:false, fog:false, raycast={()=>null}; NOT
+// on the bloom layer.
 //
 // ADR-0004 fallback: if the Veil image fails to load, a procedural radial-gradient
 // CanvasTexture stands in so the accent never blanks.
 
-// Berthed off in the deep-space vista — beyond Earth, low and to the right, so it
-// fills a corner of the orbit frame without crowding the Moon hero or Earth.
+// Orbit berth: off in the deep-space vista — beyond Earth, low and to the right,
+// so it fills a corner of the orbit frame without crowding the Moon hero or Earth.
 const NEBULA_POSITION: [number, number, number] = [1700, -650, -3200];
 const NEBULA_SIZE = 1700; // base sprite scale (world units across)
+// Surface berth: the surface camera looks toward −Z; hang the filaments up-left
+// of the worksite, ~25° above the horizon, where they read against the lifted
+// galactic arc without crowding the sun flare (which sits high in the band).
+const NEBULA_POSITION_SURFACE: [number, number, number] = [-1500, 1550, -2800];
+const NEBULA_SIZE_SURFACE = 1450;
 
 // Procedural radial-gradient nebula fallback (ADR-0004): a soft cool-violet cloud,
 // so the accent is never blank if the Veil image fails to load.
@@ -1549,7 +1555,7 @@ function makeNebulaFallbackTexture(): THREE.Texture | null {
   return tex;
 }
 
-function NebulaHero({ visible }: { visible: boolean }) {
+function NebulaHero({ visible, onSurface }: { visible: boolean; onSurface: boolean }) {
   const invalidate = useThree((s) => s.invalidate);
 
   // The displayed texture: starts as the procedural fallback, swapped to the Veil
@@ -1580,13 +1586,16 @@ function NebulaHero({ visible }: { visible: boolean }) {
   // the shared texture cache, which keeps it for the session).
   useEffect(() => () => fallbackTex?.dispose(), [fallbackTex]);
 
-  // Toggling visibility under the demand loop must wake one frame so the change is
-  // painted; otherwise the accent sticks.
+  // Toggling visibility/berth under the demand loop must wake one frame so the
+  // change is painted; otherwise the accent sticks.
   useEffect(() => {
     invalidate();
-  }, [visible, invalidate]);
+  }, [visible, onSurface, invalidate]);
 
   if (!visible || !tex) return null;
+
+  const position = onSurface ? NEBULA_POSITION_SURFACE : NEBULA_POSITION;
+  const size = onSurface ? NEBULA_SIZE_SURFACE : NEBULA_SIZE;
 
   // Three CONCENTRIC additive layers at decreasing size/opacity → a layered, soft
   // cloud with a brighter core. The layers are concentric (NOT offset): the texture
@@ -1601,11 +1610,11 @@ function NebulaHero({ visible }: { visible: boolean }) {
   ];
 
   return (
-    <group position={NEBULA_POSITION} raycast={() => null}>
+    <group position={position} raycast={() => null}>
       {layers.map((l, i) => (
         <sprite
           key={i}
-          scale={[NEBULA_SIZE * l.scale, NEBULA_SIZE * l.scale, 1]}
+          scale={[size * l.scale, size * l.scale, 1]}
           raycast={() => null}
         >
           <spriteMaterial
@@ -1625,8 +1634,8 @@ function NebulaHero({ visible }: { visible: boolean }) {
 
 // SkyBodies — the Sun (light emitter, both views) + the Moon globe (orbit-only,
 // the space-vista hero) + Earth (a distant marble, both views) + the clickable
-// site markers (orbit-only) + the nebula hero accent (orbit-only). The
-// starfield (SpaceEnvironment) shows in both.
+// site markers (orbit-only) + the nebula hero accent (both views, per-view
+// berth). The starfield (SpaceEnvironment) shows in both.
 // `onSelectSite`, when provided, selects that site AND flips to surface view (the
 // descent) when its orbit marker is clicked — the primary entry into the surface.
 export function SkyBodies({
@@ -1658,7 +1667,7 @@ export function SkyBodies({
         occludeBehindMoon={inOrbit}
       />
       <MoonGlobe visible={inOrbit} />
-      <NebulaHero visible={inOrbit} />
+      <NebulaHero visible onSurface={!inOrbit} />
       <EarthBody visible viewMode={viewMode} />
       {inOrbit && onSelectSite ? (
         <SiteMarkers

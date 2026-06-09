@@ -267,7 +267,7 @@ func (c Config) opsFor(task domain.TaskID, t domain.TaskType) []wire.BuildOp {
 	if ops, ok := c.replayOps(task); ok {
 		return ops // cache hit: replay the committed baked spec deterministically
 	}
-	return buildOpsFor(t) // cache miss (or no blueprint): primitive fallback stream
+	return buildOpsFor(task, t) // cache miss (or no blueprint): procedural module stream
 }
 
 // replayOps looks up a baked spec for (BlueprintID, task) via the configured

@@ -150,19 +150,37 @@ export function polishGltfMaterials<T extends THREE.Object3D>(
 
     const std = mat as THREE.MeshStandardMaterial;
     const windowMatch = nameWindow || /window/i.test(mat.name);
-    const metalish = typeof std.metalness === "number" && std.metalness > 0.3;
-    const needsPhysical = isSolar || metalish;
+    // Only MeshStandardMaterial (and its MeshPhysicalMaterial subclass) carry the
+    // metalness/emissive/clearcoat fields this polish reads and writes. A glTF can
+    // legally supply other material types — most relevantly a MeshBasicMaterial via
+    // KHR_materials_unlit, but also points/line materials. Touching standard-only
+    // fields on those throws: the upgrade copy below reads source.emissive (and
+    // MeshPhysicalMaterial.copy reads clearcoatNormalScale) → `.copy(undefined)`,
+    // the exact crash class of #171 — and here it would reject the SET-PIECE parse
+    // for a solar-panel GLB with an unlit mesh, poisoning the scenery cache for
+    // every reload. Gate every upgrade/tune on the source actually being standard.
+    const isStandard = (std as THREE.MeshStandardMaterial).isMeshStandardMaterial === true;
+    const metalish = isStandard && typeof std.metalness === "number" && std.metalness > 0.3;
+    const needsPhysical = isStandard && (isSolar || metalish);
 
     let out: THREE.MeshStandardMaterial = std;
     if (needsPhysical && !(mat as THREE.MeshPhysicalMaterial).isMeshPhysicalMaterial) {
       const phys = new THREE.MeshPhysicalMaterial();
-      phys.copy(std); // copies all standard props + MAP REFERENCES (not clones)
+      // Copy via the STANDARD-material copy, not MeshPhysicalMaterial.copy: the
+      // latter reads physical-only Vector2 fields (clearcoatNormalScale,
+      // iridescenceThicknessRange, …) off the source, which a plain
+      // MeshStandardMaterial lacks → `Vector2.copy(undefined)` throws and the
+      // whole glTF parse rejects (a non-physical metal material like the
+      // Perseverance rover's tripped this → silent primitive fallback). Copying
+      // at the standard level brings every standard prop + map reference across
+      // while leaving the new physical material's own defaults intact.
+      THREE.MeshStandardMaterial.prototype.copy.call(phys, std);
       toDispose.add(std);
       out = phys;
     }
     const phys = out as THREE.MeshPhysicalMaterial;
 
-    if (isSolar) {
+    if (isSolar && phys.isMeshPhysicalMaterial) {
       phys.metalness = 0.8;
       phys.roughness = 0.3;
       phys.anisotropy = 0.6;
@@ -171,7 +189,7 @@ export function polishGltfMaterials<T extends THREE.Object3D>(
       phys.clearcoat = 0.5;
       phys.clearcoatRoughness = 0.4;
     }
-    if (windowMatch) {
+    if (windowMatch && isStandard) {
       out.emissive = new THREE.Color(WINDOW_EMISSIVE);
       out.emissiveIntensity = 0.2;
       out.userData.__window = true;

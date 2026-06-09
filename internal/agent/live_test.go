@@ -420,7 +420,7 @@ func TestLiveMode_ForcedErrorDegradesToPrimitive(t *testing.T) {
 	// The streamed ops must be the deterministic foundation primitive stream — a
 	// box first, NOT the live spheres — proving the graceful degrade.
 	got := h.ops()
-	want := buildOpsFor(typeFoundation)
+	want := buildOpsFor("foundation-live", typeFoundation)
 	if len(got) != len(want) {
 		t.Fatalf("fallback must stream the primitive foundation stream: got %d ops, want %d", len(got), len(want))
 	}
@@ -470,7 +470,7 @@ func TestPerTaskReplay_LiveConfigRoverReplays(t *testing.T) {
 		t.Fatalf("a replay-tagged Task must NEVER reach the LiveBuilder; got %d calls", builder.callCount())
 	}
 	got := h.ops()
-	want := buildOpsFor(typeFoundation)
+	want := buildOpsFor("foundation-live", typeFoundation)
 	if len(got) != len(want) {
 		t.Fatalf("replay-tagged Task must stream the primitive stream: got %d ops, want %d", len(got), len(want))
 	}
@@ -588,7 +588,7 @@ func TestReplayMode_NeverReachesLiveBuilder(t *testing.T) {
 	}
 
 	got := h.ops()
-	want := buildOpsFor(typeFoundation)
+	want := buildOpsFor("foundation-live", typeFoundation)
 	if len(got) != len(want) {
 		t.Fatalf("replay must stream the primitive stream: got %d ops, want %d", len(got), len(want))
 	}

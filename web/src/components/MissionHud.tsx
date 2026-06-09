@@ -66,7 +66,7 @@ export const MissionHud = memo(function MissionHud({
   const allRoversDown = roversTotal > 0 && roversAlive === 0;
 
   return (
-    <aside className="mission-hud panel hud-surface-panel">
+    <aside className="mission-hud hud-surface-panel">
       {/* The whole compact summary is the expand toggle (a button for keyboard +
           a11y); the detail list reveals below it. */}
       <button

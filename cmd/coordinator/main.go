@@ -5,9 +5,11 @@
 // that build it — including the kill → self-heal money shot, paced so a
 // first-time viewer can read it (slice 06).
 //
-// COORDINATOR_ROVERS=external switches to pod-per-rover mode: the coordinator
-// spawns no in-process rovers and arms no scripted kill; rovers join over NATS as
-// their own containers/pods and the dashboard's KILL is a real pod delete.
+// COORDINATOR_ROVERS=external switches to the pod-per-rover sandbox: the
+// coordinator boots an EMPTY map (no seeded dome), spawns no in-process rovers, and
+// arms no scripted kill; rovers join over NATS as their own containers/pods and idle
+// until an operator drops a Blueprint from the dashboard for them to build, and the
+// dashboard's KILL is a real pod delete.
 package main
 
 import (
@@ -51,12 +53,15 @@ func run() error {
 	//   - "inproc" (default/empty): the coordinator spawns the six-rover swarm
 	//     in-process and arms the reproducible rehearsal kill — the docker-compose
 	//     demo, byte-for-byte unchanged.
-	//   - "external": pod-per-rover mode. The coordinator spawns NO rovers and arms
-	//     NO scripted kill; rovers join over NATS as their own containers/pods, and
-	//     the dashboard's KILL is a real pod delete (the killer sidecar's kubectl
-	//     backend, KILLER_BACKEND=kubectl). The coordinator still runs the auction,
-	//     the Lease Manager, the World Model, and snapshots, and the swarm
-	//     Self-heals over the real bus.
+	//   - "external": the pod-per-rover SANDBOX. The coordinator boots an EMPTY board
+	//     (no seeded dome), spawns NO rovers, and arms NO scripted kill; rovers join
+	//     over NATS as their own containers/pods, and the dashboard's KILL is a real
+	//     pod delete (the killer sidecar's kubectl backend, KILLER_BACKEND=kubectl).
+	//     The coordinator still runs the auction, the Lease Manager, the World Model,
+	//     and snapshots — there is just nothing to build until an operator drops a
+	//     Blueprint from the dashboard hotbar (placeBlueprint); the untagged placement
+	//     clears the site gate, so the siteless Rover Pods bid on it and build it, and
+	//     the swarm Self-heals a pod-delete KILL over the real bus.
 	//   - "cinematic" (Epic 07, ADR-0011): the demo pacing for the 2:30 shooting
 	//     script. It KEEPS the in-process six-rover swarm but DISARMS the early
 	//     scripted auto-kill — the operator owns the Kill. The hero wall (lunar/wall-1)

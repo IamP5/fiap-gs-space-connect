@@ -1,9 +1,10 @@
 # Coordinator — the live brain (auction, Lease/Expiry, Re-auction, World Model).
 # In this pod-per-rover variant it runs with ZERO in-process rovers
-# (COORDINATOR_ROVERS=external): every Rover is its own Pod (50-..55-rover-r*.yaml)
-# joining over NATS, so the kill is a real `kubectl delete pod`, not an in-proc
-# scripted kill. The coordinator can't tell which host a Rover runs in — that
-# equivalence is the point.
+# (COORDINATOR_ROVERS=external) and boots an EMPTY board — nothing is seeded on the
+# map, so the operator drops a Blueprint from the dashboard hotbar and the Rover
+# Pods build it. Every Rover is its own Pod (50-..55-rover-r*.yaml) joining over
+# NATS. The coordinator can't tell which host a Rover runs in — that equivalence is
+# the point.
 apiVersion: apps/v1
 kind: Deployment
 metadata:
