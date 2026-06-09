@@ -19,6 +19,7 @@
 //     holds. We never throw; preload counts a failed asset as done.
 
 import * as THREE from "three";
+import { reportAssetWarning } from "./assetLog";
 
 // One shared loader for every cached image (TextureLoader has no per-instance
 // state we need to vary).
@@ -61,9 +62,12 @@ export function loadTexture(url: string): THREE.Texture {
         resolve();
       },
       undefined,
-      () => {
+      (err) => {
         // Missing/failed (ADR-0004): leave the empty texture so the consumer's flat
         // fallback holds. SETTLE — preload must never reject on a per-asset failure.
+        // Log WHICH map failed (404 / CORS / decode) so a flat-coloured surface or
+        // rock isn't an undiagnosable mystery.
+        reportAssetWarning("texture", url, err);
         resolve();
       },
     );

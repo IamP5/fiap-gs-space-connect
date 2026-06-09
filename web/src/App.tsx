@@ -262,11 +262,19 @@ export default function App() {
     // chunk parse doesn't add a stall after the bar fills.
     void import("./components/Scene3D");
     // Kick the asset preload via a dynamic import (keeps three out of the shell).
-    void import("./lib/assets").then(({ preloadAllAssets }) =>
-      preloadAllAssets((loaded, total) => {
-        setProgress(total > 0 ? loaded / total : 1);
-      }).then(reveal),
-    );
+    // preloadAllAssets never rejects (per-asset failures settle), so the only
+    // rejection here is the dynamic CHUNK import failing — in which case the
+    // safety timeout still reveals the scene, but we log so a 9s splash hang has a
+    // cause instead of being silent.
+    void import("./lib/assets")
+      .then(({ preloadAllAssets }) =>
+        preloadAllAssets((loaded, total) => {
+          setProgress(total > 0 ? loaded / total : 1);
+        }).then(reveal),
+      )
+      .catch((err) => {
+        console.error("[asset] preload chunk failed to load:", err);
+      });
     return () => window.clearTimeout(timer);
   }, []);
 

@@ -63,6 +63,7 @@ import { batteryPercent } from "../lib/format";
 import { suppressRaycast } from "../lib/suppressRaycast";
 import { applyGltfTextureFidelity, polishGltfMaterials } from "../lib/textureFidelity";
 import { loadTexture, preloadTexture } from "../lib/textureCache";
+import { reportAssetError } from "../lib/assetLog";
 import {
   CRATER_OUTER_RADIUS,
   EARTH_POSITION,
@@ -582,8 +583,10 @@ function RoverBody({
         setScene(obj);
         invalidate(); // wake the demand loop once so the model shows when loaded
       })
-      .catch(() => {
-        // Missing/failed glTF ⇒ keep the primitive fallback below (never crash).
+      .catch((err) => {
+        // Missing/failed glTF ⇒ keep the primitive fallback below (never crash),
+        // but surface WHY (404 / Draco decode / network) so a box isn't a mystery.
+        reportAssetError("rover", ROVER_MODEL_REF, err);
       });
     return () => {
       disposed = true;
@@ -1160,21 +1163,30 @@ export function loadGLTF(url: string): Promise<THREE.Group> {
       gltfLoader.load(
         url,
         (g) => {
-          // Suppress raycast on every child of the CACHED SOURCE once. This keeps
-          // the source itself non-pickable and documents the asset-wide intent.
-          // NOTE: Object3D.clone(true) does NOT copy this own-property override
-          // onto clones (raycast is normally a prototype method), so each
-          // placement must ALSO re-suppress its clone — see suppressRaycast() use
-          // in SpecModel. Doing both keeps glTF child meshes unpickable so only a
-          // rover's invisible hit-proxy sphere stays pickable, keeping
-          // click-to-kill deterministic and letting onPointerMissed deselect on
-          // empty space.
-          suppressRaycast(g.scene);
-          // Material tier polish (#111): clearcoat on metal, solar glint when the
-          // URL names a panel, warm emissive on *window* submeshes (bloom layer).
-          // Run ONCE on the cached source so every clone inherits it (clone(true)
-          // shares materials + copies the per-mesh layers mask).
-          polishGltfMaterials(g.scene, { bloomLayer: CELESTIAL_BLOOM_LAYER, url });
+          try {
+            // Suppress raycast on every child of the CACHED SOURCE once. This keeps
+            // the source itself non-pickable and documents the asset-wide intent.
+            // NOTE: Object3D.clone(true) does NOT copy this own-property override
+            // onto clones (raycast is normally a prototype method), so each
+            // placement must ALSO re-suppress its clone — see suppressRaycast() use
+            // in SpecModel. Doing both keeps glTF child meshes unpickable so only a
+            // rover's invisible hit-proxy sphere stays pickable, keeping
+            // click-to-kill deterministic and letting onPointerMissed deselect on
+            // empty space.
+            suppressRaycast(g.scene);
+            // Material tier polish (#111): clearcoat on metal, solar glint when the
+            // URL names a panel, warm emissive on *window* submeshes (bloom layer).
+            // Run ONCE on the cached source so every clone inherits it (clone(true)
+            // shares materials + copies the per-mesh layers mask).
+            polishGltfMaterials(g.scene, { bloomLayer: CELESTIAL_BLOOM_LAYER, url });
+          } catch (err) {
+            // Decorate/polish must NEVER reject: this promise is already in
+            // gltfCache, so a rejection caches the FAILURE and poisons every later
+            // consumer into a permanent primitive fallback (#171 — a single
+            // material throw blanked every rover). Log it and resolve the raw,
+            // un-polished model — a slightly-less-shiny model beats a box forever.
+            reportAssetError("glTF polish", url, err);
+          }
           resolve(g.scene);
         },
         undefined,
@@ -1352,8 +1364,10 @@ function SpecModel({
         setScene(obj);
         invalidate();
       })
-      .catch(() => {
-        // Missing/failed glTF ⇒ keep the box fallback below (never crash).
+      .catch((err) => {
+        // Missing/failed glTF ⇒ keep the box fallback below (never crash), but
+        // log WHICH spec model ref failed so a stray box has a traceable cause.
+        reportAssetError("spec model", desc.modelRef, err);
       });
     return () => {
       disposed = true;

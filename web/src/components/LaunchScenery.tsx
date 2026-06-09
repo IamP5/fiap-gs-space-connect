@@ -34,6 +34,7 @@ import {
   type SetPiece,
 } from "../lib/scene";
 import { CELESTIAL_BLOOM_LAYER } from "./Scene3D";
+import { reportAssetError } from "../lib/assetLog";
 
 // Self-contained loader + cache (mirrors Scene3D's loadGLTF): N references to the
 // same .glb parse it ONCE, and the parsed scene is cloned per placement so
@@ -63,11 +64,19 @@ export function loadScenery(url: string): Promise<THREE.Group> {
       sceneryLoader.load(
         url,
         (g) => {
-          suppressRaycast(g.scene);
-          // Material tier polish (#111): clearcoat on metal set-pieces (the crawler,
-          // launcher, gantry all read as steel), solar glint by URL, emissive
-          // *window* submeshes on the bloom layer. Once on the cached source.
-          polishGltfMaterials(g.scene, { bloomLayer: CELESTIAL_BLOOM_LAYER, url });
+          try {
+            suppressRaycast(g.scene);
+            // Material tier polish (#111): clearcoat on metal set-pieces (the crawler,
+            // launcher, gantry all read as steel), solar glint by URL, emissive
+            // *window* submeshes on the bloom layer. Once on the cached source.
+            polishGltfMaterials(g.scene, { bloomLayer: CELESTIAL_BLOOM_LAYER, url });
+          } catch (err) {
+            // Decorate/polish must NEVER reject: this promise is already in
+            // sceneryCache, so a rejection caches the FAILURE and poisons every
+            // later placement into a permanent box (#171 class — e.g. a solar-panel
+            // GLB with an unlit mesh). Log and resolve the raw model instead.
+            reportAssetError("set-piece polish", url, err);
+          }
           resolve(g.scene);
         },
         undefined,
@@ -362,8 +371,10 @@ function SceneryPiece({ piece }: { piece: SetPiece }) {
         setMerged(geometries); // own these buffers; dispose on unmount/reload
         invalidate(); // wake the demand loop so the scenery shows once loaded
       })
-      .catch(() => {
-        // Missing/failed glTF ⇒ keep the box fallback below (never crash).
+      .catch((err) => {
+        // Missing/failed glTF ⇒ keep the box fallback below (never crash), but log
+        // WHICH set-piece ref failed (the DRACOLoader-required path, a 404, etc.).
+        reportAssetError("set-piece", piece.modelRef, err);
       });
     return () => {
       disposed = true;

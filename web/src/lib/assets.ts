@@ -30,6 +30,7 @@
 import { RGBELoader } from "three/examples/jsm/loaders/RGBELoader.js";
 
 import { preloadTexture } from "./textureCache";
+import { reportAssetWarning } from "./assetLog";
 import { ROVER_MODEL_REF, REGOLITH_MAPS, loadGLTF } from "../components/Scene3D";
 import { SCENERY_MODEL_REFS, loadScenery } from "../components/LaunchScenery";
 import { HDR_FILE, STAR_BG_FILE } from "../components/SpaceEnvironment";
@@ -94,7 +95,13 @@ function preloadGLB(url: string): Promise<void> {
   const loader = SCENERY_MODEL_REFS.includes(url) ? loadScenery : loadGLTF;
   return loader(url).then(
     () => undefined,
-    () => undefined, // ADR-0004: a failed model keeps its in-scene box fallback
+    (err) => {
+      // ADR-0004: a failed model keeps its in-scene box fallback. The same
+      // rejected promise is memoised, so the in-scene loader's own .catch logs it
+      // again at mount — but log here too so a preload-phase failure is visible
+      // before the user ever reaches the surface.
+      reportAssetWarning("preload glTF", url, err);
+    },
   );
 }
 
@@ -110,7 +117,12 @@ function preloadHDR(url: string): Promise<void> {
         resolve();
       },
       undefined,
-      () => resolve(), // ADR-0004: a failed HDR → the error boundary keeps the scene
+      (err) => {
+        // ADR-0004: a failed HDR → the scene keeps its non-IBL lighting. Log which
+        // .hdr failed so "the scene looks flat/unlit" has a traceable cause.
+        reportAssetWarning("HDR environment", url, err);
+        resolve();
+      },
     );
   });
 }

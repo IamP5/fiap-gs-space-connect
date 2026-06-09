@@ -139,4 +139,35 @@ describe("polishGltfMaterials", () => {
     polishGltfMaterials(root, { bloomLayer: BLOOM });
     expect((mesh.material as THREE.MeshPhysicalMaterial).isMeshPhysicalMaterial).toBeFalsy();
   });
+
+  // Regression (#171, 2nd instance): the solar-glint path forces a physical
+  // upgrade by URL — bypassing the metalness check — so a solar-panel GLB whose
+  // mesh is an unlit MeshBasicMaterial (KHR_materials_unlit) would hit
+  // `MeshStandardMaterial.prototype.copy.call(phys, basic)` → `Color.copy(undefined)`
+  // reading the basic material's absent `.emissive`. That throw rejected the
+  // set-piece parse and poisoned the scenery cache forever. The standard-type
+  // guard must skip the upgrade and leave the basic material untouched.
+  it("leaves a non-standard (unlit) material alone on a solar URL — no throw", () => {
+    const basic = new THREE.MeshBasicMaterial();
+    const mesh = new THREE.Mesh(new THREE.BoxGeometry(), basic);
+    const root = new THREE.Group().add(mesh);
+
+    expect(() =>
+      polishGltfMaterials(root, { bloomLayer: BLOOM, url: "/assets/models/solar-panel.glb" }),
+    ).not.toThrow();
+    expect((mesh.material as THREE.MeshBasicMaterial).isMeshBasicMaterial).toBe(true);
+  });
+
+  // The solar URL still upgrades a genuine MeshStandardMaterial and applies glint.
+  it("upgrades a standard material on a solar URL and applies anisotropic glint", () => {
+    const std = new THREE.MeshStandardMaterial(); // metalness 0 — solar path bypasses that
+    const mesh = new THREE.Mesh(new THREE.BoxGeometry(), std);
+    const root = new THREE.Group().add(mesh);
+
+    polishGltfMaterials(root, { bloomLayer: BLOOM, url: "/assets/models/solar-panel.glb" });
+    const out = mesh.material as THREE.MeshPhysicalMaterial;
+    expect(out.isMeshPhysicalMaterial).toBe(true);
+    expect(out.anisotropy).toBe(0.6);
+    expect(out.metalness).toBe(0.8);
+  });
 });
