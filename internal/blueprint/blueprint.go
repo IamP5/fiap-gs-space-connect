@@ -244,8 +244,13 @@ func contractsFor(tasks []Task) map[domain.TaskID]Contract {
 // on its foundation, a dome-cap needing all walls) so a placed dome injects the
 // same DAG the demo rovers already build.
 func domeBlueprint() Blueprint {
-	wallPos := ring(8, 46, 90)
-	foundationPos := ring(4, 24, 68)
+	// Ring radii are worksite units; the renderer draws 1 unit ≈ 0.3 scene units
+	// (SCENE_UNITS_PER_METER·worksiteUnitsToMeters), so these compact radii ring the
+	// walls/foundations snugly around the dome skirt instead of scattering them
+	// across the plain. The dome shell occupies ~10 worksite units of radius, so the
+	// wall ring sits just outside it.
+	wallPos := ring(8, 12, 90)
+	foundationPos := ring(4, 11, 68)
 
 	footEnv := Envelope{Center: domain.Vec3{}, Size: domain.Vec3{X: 14, Y: 14, Z: 4}}
 	wallEnv := Envelope{Center: domain.Vec3{}, Size: domain.Vec3{X: 12, Y: 12, Z: 14}}
@@ -297,11 +302,14 @@ func solarArrayBlueprint() Blueprint {
 	footEnv := Envelope{Center: domain.Vec3{}, Size: domain.Vec3{X: 16, Y: 12, Z: 3}}
 	panelEnv := Envelope{Center: domain.Vec3{Z: 6}, Size: domain.Vec3{X: 18, Y: 14, Z: 8}}
 
+	// Pads sit ±5 worksite units off the origin (≈3 scene units apart) so the two
+	// sun-tracking panels stand shoulder-to-shoulder as one array, not two isolated
+	// panels marooned across the plain.
 	tasks := []Task{
-		{ID: "pad-1", Type: TypeFoundation, Pos: domain.Vec2{X: -16, Y: 0}, Envelope: footEnv},
-		{ID: "pad-2", Type: TypeFoundation, Pos: domain.Vec2{X: 16, Y: 0}, Envelope: footEnv},
-		{ID: "panel-1", Type: TypePanel, Deps: []domain.TaskID{"pad-1"}, Pos: domain.Vec2{X: -16, Y: 0}, Envelope: panelEnv},
-		{ID: "panel-2", Type: TypePanel, Deps: []domain.TaskID{"pad-2"}, Pos: domain.Vec2{X: 16, Y: 0}, Envelope: panelEnv},
+		{ID: "pad-1", Type: TypeFoundation, Pos: domain.Vec2{X: -5, Y: 0}, Envelope: footEnv},
+		{ID: "pad-2", Type: TypeFoundation, Pos: domain.Vec2{X: 5, Y: 0}, Envelope: footEnv},
+		{ID: "panel-1", Type: TypePanel, Deps: []domain.TaskID{"pad-1"}, Pos: domain.Vec2{X: -5, Y: 0}, Envelope: panelEnv},
+		{ID: "panel-2", Type: TypePanel, Deps: []domain.TaskID{"pad-2"}, Pos: domain.Vec2{X: 5, Y: 0}, Envelope: panelEnv},
 	}
 	return Blueprint{
 		ID:          "solar-array",

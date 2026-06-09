@@ -105,7 +105,7 @@ import {
   type PrimitiveDesc,
   interpretBuildSpec,
 } from "../lib/buildspec";
-import { type Ghost, dragDeltaToRadians, footprintOf } from "../lib/placement";
+import { type Ghost, dragDeltaToRadians } from "../lib/placement";
 import {
   IDLE_DELAY_MS,
   ORBIT_EXPOSURE_SCALE,
@@ -123,6 +123,7 @@ import {
 import { LaunchScenery } from "./LaunchScenery";
 import { LavaTubeSkylight, LavaTubeBoulders } from "./LavaTube";
 import { LunarBaseDecals } from "./BaseDecals";
+import { StructurePiece, kindFootprintRadius, kindOf, type StructurePhase } from "./Structures";
 
 // Functional telemetry colors (DESIGN.md: live-data signals only — the brand
 // palette itself is black + white). Matched to the 2D canvas so the two
@@ -292,9 +293,6 @@ type SceneGeo = {
   won: THREE.RingGeometry;
   sel: THREE.RingGeometry;
   battery: THREE.BoxGeometry; // unit box, scaled in x by charge
-  foundation: THREE.BoxGeometry;
-  wall: THREE.BoxGeometry;
-  dome: THREE.SphereGeometry;
   // Unit primitives for the Build-spec interpreter (ADR-0006): each interpreted
   // op reuses one of these and is scaled per-op, so a spec of N ops still costs
   // only these 3 shared GPU buffers (r3f-geometry "Reuse geometries").
@@ -323,9 +321,6 @@ function makeSceneGeo(): SceneGeo {
     won: new THREE.RingGeometry(0.82, 0.98, 40),
     sel: new THREE.RingGeometry(0.9, 1.02, 48),
     battery: new THREE.BoxGeometry(1, 0.06, 0.06),
-    foundation: new THREE.BoxGeometry(1.1, 0.3, 1.1),
-    wall: new THREE.BoxGeometry(0.9, 1.1, 0.9),
-    dome: new THREE.SphereGeometry(1.0, 24, 16, 0, Math.PI * 2, 0, Math.PI / 2),
     // Unit primitives (edge/diameter 1) so a Build op's scale maps directly.
     // withUV2 gives each a uv2 channel so a Material.aoMap renders (three reads
     // aoMap from uv2). uv2 == uv, so it is harmless when no aoMap is present.
@@ -1458,47 +1453,33 @@ function TaskBlock({
   geo: SceneGeo;
   beats: React.RefObject<ActiveBeat[]>;
 }) {
-  const tier = tierOf(task.type);
-  const h = tierHeight(tier);
   const p = map.at(task.pos, 0);
   const built = isBuilt(task);
 
+  // Status → render phase + status tint. The immersive structure reads its own
+  // built palette; `color` tints the rising shell and the UNCLAIMED footprint
+  // scribe. UNCLAIMED is a faint planned footprint (WS-1 #169 — no squatting blob);
+  // LEASED is the structure rising (semi-transparent); DONE is solid + shadowing.
+  const phase: StructurePhase = built ? "built" : task.status === "LEASED" ? "rising" : "ghost";
   const color = built ? "#cfcfd6" : task.status === "LEASED" ? SIGNAL_WARN : SIGNAL_IDLE;
-  // WS-1 (#169): at rest an UNCLAIMED task is a faint *scribe* of the structure to
-  // come — a build affordance, not set dressing. Drop it to a barely-there outline
-  // (opacity 0.10, was 0.28) and shrink it, so the resting worksite reads as clean
-  // regolith with a planned footprint rather than a field of solid translucent
-  // boxes + a ghost dome. LEASED (in-progress) and DONE (built) render unchanged.
   const isUnclaimedGhost = !built && task.status === "UNCLAIMED";
+  // The interpreted (server Build-spec) path still fades by opacity; the procedural
+  // structures carry their own per-phase look (Structures.tsx).
   const opacity = built ? 1 : task.status === "LEASED" ? 0.5 : 0.1;
-  const ghostScale = isUnclaimedGhost ? 0.82 : 1;
-
-  // The dome cap reads as a hemisphere; foundations/walls as low blocks.
-  const isCap = tier === "dome";
-  const blockGeo = isCap ? geo.dome : tier === "foundation" ? geo.foundation : geo.wall;
-
-  // Per-tier roughness (#111): the polished pressurised cap reads smoothest, the
-  // walls matte fabric/panel, the foundation roughest poured regolith-crete — so
-  // the rising habitat reads as distinct materials, not one uniform grey block.
-  const tierRoughness = isCap ? 0.75 : tier === "foundation" ? 0.95 : 0.88;
 
   // Interpret the Task's Build spec (ADR-0006), if any, into renderable meshes.
-  // EMPTY ⇒ the Task has no (renderable) spec, so we render EXACTLY today's
-  // primitive — the fallback this slice must keep pixel-identical. Memoized on
-  // the spec identity so the pure pass stays allocation-light (~12 Hz snapshots).
+  // EMPTY ⇒ the Task has no (renderable) spec, so it falls back to the immersive
+  // procedural structure below. Memoized on the spec identity so the pure pass
+  // stays allocation-light (~12 Hz snapshots).
   const specMeshes = useMemo<MeshDesc[]>(
     () => interpretBuildSpec(task),
     [task],
   );
   const interpreted = specMeshes.length > 0;
 
-  // Solidify-pop refs. The PRIMITIVE path animates its single mesh + material
-  // EXACTLY as before (meshRef/matRef). The INTERPRETED path has no single
-  // material to flash, so it pops the whole structure group (groupRef) by scale
-  // alone, keeping each op's procedural material intact. Only one path's refs are
-  // populated per render, so the unused branch is a harmless no-op.
-  const meshRef = useRef<THREE.Mesh>(null);
-  const matRef = useRef<THREE.MeshStandardMaterial>(null);
+  // Solidify-pop: the structure group pops by SCALE on a `solidify` beat (the
+  // procedural materials carry their own emissive, so we no longer flash a single
+  // material). Driven by mutating the ref in useFrame — never a React re-render.
   const groupRef = useRef<THREE.Group>(null);
 
   const id = task.id;
@@ -1514,47 +1495,14 @@ function TaskBlock({
         }
       }
     }
-    // ghostScale folds the WS-1 UNCLAIMED shrink into the same scale channel as
-    // the solidify pop, so a faint resting ghost reads ~0.82 and a completing
-    // block still pops from there (UNCLAIMED tasks never carry a solidify beat).
-    const popScale = (solidify > 0 ? 1 + Math.sin(solidify * Math.PI) * 0.25 : 1) * ghostScale;
-
-    // Interpreted structure: pop the group (scale only — procedural mats stay).
+    const popScale = solidify > 0 ? 1 + Math.sin(solidify * Math.PI) * 0.25 : 1;
     if (groupRef.current) groupRef.current.scale.setScalar(popScale);
-
-    // Primitive: pop the single mesh + green-flash its material (unchanged).
-    const mesh = meshRef.current;
-    const mat = matRef.current;
-    if (mesh && mat) {
-      mesh.scale.setScalar(popScale);
-      if (solidify > 0) {
-        mat.emissive.set(SIGNAL_OK);
-        mat.emissiveIntensity = 1.5 * (1 - solidify);
-      } else if (mat.emissiveIntensity !== 0) {
-        mat.emissiveIntensity = 0;
-      }
-    }
   });
 
-  // WS-1 follow-up: at rest, an UNCLAIMED habitat dome cap shows up as a solid
-  // dark blob squatting over the worksite — the "pre-placed blueprint preview"
-  // the surface overhaul set out to kill (milestone 08, complaint #5). Two paths
-  // feed it, so we close both:
-  //   • the primitive dome-tier cap (geo.dome hemisphere), and
-  //   • the INTERPRETED build-spec model (model_ref) — and crucially the ghost
-  //     OPACITY fade only reaches primitive ghosts; a loaded model ignores it and
-  //     renders SOLID (we confirmed dark #262626 caps at opacity 1 live), which is
-  //     why only the domes read as solid blobs while the walls fade to a scribe.
-  // Drop the resting cap/model ghost entirely; it reappears the instant its task
-  // is LEASED (build begins) and rises for real. Primitive foundations/walls keep
-  // their faint footprint scribe, so the planned footprint still reads at rest.
-  if (isUnclaimedGhost && (isCap || interpreted)) return null;
-
-  // INTERPRETED PATH — the richer structure. Each op is drawn by <SpecMesh>,
-  // which renders a primitive (optionally textured, bh-07b) or a glTF model
-  // (model_ref, bh-07b) with a primitive fallback. The group sits at the same
-  // ground point as the primitive; built/ghost opacity is shared so an unfinished
-  // interpreted Task still reads as a ghost, like the primitive.
+  // INTERPRETED (server Build-spec) path: no resting ghost for an UNCLAIMED task
+  // (WS-1 killed the pre-placed blob); it reappears the instant build begins. Each
+  // op is drawn by <SpecMesh> (primitive or glTF, with a primitive fallback).
+  if (interpreted && isUnclaimedGhost) return null;
   if (interpreted) {
     return (
       <group ref={groupRef} position={[p.x, 0, p.z]}>
@@ -1572,31 +1520,15 @@ function TaskBlock({
     );
   }
 
-  // PRIMITIVE FALLBACK — EXACTLY today's tierOf block (unchanged).
+  // IMMERSIVE PROCEDURAL FALLBACK (milestone 08) — the purpose-built habitat
+  // hardware that replaced the grey tierOf box/sphere: a paneled pressurised dome,
+  // ribbed hab-wall modules, regolith-crete pads, sun-tracking solar arrays, a
+  // lattice comms tower + dish. StructurePiece picks the building from the Task's
+  // (type,id) and renders it in its status phase; the group pops on a solidify
+  // beat. Fully procedural ⇒ can never fail to load (ADR-0004).
   return (
-    <group position={[p.x, 0, p.z]}>
-      {/* castShadow/receiveShadow only once BUILT (#104): a transparent blueprint
-          ghost shouldn't throw a solid sun shadow — it grounds only when finished. */}
-      <mesh
-        ref={meshRef}
-        geometry={blockGeo}
-        position={[0, h, 0]}
-        raycast={() => null}
-        castShadow={built}
-        receiveShadow={built}
-      >
-        <meshStandardMaterial
-          ref={matRef}
-          color={color}
-          roughness={tierRoughness}
-          metalness={0.05}
-          transparent
-          opacity={opacity}
-          emissive="#000000"
-          emissiveIntensity={0}
-          toneMapped={false}
-        />
-      </mesh>
+    <group ref={groupRef} position={[p.x, 0, p.z]}>
+      <StructurePiece type={task.type} id={task.id} phase={phase} color={color} />
     </group>
   );
 }
@@ -1976,10 +1908,10 @@ function ShackletonShadows() {
 //                      Its intensity is spiked above base during a bid-war (#107).
 //   3. SelectiveBloom (celestial) — Sun core + Earth limb, lower threshold,
 //                      wider kernel, SCREEN blend + smoothed luminance.
-//   4. DepthOfField  — surface-only, deliberately gentle: focal plane out on the
-//                      worksite + wide in-focus band, so the foreground stays sharp
-//                      and only the distant horizon softens. Off in orbit (Moon hero
-//                      stays deep-focus/crisp).
+//   4. DepthOfField  — surface-only, extremely gentle: focus on the foreground +
+//                      a very wide in-focus band, so close AND medium distances read
+//                      as if there's no DoF; only the far horizon softens, gradually.
+//                      Off in orbit (Moon hero stays deep-focus/crisp).
 //   5. ChromaticAberration — orbit-only (mounted only in orbit): a subtle lens
 //                      fringe on the deep-space vista; off on the surface so the
 //                      worksite UI/telemetry stays clean.
@@ -2146,17 +2078,17 @@ const CinematicFX = memo(function CinematicFX({
       ) : (
         <></>
       )}
-      {/* Surface-gated DoF — deliberately gentle. The old pass put the focal plane on
-          the camera (focusDistance 0 + focalLength 0.02), so the whole worksite fell
-          soft and immersion suffered. Now the focal plane sits out at the worksite and
-          the in-focus band is wide, so the rover/foreground stay crisp and only the
-          distant horizon picks up a faint, cinematic softness. Surface only; in orbit
-          the Moon hero stays deep-focus. */}
+      {/* Surface-gated DoF — tuned so close AND medium distances read as if there's
+          no DoF at all: focus sits right on the foreground and the in-focus band is
+          very wide, so everything from the rover out through the mid-ground stays
+          crisp. Only the far distance/horizon — well past the band — eases into a
+          soft, very gradual blur. Surface only; in orbit the Moon hero stays
+          deep-focus. */}
       {onSurface ? (
         <DepthOfField
-          focusDistance={0.05}
-          focalLength={0.15}
-          bokehScale={0.3}
+          focusDistance={0.02}
+          focalLength={0.45}
+          bokehScale={0.6}
           height={480}
         />
       ) : (
@@ -2373,10 +2305,11 @@ const INTRO_MS = 4500;
 // (SKIM_OUT_DIST units, at SKIM_ALTITUDE) toward the horizon, flips the rendered site
 // under a dust-brownout peak, then races back in and settles on the destination
 // surface pose (for Shackleton, cresting the rim into the crater). Long enough to
-// read as a journey, not a cut.
-const TRAVERSE_MS = 2900;
+// read as a journey, not a cut — paced slow so the gentle dust haze (raised-cosine
+// envelope) has room to ease in and out either side of the swap.
+const TRAVERSE_MS = 3600;
 const SKIM_ALTITUDE = 4; // scene-y of the low ground-skim race
-const SKIM_OUT_DIST = 120; // how far out across the plain the drive races
+const SKIM_OUT_DIST = 100; // how far out across the plain the drive races
 
 // ---- ground-traverse envelope (cinematic site drive) -----------------------
 // The surface→surface site swap is a cinematic GROUND DRIVE (not a lateral whip):
@@ -2389,12 +2322,15 @@ const SKIM_OUT_DIST = 120; // how far out across the plain the drive races
 // covered (peak ≈ 1 with a plateau), not just a brief flash.
 export function traverseEnvelope(t: number) {
   const c = Math.min(1, Math.max(0, t));
-  // Dust brownout: a flat-topped peak around the t=0.5 swap. DUST_HALF widens the
-  // window and the gentle power keeps it near-opaque across the peak so the swap is
-  // never glimpsed; it still falls to 0 at both ends so the regolith reads clean
-  // before and after the drive.
-  const DUST_HALF = 0.3;
-  const veil = Math.pow(Math.max(0, 1 - Math.abs(c - 0.5) / DUST_HALF), 1.25);
+  // Dust haze: a RAISED-COSINE bell centred on the t=0.5 swap. The wide window
+  // (DUST_HALF) spreads the haze across almost the whole drive, and the cosine
+  // shape has ZERO slope at both ends — so the dust eases in and out gently
+  // (the camera is never seen whipping through clean air, the old abrupt part)
+  // while still climbing to a fully-opaque core that hides the single swap frame.
+  // Reads as driving INTO and OUT OF a regolith cloud, not a brown curtain slam.
+  const DUST_HALF = 0.46;
+  const x = Math.min(1, Math.abs(c - 0.5) / DUST_HALF); // 0 at swap → 1 at edge
+  const veil = 0.5 * (1 + Math.cos(Math.PI * x)); // 1 at swap, 0 at window edge
   // Path easing: ease-in-out so the drive accelerates out of the old framing and
   // decelerates HARD into the new one (settles cleanly, no overshoot).
   const k = c * c * (3 - 2 * c);
@@ -2467,45 +2403,39 @@ const GHOST_BAD = "#e74c3c";
 
 // ---- drag-to-place ghost + placement plane (bh-05) -------------------------
 
-// BlueprintGhost draws the transient placement preview: each ghost Task's Build
-// envelope as a flat footprint quad on the ground, plus a thin upright box hinting
-// the envelope height. Tinted green when valid, red when the client gate rejects
-// the spot. It is CLIENT-ONLY transient state (never from the snapshot), so the
-// scene stays a pure function of the snapshot for everything authoritative — the
-// placed tasks themselves arrive via the next snapshot (ADR-0004).
+// BlueprintGhost draws the transient placement preview. It now previews the ACTUAL
+// construction: each ghost Task renders its real procedural structure (translucent,
+// via StructurePiece's "rising" phase) at the spot it will land, with a thin
+// validity-tinted footprint scribed under it — green/cyan when the spot is valid,
+// red when the client gate rejects it. The footprint is sized to the structure's
+// real on-ground radius (kindFootprintRadius), NOT the much larger clearance
+// envelope the server validates against, so "what you preview is what you build"
+// at the right size (was: a field of oversized envelope quads + tall boxes).
+// CLIENT-ONLY transient state (never from the snapshot) — the placed tasks
+// themselves arrive via the next snapshot (ADR-0004).
 function BlueprintGhost({ ghost, map }: { ghost: Ghost; map: SceneMap }) {
-  const color = ghost.invalid ? GHOST_BAD : GHOST_OK;
+  const tint = ghost.invalid ? GHOST_BAD : GHOST_OK;
   return (
     <group>
       {ghost.tasks.map((t) => {
-        const f = footprintOf(t);
-        const center = map.at({ X: f.cx, Y: f.cy }, 0.06);
-        const w = f.halfX * 2 * map.scale;
-        const d = f.halfY * 2 * map.scale;
-        const h = Math.max(0.05, (t.envelope.size.Z * map.scale) / 2);
+        const center = map.at(t.pos, 0);
+        const kind = kindOf(t.type, t.id);
+        const r = kindFootprintRadius(kind);
         return (
           <group key={t.id} position={[center.x, 0, center.z]}>
-            {/* Footprint quad flat on the ground. */}
-            <mesh position={[0, 0.06, 0]} rotation={[-Math.PI / 2, 0, 0]} raycast={() => null}>
-              <planeGeometry args={[w, d]} />
-              <meshBasicMaterial
-                color={color}
-                transparent
-                opacity={0.35}
-                side={THREE.DoubleSide}
-                depthWrite={false}
-              />
+            {/* validity-tinted ground footprint, sized to the real structure */}
+            <mesh position={[0, 0.05, 0]} rotation={[-Math.PI / 2, 0, 0]} raycast={() => null}>
+              <ringGeometry args={[r * 0.84, r, 44]} />
+              <meshBasicMaterial color={tint} transparent opacity={0.6} side={THREE.DoubleSide} depthWrite={false} />
             </mesh>
-            {/* A faint envelope box, so the ghost reads as a volume not just a pad. */}
-            <mesh position={[0, h, 0]} raycast={() => null}>
-              <boxGeometry args={[w, h * 2, d]} />
-              <meshBasicMaterial
-                color={color}
-                transparent
-                opacity={0.12}
-                depthWrite={false}
-              />
+            <mesh position={[0, 0.05, 0]} rotation={[-Math.PI / 2, 0, 0]} raycast={() => null}>
+              <circleGeometry args={[r * 0.84, 32]} />
+              <meshBasicMaterial color={tint} transparent opacity={0.12} side={THREE.DoubleSide} depthWrite={false} />
             </mesh>
+            {/* the real structure, translucent — a true preview of what gets built.
+                `preview` renders it untextured (flat-tinted) so the ghost that redraws
+                every drag frame stays cheap. */}
+            <StructurePiece type={t.type} id={t.id} phase="rising" color="#cfcfd6" preview />
           </group>
         );
       })}

@@ -198,43 +198,10 @@
 }
 
 /* The view toggle, lifted into the top bar (Epic 06 P0). margin-left:auto pushes
-   it + the reload button into a right-hand cluster, with the connection pill
-   sitting next to the brand on the left. */
+   it into the right-hand corner, with the connection pill sitting next to the
+   brand on the left. */
 .topbar-view {
   margin-left: auto;
-}
-
-/* ---- reload-demo button ----
-   A global demo control: resets the board so the swarm rebuilds the dome. A
-   hairline-boxed caps button in the top bar's right-hand cluster (after the view
-   toggle, which carries the auto-margin). After a click it shows a brief disabled
-   "Reloading…" pulse so the operator sees it land. */
-.reload-btn {
-  padding: 6px 2px;
-  font-family: var(--display);
-  font-size: 12px;
-  font-weight: 700;
-  letter-spacing: 1.17px;
-  text-transform: uppercase;
-  color: var(--ink-mute);
-  /* Diegetic (Milestone 08): ghost text control — no box, no border; the label
-     reads on-scene and brightens with a faint glow on hover. */
-  background: transparent;
-  border: 0;
-  text-shadow: var(--hud-ink-shadow);
-  cursor: pointer;
-  transition: color 140ms ease, text-shadow 140ms ease;
-}
-
-.reload-btn:hover:not(:disabled) {
-  color: var(--on-primary);
-  text-shadow: var(--hud-ink-shadow), var(--hud-glow-cyan);
-}
-
-.reload-btn:disabled {
-  color: var(--ink-mute);
-  opacity: 0.5;
-  cursor: not-allowed;
 }
 
 /* ---- connection indicator ----
@@ -373,17 +340,18 @@
   );
 }
 
-/* Warm regolith-DUST brownout for the surface→surface ground drive (Scene3D adds
-   .view-dust to the glare overlay for the duration). A near-opaque, full-frame ochre
-   wash — kicked-up regolith, not a directional sun-bloom — so it fully occludes the
-   single site-swap frame at the far point of the drive. */
+/* Warm regolith-DUST haze for the surface→surface ground drive (Scene3D adds
+   .view-dust to the glare overlay for the duration). A SUNLIT ochre cloud — lighter
+   and warmer than a mud curtain so the gentle raised-cosine fade reads as kicked-up
+   regolith catching the sun, not a dark wash slamming shut. The core stays near-opaque
+   so it still fully occludes the single site-swap frame at the far point of the drive. */
 .view-glare.view-dust {
   background: radial-gradient(
-    circle at 50% 60%,
-    rgba(122, 96, 72, 0.99) 0%,
-    rgba(106, 84, 64, 0.98) 40%,
-    rgba(78, 62, 48, 0.96) 75%,
-    rgba(54, 44, 36, 0.92) 100%
+    circle at 50% 58%,
+    rgba(196, 168, 138, 0.99) 0%,
+    rgba(170, 142, 112, 0.985) 42%,
+    rgba(138, 112, 86, 0.97) 76%,
+    rgba(104, 84, 64, 0.94) 100%
   );
 }
 

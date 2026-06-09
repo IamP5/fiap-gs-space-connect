@@ -44,6 +44,7 @@ import {
   NEBULA_VEIL,
 } from "../components/SkyBodies";
 import { ROCK_DIFF, ROCK_NORMAL, ROCK_ROUGH } from "../components/DecorRocks";
+import { STRUCTURE_TEXTURES } from "../components/Structures";
 
 // --- the manifest, partitioned by loader -----------------------------------
 
@@ -73,6 +74,9 @@ export const TEXTURE_ASSETS: readonly string[] = [
   ROCK_DIFF,
   ROCK_NORMAL,
   ROCK_ROUGH,
+  // milestone 08 structures: the metal/solar/regolith PBR sets cladding the
+  // procedural habitat hardware (dome, walls, pads, solar arrays, comms tower).
+  ...STRUCTURE_TEXTURES,
 ];
 
 // HDR environment maps — loaded with RGBELoader (the .hdr decoder). IBL only.

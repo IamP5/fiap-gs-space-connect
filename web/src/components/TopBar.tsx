@@ -1,11 +1,11 @@
 // TopBar — the slim, always-on HUD strip shown in BOTH views (Epic 06 P0).
 //
-// In ORBIT it is the ONLY HUD: wordmark · connection status pill · Reload demo ·
-// a Surface/Orbit segmented toggle (lifted out of ControlsPanel). The raw ws://
+// In ORBIT it is the ONLY HUD: wordmark · connection status pill · a
+// Surface/Orbit segmented toggle (lifted out of ControlsPanel). The raw ws://
 // URL is dropped from view and survives only as a hover tooltip on the status
-// pill. Purely presentational — App owns every piece of state (viewMode, status,
-// reloading) and threads it in. Memoized so App's 10 Hz snapshot re-render only
-// repaints the bar when one of these stable props actually changes.
+// pill. Purely presentational — App owns every piece of state (viewMode, status)
+// and threads it in. Memoized so App's 10 Hz snapshot re-render only repaints the
+// bar when one of these stable props actually changes.
 
 import { memo } from "react";
 import type { ConnectionStatus } from "../lib/connection";
@@ -19,8 +19,6 @@ export const TopBar = memo(function TopBar({
   url,
   viewMode,
   onViewModeChange,
-  reloading,
-  onReload,
 }: {
   status: ConnectionStatus;
   // The live ws:// endpoint — shown only as a tooltip on the connection pill,
@@ -28,8 +26,6 @@ export const TopBar = memo(function TopBar({
   url: string;
   viewMode: ViewMode;
   onViewModeChange: (mode: ViewMode) => void;
-  reloading: boolean;
-  onReload: () => void;
 }) {
   return (
     <header className="topbar">
@@ -61,17 +57,6 @@ export const TopBar = memo(function TopBar({
           Orbit
         </button>
       </div>
-
-      <button
-        type="button"
-        className="reload-btn"
-        onClick={onReload}
-        disabled={reloading}
-        aria-disabled={reloading}
-        title="Pre-roll: reset the board to the deterministic seed so the swarm rebuilds the dome (re-holds the hero wall lunar/wall-1, no pod restart)"
-      >
-        {reloading ? "Reloading…" : "Reload demo"}
-      </button>
     </header>
   );
 });

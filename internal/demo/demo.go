@@ -312,8 +312,12 @@ func siteRovers(siteID string, base domain.Vec2) []agent.Config {
 // (single default site) and is kept for the single-site tooling/tests; the live
 // two-site demo board is assembled by DomeScenario via siteDome.
 func DomeBlueprint() []coordinator.BlueprintTask {
-	wallPos := ring(8, 46, 90)       // outer octagon, wall-1 at 12 o'clock
-	foundationPos := ring(4, 24, 68) // inner ring, offset to sit under each wall pair
+	// Kept in sync with internal/blueprint.domeBlueprint (the live catalog): the
+	// compact ring hugs the walls/foundations to the dome skirt instead of scattering
+	// them across the plain. This standalone copy feeds only the offline bake tool
+	// (cmd/bake), but it must match so baked specs reflect the real geometry.
+	wallPos := ring(8, 12, 90)       // outer octagon, wall-1 at 12 o'clock
+	foundationPos := ring(4, 11, 68) // inner ring, offset to sit under each wall pair
 
 	var bp []coordinator.BlueprintTask
 	for i := 1; i <= 4; i++ {
