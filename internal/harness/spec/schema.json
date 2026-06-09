@@ -37,13 +37,14 @@
       "properties": {
         "op": { "type": "string", "enum": ["place", "move", "delete"] },
         "id": { "type": "string", "description": "Stable piece key; move/delete target an earlier place's id." },
-        "shape": { "type": "string", "enum": ["box", "cylinder", "sphere", "model"] },
+        "shape": { "type": "string", "enum": ["box", "cylinder", "sphere", "model", "module"] },
         "pos": { "$ref": "#/$defs/vec3" },
         "rot": { "$ref": "#/$defs/vec3" },
         "scale": { "$ref": "#/$defs/vec3" },
         "material": { "$ref": "#/$defs/material" },
         "model_ref": { "type": "string" },
-        "asset_key": { "type": "string", "description": "Curated Asset catalog key (ADR-0010); the server resolves it to a self-hosted model_ref before the browser sees the op." }
+        "asset_key": { "type": "string", "description": "Curated Asset catalog key (ADR-0010); the server resolves it to a self-hosted model_ref before the browser sees the op." },
+        "part": { "type": "string", "description": "StructureKind a 'module' op builds one step of (milestone 08): foundation|wall|dome|panel|mast|dish. Required with shape 'module'; empty otherwise." }
       },
       "required": ["op", "pos", "rot", "scale"],
       "additionalProperties": false

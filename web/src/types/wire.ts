@@ -22,7 +22,10 @@ export type TaskStatus = "UNCLAIMED" | "LEASED" | "DONE";
 // (snake_case JSON field names) so the two round-trip. box|cylinder|sphere render
 // today; "model" (with model_ref) and material `map` are reserved future
 // glTF/texture slots the current renderer treats as no-ops.
-export type BuildShape = "box" | "cylinder" | "sphere" | "model";
+// "module" places one build STEP of a procedural immersive structure
+// (Structures.tsx, milestone 08): the op's `part` names the StructureKind and the
+// renderer reveals the structure step-by-step as the per-step module ops fold in.
+export type BuildShape = "box" | "cylinder" | "sphere" | "model" | "module";
 
 export type Material = {
   color: string;
@@ -49,6 +52,7 @@ export type BuildOp = {
   material: Material;
   model_ref?: string; // future glTF reference; only with shape "model"
   asset_key?: string; // curated Asset catalog key (ADR-0010); the server resolves it to model_ref before this reaches the browser
+  part?: string; // StructureKind a "module" op builds one step of (milestone 08); required with shape "module"
 };
 
 export type RoverView = {

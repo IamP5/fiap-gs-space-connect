@@ -248,6 +248,13 @@ const (
 	ShapeCylinder BuildShape = "cylinder"
 	ShapeSphere   BuildShape = "sphere"
 	ShapeModel    BuildShape = "model" // future glTF; not rendered yet
+	// ShapeModule places one build STEP of a procedural immersive structure
+	// (Structures.tsx). The op's Part names the StructureKind; the renderer reveals
+	// the structure step-by-step as the per-step module ops fold in (milestone 08).
+	// A module op carries no geometry of its own — Part + the Task's (type,id) fully
+	// determine what is drawn — so its transform is identity and its Material a
+	// placeholder (the procedural structure carries its own palette + lighting).
+	ShapeModule BuildShape = "module"
 )
 
 // Build op kinds (bh-08a). The Build spec is an append-only PATCH LOG that the
@@ -302,6 +309,11 @@ type BuildOp struct {
 	Material Material    `json:"material"`
 	ModelRef string      `json:"model_ref,omitempty"` // future glTF reference; only with shape "model"
 	AssetKey string      `json:"asset_key,omitempty"` // curated Asset catalog key (ADR-0010); server resolves to ModelRef
+	// Part is the StructureKind (foundation|wall|dome|panel|mast|dish) a "module"
+	// op builds one step of (milestone 08). Required with shape "module"; empty on
+	// every other shape. The renderer reveals the procedural structure step-by-step
+	// as these ops fold in, preserving op-by-op rising + self-heal convergence.
+	Part string `json:"part,omitempty"`
 }
 
 // BuildOpMsg is one streamed build op a Rover emits on SubjBuildOp(task) as it

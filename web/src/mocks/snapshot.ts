@@ -9,13 +9,30 @@
 // X≈400, matching SITE_FRAMES.shackleton.cx so siteMap recenters it). VITE_MOCK=1
 // thus shows live rovers/tasks on EITHER site as the operator toggles.
 
-import type { Snapshot, TaskView, EarthUplink, Vec2 } from "../types/wire";
+import type { BuildOp, Snapshot, TaskView, EarthUplink, Vec2 } from "../types/wire";
 
 // A point on a circle in world coords (worksite units), 12-o'clock start, used to
 // lay the dome's foundation/wall ring out for the mock the way the catalog ring does.
 function ringPt(radius: number, deg: number): Vec2 {
   const r = (deg * Math.PI) / 180;
   return { X: Math.round(radius * Math.cos(r)), Y: Math.round(radius * Math.sin(r)) };
+}
+
+// moduleSteps mirrors the live rover's procedural-structure op stream (milestone 08,
+// internal/agent/opsource.go): `n` "module" build ops for the given StructureKind, so
+// a LEASED mock task renders the SAME reveal-by-count rising structure the real
+// agents stream (here, a partially-built wall) instead of a translucent full shell.
+function moduleSteps(kind: string, n: number): BuildOp[] {
+  return Array.from({ length: n }, (_, i) => ({
+    op: "place",
+    id: `op-${i}`,
+    shape: "module",
+    part: kind,
+    pos: { X: 0, Y: 0, Z: 0 },
+    rot: { X: 0, Y: 0, Z: 0 },
+    scale: { X: 1, Y: 1, Z: 1 },
+    material: { color: "#cfcfd6" },
+  }));
 }
 
 // --- the lunar habitat dome (hero): a cap at centre, four corner foundations and a
@@ -39,7 +56,11 @@ const DOME_TASKS: TaskView[] = [
       site: "lunar",
       pos: ringPt(14, deg),
       status,
-      ...(status === "LEASED" ? { assignee: "R1", lease_expiry: 120 } : {}),
+      // The LEASED wall is mid-build: a partial module stream (4 of the wall's 7
+      // steps) so it reads as a wall RISING op-by-op, exactly as a live rover would.
+      ...(status === "LEASED"
+        ? { assignee: "R1", lease_expiry: 120, build_spec: moduleSteps("wall", 4) }
+        : {}),
       version: status === "DONE" ? 3 : status === "LEASED" ? 5 : 1,
       deps: ["foundation-1"],
     };

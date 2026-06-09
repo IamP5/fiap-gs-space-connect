@@ -90,7 +90,7 @@ describe("ghostTasks — instantiate a catalog blueprint for preview", () => {
     const ghosts = ghostTasks(solar!.tasks, v(0, 0), 0);
     const pad2 = ghosts.find((g) => g.id === "pad-2");
     expect(pad2).toBeDefined();
-    expect(pad2!.pos).toEqual(v(16, 0));
+    expect(pad2!.pos).toEqual(v(5, 0)); // solar pads sit shoulder-to-shoulder (±5) since a91b5ae
     const f = footprintOf(pad2!);
     expect(f.halfX).toBe(8); // size.X 16 / 2
     expect(f.halfY).toBe(6); // size.Y 12 / 2

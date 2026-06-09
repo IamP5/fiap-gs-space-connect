@@ -104,6 +104,7 @@ import {
   type ModelDesc,
   type PrimitiveDesc,
   interpretBuildSpec,
+  interpretModuleSpec,
 } from "../lib/buildspec";
 import { type Ghost, dragDeltaToRadians } from "../lib/placement";
 import {
@@ -1477,6 +1478,13 @@ function TaskBlock({
   );
   const interpreted = specMeshes.length > 0;
 
+  // Milestone 08: a "module" Build spec means the Task's geometry is one of the
+  // immersive procedural structures (Structures.tsx) built step-by-step. We render
+  // the real StructurePiece below, revealing as many build steps as module ops have
+  // streamed in — so the live agent-built structure rises op-by-op and resumes
+  // after a kill, exactly like the old primitive courses did.
+  const moduleSpec = useMemo(() => interpretModuleSpec(task), [task]);
+
   // Solidify-pop: the structure group pops by SCALE on a `solidify` beat (the
   // procedural materials carry their own emissive, so we no longer flash a single
   // material). Driven by mutating the ref in useFrame — never a React re-render.
@@ -1520,15 +1528,22 @@ function TaskBlock({
     );
   }
 
-  // IMMERSIVE PROCEDURAL FALLBACK (milestone 08) — the purpose-built habitat
+  // IMMERSIVE PROCEDURAL STRUCTURE (milestone 08) — the purpose-built habitat
   // hardware that replaced the grey tierOf box/sphere: a paneled pressurised dome,
   // ribbed hab-wall modules, regolith-crete pads, sun-tracking solar arrays, a
   // lattice comms tower + dish. StructurePiece picks the building from the Task's
   // (type,id) and renders it in its status phase; the group pops on a solidify
   // beat. Fully procedural ⇒ can never fail to load (ADR-0004).
+  //
+  // `reveal` drives the op-by-op rise: a module spec reveals as many steps as ops
+  // have streamed in (the live agent-built path); a LEASED task with no ops yet
+  // shows nothing (reveal 0) so it never flashes the finished structure before
+  // building; everything else (built, UNCLAIMED ghost, mock hero tasks) renders the
+  // whole structure (reveal undefined).
+  const reveal = moduleSpec ? moduleSpec.shown : task.status === "LEASED" ? 0 : undefined;
   return (
     <group ref={groupRef} position={[p.x, 0, p.z]}>
-      <StructurePiece type={task.type} id={task.id} phase={phase} color={color} />
+      <StructurePiece type={task.type} id={task.id} phase={phase} color={color} reveal={reveal} />
     </group>
   );
 }

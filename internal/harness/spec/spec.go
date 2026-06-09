@@ -37,6 +37,7 @@ var validShapes = map[wire.BuildShape]bool{
 	wire.ShapeCylinder: true,
 	wire.ShapeSphere:   true,
 	wire.ShapeModel:    true,
+	wire.ShapeModule:   true,
 }
 
 // Fold applies the append-only patch log in order and returns the Task's current
@@ -142,13 +143,8 @@ func validateOp(op wire.BuildOp) error {
 	if !validShapes[op.Shape] {
 		return fmt.Errorf("unknown shape %q", op.Shape)
 	}
-	// "model" requires a model_ref; the rendered primitives must NOT carry one.
-	if op.Shape == wire.ShapeModel {
-		if op.ModelRef == "" {
-			return errors.New(`shape "model" requires a non-empty model_ref`)
-		}
-	} else if op.ModelRef != "" {
-		return fmt.Errorf("model_ref is only valid with shape %q, not %q", wire.ShapeModel, op.Shape)
+	if err := validateShapeFields(op); err != nil {
+		return err
 	}
 	if err := validateVec(op.Pos, "pos"); err != nil {
 		return err
@@ -165,6 +161,27 @@ func validateOp(op wire.BuildOp) error {
 		return fmt.Errorf("scale must be positive on every axis, got %+v", op.Scale)
 	}
 	return validateMaterial(op.Material)
+}
+
+// validateShapeFields checks the shape-specific field pairings: "model" requires a
+// model_ref (and every other shape must NOT carry one); "module" requires a part
+// naming a Structures.tsx build step (and every other shape must NOT carry one).
+func validateShapeFields(op wire.BuildOp) error {
+	if op.Shape == wire.ShapeModel {
+		if op.ModelRef == "" {
+			return errors.New(`shape "model" requires a non-empty model_ref`)
+		}
+	} else if op.ModelRef != "" {
+		return fmt.Errorf("model_ref is only valid with shape %q, not %q", wire.ShapeModel, op.Shape)
+	}
+	if op.Shape == wire.ShapeModule {
+		if op.Part == "" {
+			return errors.New(`shape "module" requires a non-empty part`)
+		}
+	} else if op.Part != "" {
+		return fmt.Errorf("part is only valid with shape %q, not %q", wire.ShapeModule, op.Shape)
+	}
+	return nil
 }
 
 // validateVec rejects NaN/inf components, which would corrupt the renderer's

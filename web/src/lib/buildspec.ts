@@ -65,8 +65,9 @@ export const DEFAULT_ROUGHNESS = 0.9;
 export const DEFAULT_METALNESS = 0.05;
 
 // renderableShapes maps a primitive shape to its geometry. "model" is handled
-// separately (it produces a ModelDesc, not a primitive geometry).
-const primitiveShapes: Record<Exclude<BuildShape, "model">, MeshGeometry> = {
+// separately (it produces a ModelDesc, not a primitive geometry); "module" is the
+// procedural-structure step path (interpretModuleSpec), never a primitive.
+const primitiveShapes: Record<Exclude<BuildShape, "model" | "module">, MeshGeometry> = {
   box: "box",
   cylinder: "cylinder",
   sphere: "sphere",
@@ -127,6 +128,8 @@ export function opToMesh(op: BuildOp): MeshDesc | null {
     };
   }
 
+  // "module" steps are procedural structures (interpretModuleSpec), not primitives.
+  if (op.shape === "module") return null;
   const geometry = primitiveShapes[op.shape];
   if (!geometry) return null;
   return primitiveDesc(op, geometry);
@@ -201,6 +204,26 @@ export function interpretBuildSpec(task: Pick<TaskView, "build_spec">): MeshDesc
     if (mesh) out.push(mesh);
   }
   return out;
+}
+
+// A module build-spec: the Task's geometry is one of the procedural immersive
+// structures (Structures.tsx, milestone 08) built step-by-step. `kind` is the
+// StructureKind (from the ops' `part`); `shown` is how many build steps have folded
+// in so far (the reveal count), which grows op-by-op as the rover streams and
+// converges on resume after a kill.
+export type ModuleSpec = { kind: string; shown: number };
+
+// interpretModuleSpec FOLDS a Task's patch log and, if its surviving ops are
+// "module" steps, returns the StructureKind + how many steps are present. Returns
+// null for an empty spec or a primitive/glTF spec (those go through
+// interpretBuildSpec → SpecMesh instead). The folded module ops are deterministic
+// by id, so `shown` is stable across redeliveries and resumes monotonically.
+export function interpretModuleSpec(task: Pick<TaskView, "build_spec">): ModuleSpec | null {
+  const ops = task.build_spec;
+  if (!ops || ops.length === 0) return null;
+  const modules = fold(ops).filter((o) => o.shape === "module");
+  if (modules.length === 0) return null;
+  return { kind: modules[0].part ?? "", shown: modules.length };
 }
 
 // hasBuildSpec reports whether a Task carries any RENDERABLE Build-spec geometry.

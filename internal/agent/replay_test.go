@@ -55,7 +55,7 @@ func TestOpsFor_CacheMissFallsBackToPrimitive(t *testing.T) {
 		},
 	}
 	ops := cfg.opsFor(taskFoundation1, "foundation")
-	want := buildOpsFor("foundation")
+	want := buildOpsFor(taskFoundation1, "foundation")
 	if len(ops) != len(want) {
 		t.Fatalf("cache miss must fall back to the primitive stream: got %d ops, want %d", len(ops), len(want))
 	}
