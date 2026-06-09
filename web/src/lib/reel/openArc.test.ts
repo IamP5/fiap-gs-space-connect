@@ -9,11 +9,9 @@
 import { describe, expect, it } from "vitest";
 import {
   DRIFT_FRACTION,
-  DRIFT_SWAY_RAD,
   OPEN_AZIMUTH_RAD,
   OPEN_CUE_KEY,
   OPEN_MS,
-  SWAY_PEAK,
   alignOpenCameraElevation,
   isOpenCue,
   isRevealing,
@@ -55,20 +53,6 @@ describe("openArc — orbit-open camera-arc path", () => {
     expect(start).not.toBeCloseTo(mid, 4);
     expect(mid).not.toBeCloseTo(end, 4);
     expect(start).not.toBeCloseTo(end, 4);
-  });
-
-  it("holds the wandering motion longer before its gentle turnaround", () => {
-    const oldSymmetricPeak = DRIFT_FRACTION * 0.5;
-    const latePeak = DRIFT_FRACTION * SWAY_PEAK;
-
-    expect(SWAY_PEAK).toBeGreaterThan(0.5);
-    expect(openAzimuthOffset(latePeak)).toBeCloseTo(
-      -OPEN_AZIMUTH_RAD - DRIFT_SWAY_RAD,
-      10,
-    );
-    expect(openAzimuthOffset(latePeak)).toBeLessThan(openAzimuthOffset(oldSymmetricPeak));
-    expect(openAzimuthOffset(latePeak - 0.001)).toBeGreaterThan(openAzimuthOffset(latePeak));
-    expect(openAzimuthOffset(latePeak + 0.001)).toBeGreaterThan(openAzimuthOffset(latePeak));
   });
 
   it("the reveal arc is monotone non-decreasing toward the settled pose", () => {

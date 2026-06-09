@@ -72,12 +72,6 @@ export const OPEN_AZIMUTH_RAD = (118 * Math.PI) / 180;
 // final ORBIT_POSE settle.
 export const DRIFT_SWAY_RAD = (7 * Math.PI) / 180;
 
-// Point within the WANDERING phase where the searching sway reaches its gentle
-// turnaround. 0.75 keeps the camera moving toward the Sun/Moon alignment for
-// longer than the old symmetric half-sine (which turned at 0.5), then gives it a
-// shorter return into the reveal arc.
-export const SWAY_PEAK = 0.75;
-
 // Preserve the live horizontal berth (including any idle azimuth sway) while
 // restoring the startup orbit elevation. This keeps the world-fixed backdrop from
 // yaw-jumping when the cue starts, but gives the Sun/Moon reveal the same vertical
@@ -94,17 +88,9 @@ export function alignOpenCameraElevation(
 const easeInOutCubic = (x: number) =>
   x < 0.5 ? 4 * x * x * x : 1 - Math.pow(-2 * x + 2, 3) / 2;
 
-const smoothstep = (x: number) => x * x * (3 - 2 * x);
-
-// An asymmetric bump: 0 at both ends and 1 at SWAY_PEAK. Both sides use smoothstep,
-// so the camera gently stops at the turnaround and hands off with no residual.
-const searchSway = (x: number) => {
-  const c = Math.min(1, Math.max(0, x));
-  if (c <= SWAY_PEAK) {
-    return smoothstep(c / SWAY_PEAK);
-  }
-  return 1 - smoothstep((c - SWAY_PEAK) / (1 - SWAY_PEAK));
-};
+// A single half-sine bump: 0 at both ends, 1 at the middle. Used for the searching
+// sub-sway so it blooms and fully resolves within the drift window (no residual).
+const halfSine = (x: number) => Math.sin(Math.min(1, Math.max(0, x)) * Math.PI);
 
 // The CAMERA azimuth offset (radians) to ADD to the settled ORBIT_POSE azimuth at a
 // given progress t∈[0,1]. The offset is NEGATIVE (swung toward the sun) and walks to
@@ -118,10 +104,10 @@ const searchSway = (x: number) => {
 export function openAzimuthOffset(t: number): number {
   const c = Math.min(1, Math.max(0, t));
   if (c <= DRIFT_FRACTION) {
-    // WANDERING: hold at the dark peak, with a searching asymmetric sub-sway that
-    // reaches its gentle turnaround late, then resolves before the reveal.
+    // WANDERING: hold at the dark peak, with a searching half-sine sub-sway that
+    // blooms and fully resolves within the drift window.
     const local = DRIFT_FRACTION > 0 ? c / DRIFT_FRACTION : 1;
-    return -OPEN_AZIMUTH_RAD - DRIFT_SWAY_RAD * searchSway(local);
+    return -OPEN_AZIMUTH_RAD - DRIFT_SWAY_RAD * halfSine(local);
   }
   // SUN REVEAL: arc from the dark peak back to the settled pose (offset 0).
   const span = 1 - DRIFT_FRACTION;

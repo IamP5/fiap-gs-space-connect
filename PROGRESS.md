@@ -32,20 +32,6 @@ stop. `feature_list.json` is the per-feature source of truth; this file is the n
 
 ## Session Log
 
-### Session 013 — 2026-06-09 — Longer pre-turnaround orbit-open flow
-- **Goal:** Let the initial `O` camera movement run longer before its gentle
-  Sun/Moon-alignment turnaround.
-- **Completed:** Replaced the symmetric half-sine searching sway (turnaround at
-  50% of WANDERING) with an asymmetric smoothstep bump controlled by
-  `SWAY_PEAK = 0.75`. With `OPEN_MS=11000` and `DRIFT_FRACTION=0.38`, the
-  turnaround moves from ~2.09s to ~3.14s while still resolving to zero before the
-  reveal arc.
-- **Verification:** `cd web && npm run build` green; `npm test` **256 passed**
-  (20 files); focused `openArc.test.ts` **12 passed**; `npm run lint` 0 errors
-  (7 existing warnings).
-- **Scope:** only `lib/reel/openArc.ts` + its test and tracker evidence. Existing
-  `DESIGN.md` / `Scene3D.tsx` working-tree changes were preserved.
-
 ### Session 012 — 2026-06-08 — Orbit-open camera elevation alignment
 - **Goal:** Make the cinematic `O` camera arc use the same vertical Moon/Sun
   composition as the app's default orbit view.
