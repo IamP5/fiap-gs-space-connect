@@ -32,6 +32,31 @@ stop. `feature_list.json` is the per-feature source of truth; this file is the n
 
 ## Session Log
 
+### Session 013 — 2026-06-09 — Milestone 08: galaxy dust/nebula/meteors restored via sky sphere
+- **Goal:** Bring back the galaxy dust band, nebulosity and meteors that vanished
+  with the 16k KTX2 starmap upgrade, at high quality and good performance.
+- **Root cause found:** the KTX2 was never visibly broken by compression — three
+  r169's `scene.background` equirect path converts to a `WebGLCubeRenderTarget(
+  image.height)` cubemap (8192³×6 ≈ 1.6 GB for the 16k map) AND copies
+  `generateMipmaps:false` + a mipmap `minFilter` from the CompressedTexture onto
+  the RT → incomplete texture → the GPU samples BLACK. The old 8k JPG path was
+  also silently paying a ~536 MB hidden cubemap.
+- **Completed:** (1) `<SkySphere>` — camera-following inward sphere sampling the
+  BC7 KTX2 directly (file mips + aniso, no cube RT; ~179 MB total, ~4× VRAM cut
+  vs the old JPG background path), per-view euler/intensity owned by the mesh
+  (drei background-prop ownership dance removed); orbit framing re-tuned on
+  screen (band diagonal behind Moon+Earth, SVS #14992), surface gets the lifted
+  galactic arc. (2) NebulaHero now shows on the surface too (per-view berth).
+  (3) Meteors upgraded: pool of 2 additive textured streaks (procedural hot-head/
+  tapered-tail canvas texture, randomized length/width/tint, warm fireball
+  chance), spawns biased into the viewer's sky cone.
+- **Verification:** `tsc -b` clean; eslint 0 issues on touched files; `npm test`
+  268/268; `npm run build` green; live chrome-devtools verification of orbit band,
+  surface arc, raw-vs-composed renders, and an in-frame meteor fire (pool state +
+  parked-streak quality shot).
+- **Scope:** `web/` only — `SpaceEnvironment.tsx`, `SkyBodies.tsx` (+ CREDITS.md
+  VRAM correction). Commits on `feat/08-surface-immersion`.
+
 ### Session 012 — 2026-06-08 — Orbit-open camera elevation alignment
 - **Goal:** Make the cinematic `O` camera arc use the same vertical Moon/Sun
   composition as the app's default orbit view.

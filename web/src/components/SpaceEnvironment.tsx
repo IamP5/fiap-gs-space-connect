@@ -5,16 +5,24 @@
 // allowed). It is mounted unconditionally, even when the snapshot is null.
 //
 // Three layers:
-//   1. A Milky-Way EQUIRECTANGULAR background (issue #83) — a self-hosted Deep
-//      Star Maps 2020 (SVS 4851, Gaia DR2) JPG assigned IMPERATIVELY to
-//      scene.background (EquirectangularReflectionMapping, SRGBColorSpace,
-//      max anisotropy). This is the WebGLBackground pass (not geometry), so it
-//      ignores the camera far-plane and always fills behind everything. Kept
-//      SEPARATE from the IBL `environment` (two independent slots). Loaded
-//      imperatively (mirroring HdrBackdrop): on success it invalidate()s ONCE;
-//      on failure it leaves the Canvas's black <color attach="background">
-//      fallback untouched (ADR-0004). It captures/restores the previous
-//      scene.background and disposes its texture on unmount. NO useFrame.
+//   1. A Milky-Way SKY SPHERE (issue #83, reworked) — a self-hosted Deep Star
+//      Maps 2020 (SVS 4851, Gaia DR2) equirect on a camera-following inward
+//      sphere (<SkySphere>), NOT on scene.background. Why not the background
+//      slot (load-bearing — this was the black-sky bug): three r169's
+//      WebGLBackground converts ANY equirect background to a cubemap via
+//      WebGLCubeMaps → `new WebGLCubeRenderTarget(image.height)` — for the 16k
+//      KTX2 that is an 8192³×6 RGBA8 render target (~1.6 GB VRAM), AND
+//      fromEquirectangularTexture copies generateMipmaps:false +
+//      minFilter:LinearMipmapLinear from the CompressedTexture onto the RT —
+//      a mipmap filter with no mipmaps = incomplete texture = the GPU samples
+//      BLACK. The sphere samples the BC7 texture DIRECTLY (file mips + max
+//      anisotropy, no conversion, no hidden RT — even the old 8k JPG path was
+//      silently paying a ~536 MB cubemap). The sphere follows the camera
+//      position (zero parallax, like a true background), never writes/tests
+//      depth, draws first (renderOrder), ignores fog and tone mapping (the
+//      background pass never tone-mapped sRGB textures either). On load failure
+//      the mesh never mounts and the Canvas's black <color attach="background">
+//      remains (ADR-0004).
 //   2. A hand-rolled THREE.Points starfield — positions, per-vertex SIZE and
 //      COLOR generated ONCE in a useMemo (issue #91). Power-law size/brightness
 //      (a few bright, many faint) + slight color variance (mostly white, a few
@@ -53,11 +61,12 @@ import {
   useState,
   type ReactNode,
 } from "react";
-import { Environment, Line } from "@react-three/drei";
+import { Environment } from "@react-three/drei";
 import { useFrame, useThree } from "@react-three/fiber";
-import type { Line2 } from "three-stdlib";
 import * as THREE from "three";
+import { KTX2Loader } from "three/examples/jsm/loaders/KTX2Loader.js";
 import { loadTexture, preloadTexture } from "../lib/textureCache";
+import { reportAssetWarning } from "../lib/assetLog";
 
 // Self-hosted CC0 HDRI (Poly Haven "Moonless Golf", 2k). See public/assets/CREDITS.md.
 // Exported so the preload manifest (lib/assets.ts) references the SAME URL (Epic 05 P1).
@@ -67,61 +76,91 @@ export const HDR_FILE = "/assets/hdr/moonless_golf_2k.hdr";
 // galactic coords (the warm dust band sits along the equator). Converted offline
 // from the 8k EXR → 8192×4096 sRGB JPG (4× the linear resolution of the prior 4k
 // → crisp pinpoint stars + smooth dust, matching the NASA SVS look). The galactic
-// projection lays the band horizontally; backgroundRotation (below) rolls/yaws it
-// so the bright galactic-centre dust runs DIAGONALLY through the orbit frame,
-// behind the Moon+Earth, as in the reference render (SVS #14992). See CREDITS.md.
-// Exported so the preload manifest (lib/assets.ts) references the SAME URL (Epic 05 P1).
+// projection lays the band horizontally; the sky sphere's rotation (below) rolls/
+// yaws it so the bright galactic-centre dust runs DIAGONALLY through the orbit
+// frame, behind the Moon+Earth, as in the reference render (SVS #14992). See
+// CREDITS.md. Exported so the preload manifest (lib/assets.ts) references the
+// SAME URL (Epic 05 P1).
 export const STAR_BG_FILE = "/assets/starmap_2020_8k_gal.jpg";
 
-// scene.backgroundRotation (three r0.169): roll tilts the horizontal galactic band
-// to a diagonal; yaw swings the bright galactic-centre bulge toward the camera's
-// look direction so the warm dust reads in-frame (not behind us).
-//
-// PER-VIEW YAW (the "dust band swings to the opposite side on descent" fix): the
-// equirect is sampled purely by camera ORIENTATION, and the two views look very
-// different ways — orbit looks toward the Moon (≈ −X), the surface camera looks
-// DOWN toward ≈ −Z, ~74° further around the world up-axis. A single fixed yaw
-// (tuned for orbit) therefore swings the bright bulge ~74° out of the surface
-// frame, so it lands behind/to the side. We give each view its OWN yaw so the band
-// stays framed in BOTH. The re-orient is applied when the rendered view flips
-// (shown → surface), which on a descent happens at the t=0.5 glare peak — so the
-// band never flips on-screen; it's already framed when the flash clears.
-//
-// Orbit: the camera looks mostly toward −X, which samples the equirect's galactic
-// ANTI-centre (the dimmest edge of the _gal map) by default — a 180° yaw brings
-// the bright central dust/bulge into the frame.
-const STAR_BG_YAW_DEG = 180; // orbit: swing galactic centre into the Moon vista
-// Surface: ≈ 180 − 74 (the orbit→surface heading delta), so the SAME bright band
-// region frames over the lunar horizon instead of swinging behind. Eye-tunable
-// (roll/pitch could be added too if the band wants lifting above the horizon).
-const STAR_BG_YAW_SURFACE_DEG = 106;
-const STAR_BG_ROLL_DEG = 28; // diagonal tilt of the band (shared by both views)
-// Surface-only PITCH (X): the orbit view frames the band fine with X=0, but the
-// surface camera looks DOWN toward the horizon, so the same band grazes low along
-// the lunar skyline. A positive pitch lifts the galactic centre into a dramatic
-// ARC well above the horizon (the airless-Moon "the whole galaxy hangs overhead"
-// look) instead of hugging the ground. Eye-tunable; orbit keeps 0.
-const STAR_BG_PITCH_SURFACE_DEG = 8;
+// PRIMARY backdrop: the SAME Deep Star Maps 2020 source at 16k, GPU-compressed
+// to Basis-LZ/ETC1S in a .ktx2 (converted offline: 16k EXR → sRGB PNG, tone-
+// matched to the 8k JPG above → ETC1S q255 + mipmaps, see public/assets/
+// CREDITS.md). It transcodes to BC7 (~1 byte/texel) on desktop: 16384×8192 with
+// mips is ~179 MB on the GPU — same as the 8k RGBA8 it replaces, with 4× the
+// linear resolution (crisp pinpoint stars + finer dust), and the <SkySphere>
+// path drops the hidden ~536 MB background cubemap on top. The 8k JPG remains
+// the ADR-0004 fallback (used if the GPU can't transcode KTX2 or the file fails).
+export const STAR_BG_KTX2 = "/assets/starmap_2020_16k_gal.ktx2";
 
-// The equirect background Euler for a given view. pitch (X, surface only) lifts the
-// band above the horizon; yaw (Y) swings the bright bulge into frame per-view; roll
-// (Z) holds the shared diagonal tilt. Order is THREE.Euler default 'XYZ'.
-function backgroundEulerFor(onSurface: boolean): THREE.Euler {
-  return new THREE.Euler(
-    THREE.MathUtils.degToRad(onSurface ? STAR_BG_PITCH_SURFACE_DEG : 0),
-    THREE.MathUtils.degToRad(onSurface ? STAR_BG_YAW_SURFACE_DEG : STAR_BG_YAW_DEG),
-    THREE.MathUtils.degToRad(STAR_BG_ROLL_DEG),
-  );
+// Lazily-built, session-shared KTX2 loader. detectSupport(gl) inspects the LIVE
+// renderer to pick the transcode target (ASTC / BC7 / ETC / S3TC), so this MUST run
+// with a renderer in hand — which is precisely why the starmap is the one texture
+// NOT routed through the no-GL preload cache (lib/textureCache). Instead lib/assets
+// warms its BYTES with a plain fetch behind the splash, and the GPU transcode
+// happens here at scene mount (off the warm HTTP cache, so no network wait). The
+// transcoder JS+wasm are vendored to /public/assets/basis (three's copy).
+let ktx2Loader: KTX2Loader | null = null;
+function getKTX2Loader(gl: THREE.WebGLRenderer): KTX2Loader {
+  if (!ktx2Loader) {
+    ktx2Loader = new KTX2Loader().setTranscoderPath("/assets/basis/").detectSupport(gl);
+  }
+  return ktx2Loader;
 }
-// scene.backgroundIntensity (three r0.169): scales the band/star map brightness.
-// Kept below 1 so the galaxy reads as a faint deep-space backdrop, not a bright
-// wash — the Moon/Earth stay the focus. Wave 4: nudged 0.8→0.9 so the warm galactic
-// dust band reads a touch richer behind the dark-side crescent Moon (SVS #14992).
-// Per-view: the surface sky is pure black void (no Moon globe filling the frame),
-// so the band can carry a touch more brightness there to read as the hero backdrop;
-// orbit stays lower so the galaxy never out-shines the crescent Moon.
+
+// Sky-sphere orientation, applied DIRECTLY as the sphere mesh rotation (the
+// sphere owns its orientation outright — the old drei-vs-imperative
+// backgroundRotation ownership dance is gone with the scene.background slot).
+// The angles were tuned ON SCREEN against the live orbit/surface cameras (raw
+// renders, composer frozen) — they are NOT the old backgroundRotation values:
+// the mirrored-sphere mapping has a different phase than the background
+// shader's sample-direction rotation, so the old 180°/106° yaws don't transfer.
+//
+// With the mesh at identity the bright galactic-centre bulge already faces the
+// orbit camera (≈ −X); pitch (X) + roll (Z) then swing the band into the Wave-4
+// diagonal that runs BEHIND the Moon+Earth (SVS #14992).
+const SKY_PITCH_DEG = 25; // shared: tips the band into the diagonal arc
+const SKY_ROLL_DEG = 18; // shared: rolls the dust lane across the frame
+// PER-VIEW YAW (the "dust band swings to the opposite side on descent" fix): the
+// sky is sampled purely by camera ORIENTATION, and the two views look very
+// different ways — orbit looks toward the Moon (≈ −X), the surface camera looks
+// toward ≈ −Z, ~74° further around the world up-axis. A single fixed yaw (tuned
+// for orbit) would swing the bright bulge ~74° out of the surface frame. Each
+// view gets its OWN yaw; the re-orient applies when the rendered view flips,
+// which on a descent happens at the t=0.5 glare peak — so the band never flips
+// on-screen; it's already framed when the flash clears. On the surface the same
+// pitch/roll lift the galactic centre into a dramatic ARC above the lunar
+// horizon (the airless-Moon "the whole galaxy hangs overhead" look).
+const SKY_YAW_ORBIT_DEG = 0;
+const SKY_YAW_SURFACE_DEG = -74; // the orbit→surface heading delta
+
+// The sky quaternion for a given view (THREE.Euler default 'XYZ' order).
+function skyQuaternionFor(onSurface: boolean): THREE.Quaternion {
+  const e = new THREE.Euler(
+    THREE.MathUtils.degToRad(SKY_PITCH_DEG),
+    THREE.MathUtils.degToRad(onSurface ? SKY_YAW_SURFACE_DEG : SKY_YAW_ORBIT_DEG),
+    THREE.MathUtils.degToRad(SKY_ROLL_DEG),
+  );
+  return new THREE.Quaternion().setFromEuler(e);
+}
+// Band/star map brightness (multiplies the sphere material color — same linear
+// scale the old scene.backgroundIntensity applied). Kept below 1 in orbit so the
+// galaxy reads as a faint deep-space backdrop, not a bright wash — the Moon/Earth
+// stay the focus. Per-view: the surface sky is pure black void (no Moon globe
+// filling the frame), so the band carries a touch more brightness there to read
+// as the hero backdrop; orbit stays lower so the galaxy never out-shines the
+// crescent Moon.
 const STAR_BG_INTENSITY_ORBIT = 0.9;
 const STAR_BG_INTENSITY_SURFACE = 1.08;
+
+// Sky-sphere shell: outside every scene object that should occlude it (star
+// points 4000, meteors ~3680, Moon globe, terrain) and inside the camera far
+// plane (8000, issue #49). The sphere FOLLOWS the camera position each frame, so
+// like the old background pass it has zero parallax and can never be exited.
+const SKY_SPHERE_RADIUS = 7000;
+// Drawn before everything else in the opaque pass; with depthWrite/depthTest off
+// it can neither occlude nor be occluded incorrectly — it is pure backdrop.
+const SKY_SPHERE_RENDER_ORDER = -100;
 
 // scene.environmentIntensity scales the IBL (scene.environment = the HDR set by
 // drei's <Environment> below) contribution to PBR materials — and that diffuse
@@ -157,17 +196,27 @@ const STAR_BASE_SIZE = 1.4;
 const TWINKLE_FREQ_MIN = 0.6; // rad/s — slowest twinkle
 const TWINKLE_FREQ_MAX = 2.2; // rad/s — fastest twinkle
 
-// Meteor streaks (issue #106): every few seconds a short bright streak shoots
-// across the foreground star shell and fades over ~800ms. Reusing ONE <Line>
-// (pooled): we reposition/orient it and ramp its opacity rather than mounting a
-// new object per streak.
-const METEOR_FADE_MS = 800; // a streak is fully faded ~800ms after it fires
-const METEOR_MIN_GAP_MS = 3000; // earliest next streak after the previous one
-const METEOR_MAX_GAP_MS = 8000; // latest next streak
-const METEOR_LENGTH = 520; // streak length in world units (on the star shell)
+// Meteor streaks (issue #106, upgraded for milestone 08): every few seconds a
+// bright tapered streak shoots across the foreground star shell and fades over
+// ~900ms. A POOL of two textured quads (additive, a procedural hot-head →
+// fading-tail gradient) is reused — repositioned/oriented/faded in refs, never
+// remounted — so a firing streak costs two transparent draws at most and zero
+// React re-renders. Each streak randomises its length/width/tint so no two
+// meteors read identical.
+const METEOR_POOL = 2; // concurrent streaks (independent schedules)
+const METEOR_FADE_MS = 900; // a streak is fully faded ~900ms after it fires
+const METEOR_MIN_GAP_MS = 2800; // earliest next streak (per pool slot)
+const METEOR_MAX_GAP_MS = 7500; // latest next streak (per pool slot)
+const METEOR_LENGTH_MIN = 380; // world units on the shell — randomised per streak
+const METEOR_LENGTH_MAX = 680;
+const METEOR_WIDTH_MIN = 9; // streak thickness (world units at the shell)
+const METEOR_WIDTH_MAX = 16;
 const METEOR_TRAVEL = 900; // how far the streak slides along its heading
 const METEOR_SHELL = STAR_SHELL_RADIUS * 0.92; // just inside the star shell
-const METEOR_COLOR = new THREE.Color("#dfe9ff"); // cool white, faint blue tint
+const METEOR_OPACITY = 0.85; // peak head opacity at birth (eases out as t²)
+const METEOR_COOL = new THREE.Color("#dfe9ff"); // most streaks: icy blue-white
+const METEOR_WARM = new THREE.Color("#ffdfb8"); // ~15%: a warm fireball
+const METEOR_WARM_CHANCE = 0.15;
 
 // A tiny error boundary so a missing/failed HDR can never blank the scene: if
 // the <Environment> loader throws, we render nothing and the Canvas's black
@@ -182,66 +231,141 @@ class EnvErrorBoundary extends Component<{ children: ReactNode }, { failed: bool
   }
 }
 
-// Milky-Way equirectangular background (issue #83). Loaded IMPERATIVELY and
-// assigned to scene.background — SEPARATE from the IBL `environment` (drei's
-// <Environment> above owns that slot). This is the WebGLBackground pass, not
-// geometry, so it ignores the camera far-plane and always fills behind the
-// scene. NO useFrame: it wakes the demand loop exactly once on load.
+// Milky-Way sky sphere (issue #83, reworked off scene.background — see the
+// header comment for WHY the background slot renders compressed equirects
+// black). An inward-facing sphere, mirrored via geometry.scale(-1,1,1) (three's
+// panorama pattern: the inside view reads un-mirrored, so the sky matches the
+// NASA map instead of its mirror image), following the camera position each
+// frame for zero parallax. The texture is sampled DIRECTLY — BC7 stays
+// compressed in VRAM with its file mipmaps + max anisotropy.
 //
-// FALLBACK (ADR-0004): we capture the previous scene.background (the black
-// <color attach="background"> set in Scene3D) before loading; on load FAILURE we
-// leave it untouched so the void stays black; on unmount we restore it and
-// dispose the texture we created.
-function StarBackground() {
-  const scene = useThree((s) => s.scene);
+// FALLBACK (ADR-0004): the mesh only mounts once a texture has loaded — until
+// then (or on total failure) the Canvas's black <color attach="background">
+// shows through. KTX2 failure falls back to the warm 8k JPG from the shared
+// textureCache (the cache OWNS that texture — never disposed here; the KTX2
+// CompressedTexture is OURS and is disposed on unmount).
+function SkySphere({ onSurface }: { onSurface: boolean }) {
   const gl = useThree((s) => s.gl);
   const invalidate = useThree((s) => s.invalidate);
+  const meshRef = useRef<THREE.Mesh>(null);
 
-  // SINGLE OWNER of scene.background (the Milky-Way equirect TEXTURE). The two
-  // background MODIFIER props — backgroundIntensity (brightness) and
-  // backgroundRotation (per-view yaw/roll) — are owned by drei's <Environment> in
-  // <HdrBackdrop>, NOT here.
-  //
-  // Why (load-bearing — this is the dust-band bug): drei's EnvironmentCube re-runs
-  // its scene-prop apply on EVERY render (its useLayoutEffect has NO dependency
-  // array, drei core/Environment.js), and `setEnvProps` defaults backgroundIntensity
-  // to 1 and backgroundRotation to [0,0,0]. So if WE also set those here, drei
-  // clobbers them back to its defaults on the very next render (every interaction /
-  // reload-demo / at a transition's settle) while our stable-dep effects don't
-  // re-run to repair it — the band loses its tilt + brightness. Passing OUR values
-  // as <Environment> props makes drei re-assert the CORRECT values each render
-  // instead. We keep ONLY the texture here (background=false on the Environment, so
-  // drei never touches scene.background).
+  // The loaded starmap + whether we own it (KTX2 = owned, cached JPG = not).
+  // Held in state so the mesh mounts when it arrives; mirrored in a ref so the
+  // unmount cleanup sees the latest value without re-running the load effect.
+  const [tex, setTex] = useState<THREE.Texture | null>(null);
+  const ownedRef = useRef<THREE.Texture | null>(null);
+
   useEffect(() => {
     let cancelled = false;
-    const prev = scene.background; // the black <color> fallback from Scene3D
-    // Shared URL-keyed cache (textureCache): the 8k starmap is preloaded behind the
-    // splash, so this read is warm. The cache OWNS the texture (never disposed). The
-    // equirect mapping/colorSpace/anisotropy is per-URL config applied here.
-    const tex = loadTexture(STAR_BG_FILE);
-    void preloadTexture(STAR_BG_FILE).then(() => {
-      if (cancelled || !tex.image) return; // failed load ⇒ keep black (ADR-0004)
-      tex.mapping = THREE.EquirectangularReflectionMapping;
-      tex.colorSpace = THREE.SRGBColorSpace;
-      tex.anisotropy = gl.capabilities.getMaxAnisotropy();
-      // Keep trilinear mipmapping (three defaults) — sharpness comes from the 8k
-      // source, NOT from disabling mips (which would shimmer the minified stars).
-      tex.generateMipmaps = true;
-      tex.minFilter = THREE.LinearMipmapLinearFilter;
-      tex.magFilter = THREE.LinearFilter;
-      tex.needsUpdate = true; // re-upload with the new mapping/filters
-      scene.background = tex;
+
+    const install = (t: THREE.Texture, owned: boolean) => {
+      if (cancelled) {
+        if (owned) t.dispose();
+        return;
+      }
+      t.colorSpace = THREE.SRGBColorSpace;
+      t.anisotropy = gl.capabilities.getMaxAnisotropy();
+      t.needsUpdate = true;
+      ownedRef.current = owned ? t : null;
+      setTex(t);
       invalidate(); // wake the demand loop ONCE
-    });
+    };
+
+    // ADR-0004 fallback: the warm 8k JPG via the shared cache. Used when the GPU
+    // can't transcode KTX2 or the .ktx2 fails to load — the void stays black until
+    // it arrives, never blanks. The cache OWNS this texture.
+    const installJpgFallback = () => {
+      const jpg = loadTexture(STAR_BG_FILE);
+      void preloadTexture(STAR_BG_FILE).then(() => {
+        if (cancelled || !jpg.image) return; // failed load ⇒ keep black
+        // Trilinear mips (three defaults) so the minified 8k stars don't shimmer.
+        jpg.generateMipmaps = true;
+        jpg.minFilter = THREE.LinearMipmapLinearFilter;
+        jpg.magFilter = THREE.LinearFilter;
+        install(jpg, false);
+      });
+    };
+
+    // PRIMARY: the 16k Basis/ETC1S KTX2. Its bytes are warmed behind the splash
+    // (lib/assets preloadBinary), so this transcode reads the local HTTP cache —
+    // no network wait at mount. On ANY failure (unsupported GPU, decode error) we
+    // fall back to the 8k JPG. NOTE the KTX2 ships y-flipped (baked at encode,
+    // CREDITS.md) because compressed uploads can't flipY — on the mirrored sphere
+    // it lands identical to the flipY'd JPG.
+    getKTX2Loader(gl).load(
+      STAR_BG_KTX2,
+      (t) => install(t, true),
+      undefined,
+      (err) => {
+        reportAssetWarning("texture", STAR_BG_KTX2, err);
+        installJpgFallback();
+      },
+    );
+
     return () => {
       cancelled = true;
-      const cur = scene.background;
-      // Only restore if WE installed the texture; if the load failed or is still
-      // pending, `cur` is still `prev`. The cache owns `tex` — do NOT dispose it.
-      if (cur === tex) scene.background = prev;
+      // Free the KTX2 texture we created; never touch the cache-owned JPG.
+      ownedRef.current?.dispose();
+      ownedRef.current = null;
     };
-  }, [scene, gl, invalidate]);
-  return null;
+  }, [gl, invalidate]);
+
+  // Inward-facing shell: the X mirror flips the winding so the default
+  // FrontSide material renders the INSIDE faces (three's 360-panorama pattern),
+  // and the equirect reads un-mirrored from within.
+  const geometry = useMemo(() => {
+    const g = new THREE.SphereGeometry(SKY_SPHERE_RADIUS, 96, 48);
+    g.scale(-1, 1, 1);
+    return g;
+  }, []);
+  useEffect(() => () => geometry.dispose(), [geometry]);
+
+  // Per-view orientation + brightness (see skyQuaternionFor / STAR_BG_INTENSITY_*).
+  const quaternion = useMemo(() => skyQuaternionFor(onSurface), [onSurface]);
+  const tint = useMemo(
+    () =>
+      new THREE.Color().setScalar(
+        onSurface ? STAR_BG_INTENSITY_SURFACE : STAR_BG_INTENSITY_ORBIT,
+      ),
+    [onSurface],
+  );
+  // Re-paint once whenever the view (rotation/intensity) flips.
+  useEffect(() => {
+    invalidate();
+  }, [onSurface, invalidate]);
+
+  // Zero-parallax: ride the camera's position (orientation stays world-fixed),
+  // exactly like the background pass the sphere replaces. One Vector3 copy per
+  // frame — no allocation, no invalidate (only visible when something else moves).
+  useFrame(({ camera }) => {
+    meshRef.current?.position.copy(camera.position);
+  });
+
+  if (!tex) return null; // black <color> fallback until the starmap arrives
+
+  return (
+    <mesh
+      ref={meshRef}
+      name="sky-sphere"
+      quaternion={quaternion}
+      renderOrder={SKY_SPHERE_RENDER_ORDER}
+      frustumCulled={false}
+      raycast={() => null}
+    >
+      <primitive object={geometry} attach="geometry" />
+      {/* toneMapped:false matches the old background pass (it never tone-mapped
+          sRGB textures); fog:false or the surface fog would grey the whole sky;
+          depthWrite/depthTest:false = pure backdrop. */}
+      <meshBasicMaterial
+        map={tex}
+        color={tint}
+        toneMapped={false}
+        fog={false}
+        depthWrite={false}
+        depthTest={false}
+      />
+    </mesh>
+  );
 }
 
 // The self-hosted HDR as the IBL source (no `background` — the Milky-Way
@@ -256,22 +380,18 @@ function HdrBackdrop({ onSurface }: { onSurface: boolean }) {
   useEffect(() => {
     invalidate();
   }, [invalidate]);
-  // The band's per-view orientation (yaw swings the bright bulge into frame; roll
-  // holds the shared diagonal tilt). Re-keyed on the rendered view.
-  const backgroundRotation = useMemo(() => backgroundEulerFor(onSurface), [onSurface]);
   // IBL only (`background` omitted ⇒ false): the HDRI lights metals via
   // scene.environment but is never shown as the sky — the visible backdrop is the
-  // Milky-Way equirect set by <StarBackground>. drei IS, however, the single owner
-  // of backgroundIntensity, backgroundRotation, AND environmentIntensity (the
-  // per-view IBL grade): it re-applies all scene env props on every render (its
-  // layout effect has no dep array), so we MUST pass our values here or it resets
-  // them to its defaults (background intensity 1, rotation [0,0,0], env intensity 1)
-  // on every interaction — the dust-band / IBL-grade bug. See <StarBackground>.
+  // <SkySphere> mesh. drei IS, however, the single owner of environmentIntensity
+  // (the per-view IBL grade): it re-applies all scene env props on every render
+  // (its layout effect has no dep array), so we MUST pass our value here or it
+  // resets to drei's default (1) on every interaction — the IBL-grade bug. (Its
+  // backgroundIntensity/backgroundRotation re-applies are harmless now: with the
+  // sky on a mesh, scene.background stays the static black <color> fallback,
+  // which those props don't affect.)
   return (
     <Environment
       files={HDR_FILE}
-      backgroundIntensity={onSurface ? STAR_BG_INTENSITY_SURFACE : STAR_BG_INTENSITY_ORBIT}
-      backgroundRotation={backgroundRotation}
       environmentIntensity={onSurface ? ENV_INTENSITY_SURFACE : ENV_INTENSITY_ORBIT}
     />
   );
@@ -400,44 +520,133 @@ function Starfield({ uTime }: { uTime: { value: number } }) {
 type MeteorState = {
   active: boolean;
   start: number; // performance.now() when this streak fired
-  // World-space origin and a unit heading; the streak slides origin → origin +
-  // heading*METEOR_TRAVEL over its life and fades out over METEOR_FADE_MS.
+  // World-space origin and a unit heading (tangent to the shell); the streak
+  // slides origin → origin + heading*METEOR_TRAVEL over its life and fades out
+  // over METEOR_FADE_MS.
   origin: THREE.Vector3;
   heading: THREE.Vector3;
+  length: number; // randomised per fire (METEOR_LENGTH_MIN..MAX)
+  width: number; // randomised per fire (METEOR_WIDTH_MIN..MAX)
 };
 
+// Procedural streak texture: a hot white head near the right end tapering into
+// a long soft tail, with a gaussian falloff across the width — drawn once on a
+// small canvas (256×64). Additive-blended this reads as a glowing shooting star
+// with a real trail instead of a hairline. Per-pixel: tail ramp (x^2.6, so most
+// of the length stays faint) × vertical gaussian, plus a tight radial hot-core
+// blob at the head that saturates to white.
+function makeMeteorTexture(): THREE.Texture | null {
+  if (typeof document === "undefined") return null;
+  const w = 256;
+  const h = 64;
+  const cv = document.createElement("canvas");
+  cv.width = w;
+  cv.height = h;
+  const ctx = cv.getContext("2d");
+  if (!ctx) return null;
+  const img = ctx.createImageData(w, h);
+  const HEAD_X = 0.86; // head position along the quad (tail ramps toward it)
+  for (let y = 0; y < h; y++) {
+    const dy = (y + 0.5) / h - 0.5; // -0.5..0.5 across the width
+    const vert = Math.exp(-(dy * dy) / (2 * 0.16 * 0.16)); // σ≈0.16 → soft edge
+    for (let x = 0; x < w; x++) {
+      const u = (x + 0.5) / w;
+      // Tail: 0 at the far left rising to 1 at the head, then a sharp drop to
+      // the leading tip so the streak reads as travelling head-first (+X).
+      const tail =
+        u <= HEAD_X
+          ? Math.pow(u / HEAD_X, 2.6)
+          : Math.max(0, 1 - (u - HEAD_X) / (1 - HEAD_X));
+      // Hot core: a tight gaussian blob centred on the head.
+      const dxh = (u - HEAD_X) / 0.05;
+      const core = 1.6 * Math.exp(-(dxh * dxh + (dy / 0.1) * (dy / 0.1)));
+      const v = Math.min(1, tail * vert + core);
+      const i = (y * w + x) * 4;
+      const c = Math.round(v * 255);
+      img.data[i] = c;
+      img.data[i + 1] = c;
+      img.data[i + 2] = c;
+      img.data[i + 3] = c; // premultiplied-looking alpha; additive ignores it
+    }
+  }
+  ctx.putImageData(img, 0, 0);
+  const tex = new THREE.CanvasTexture(cv);
+  tex.colorSpace = THREE.SRGBColorSpace;
+  return tex;
+}
+
 // SkyAnimator owns the SINGLE useFrame for the sky (issue #106): it advances the
-// shared `uTime` clock (twinkle) and animates one pooled meteor <Line>. Per the
+// shared `uTime` clock (twinkle) and animates the pooled meteor quads. Per the
 // Wave-3 motion relaxation it PAUSES while the tab is hidden — the rAF/useFrame
 // loop only invalidates while the page is visible. The twinkle invalidates every
-// visible frame; the meteor adds invalidations only while it is mid-streak.
+// visible frame; the meteors add invalidations only while one is mid-streak.
 //
 // Snapshot purity (ADR-0004): nothing here reads or writes snapshot state — the
 // timing is pure wall-clock + Math.random, so the sky is decorative and stays
 // independent of the world snapshot.
 function SkyAnimator({ uTime }: { uTime: { value: number } }) {
   const invalidate = useThree((s) => s.invalidate);
-  const groupRef = useRef<THREE.Group>(null);
-  const lineRef = useRef<Line2>(null);
+  const meshRefs = useRef<(THREE.Mesh | null)[]>(Array(METEOR_POOL).fill(null));
 
-  // Reusable scratch vectors for orienting the streak (built once, no per-frame
-  // allocation). X_AXIS is the streak's local heading before we rotate the group.
-  const tmpDir = useMemo(() => new THREE.Vector3(), []);
-  const xAxis = useMemo(() => new THREE.Vector3(1, 0, 0), []);
+  // Reusable scratch vectors/matrix for orienting streaks (no per-frame alloc).
+  const tmpN = useMemo(() => new THREE.Vector3(), []);
+  const tmpY = useMemo(() => new THREE.Vector3(), []);
+  const tmpZ = useMemo(() => new THREE.Vector3(), []);
+  const tmpCam = useMemo(() => new THREE.Vector3(), []);
+  const tmpM = useMemo(() => new THREE.Matrix4(), []);
 
-  // Meteor scheduling/state in a ref (no re-render on fire). `nextAt` is the next
-  // scheduled fire time; it is (re)seeded relative to performance.now() so pauses
+  // Per-slot scheduling/state in refs (no re-render on fire). `nextAts` are the
+  // next scheduled fire times; (re)seeded relative to performance.now() so pauses
   // don't dump a backlog of streaks the moment the tab returns.
-  const meteor = useRef<MeteorState>({
-    active: false,
-    start: 0,
-    origin: new THREE.Vector3(),
-    heading: new THREE.Vector3(),
-  });
-  const nextAt = useRef(0);
+  const meteors = useRef<MeteorState[]>(
+    Array.from({ length: METEOR_POOL }, () => ({
+      active: false,
+      start: 0,
+      origin: new THREE.Vector3(),
+      heading: new THREE.Vector3(),
+      length: METEOR_LENGTH_MIN,
+      width: METEOR_WIDTH_MIN,
+    })),
+  );
+  const nextAts = useRef<number[]>(Array(METEOR_POOL).fill(0));
+  const gap = () =>
+    METEOR_MIN_GAP_MS + Math.random() * (METEOR_MAX_GAP_MS - METEOR_MIN_GAP_MS);
+
+  // The shared streak texture + one material per pool slot (each slot fades and
+  // tints independently). Additive blending: black adds nothing, so the quad
+  // edges can never read as a rectangle against the sky.
+  const streakTex = useMemo(() => makeMeteorTexture(), []);
+  const materials = useMemo(
+    () =>
+      Array.from(
+        { length: METEOR_POOL },
+        () =>
+          new THREE.MeshBasicMaterial({
+            map: streakTex,
+            color: METEOR_COOL,
+            blending: THREE.AdditiveBlending,
+            transparent: true,
+            opacity: 0,
+            depthWrite: false,
+            toneMapped: false,
+            fog: false,
+            side: THREE.DoubleSide,
+          }),
+      ),
+    [streakTex],
+  );
+  const quad = useMemo(() => new THREE.PlaneGeometry(1, 1), []);
+  useEffect(
+    () => () => {
+      quad.dispose();
+      materials.forEach((m) => m.dispose());
+      streakTex?.dispose();
+    },
+    [quad, materials, streakTex],
+  );
 
   // Seed/track tab visibility so the loop pauses while hidden. We re-anchor the
-  // meteor schedule on each resume so it doesn't immediately fire a backlog, and
+  // meteor schedules on each resume so they don't immediately fire a backlog, and
   // wake the loop once on resume so twinkle picks back up.
   const visibleRef = useRef(!document.hidden);
   useEffect(() => {
@@ -445,11 +654,9 @@ function SkyAnimator({ uTime }: { uTime: { value: number } }) {
       const visible = !document.hidden;
       visibleRef.current = visible;
       if (visible) {
-        // Re-anchor the next meteor relative to now (drop any while-hidden backlog).
-        nextAt.current =
-          performance.now() +
-          METEOR_MIN_GAP_MS +
-          Math.random() * (METEOR_MAX_GAP_MS - METEOR_MIN_GAP_MS);
+        // Re-anchor the schedule relative to now (drop any while-hidden backlog).
+        const now = performance.now();
+        nextAts.current = nextAts.current.map(() => now + gap());
         invalidate(); // resume the demand loop → twinkle ticks again
       }
     };
@@ -457,88 +664,103 @@ function SkyAnimator({ uTime }: { uTime: { value: number } }) {
     return () => document.removeEventListener("visibilitychange", onVisibility);
   }, [invalidate]);
 
-  // Fire a fresh streak: a random origin on the upper star shell and a heading
-  // that mostly sweeps sideways-and-down (the classic shooting-star look).
-  const fireMeteor = (now: number) => {
-    const m = meteor.current;
-    // Random point on the shell, biased to the upper hemisphere so streaks read.
-    const u = Math.random() * 0.9 + 0.05; // cos(theta) ∈ (0.05, 0.95): upper sky
-    const phi = Math.random() * Math.PI * 2;
-    const r = Math.sqrt(1 - u * u);
-    m.origin.set(r * Math.cos(phi), u, r * Math.sin(phi)).multiplyScalar(METEOR_SHELL);
-    // Heading: tangent-ish, pulled downward, then normalised. Avoid the radial
-    // direction so the streak slides across the sky rather than toward the camera.
+  // Fire a fresh streak from a pool slot: an origin on the upper star shell
+  // BIASED toward where the camera is looking (so streaks actually cross the
+  // visible frame instead of firing behind the view), a heading TANGENT to the
+  // shell (mostly sideways, pulled downward — the classic shooting-star sweep)
+  // and a randomised length/width/tint.
+  const fireMeteor = (i: number, now: number, camera: THREE.Camera) => {
+    const m = meteors.current[i];
+    // View cone: the camera's look direction lifted toward the upper sky (the
+    // surface camera often looks at the ground — streaks still belong overhead).
+    camera.getWorldDirection(tmpCam);
+    tmpCam.y = Math.max(tmpCam.y, 0.3);
+    tmpCam.normalize();
+    // Rejection-sample the upper hemisphere for a spawn within ~55° of the view
+    // cone; fall back to the last sample so a worst-case fire still happens.
+    for (let tries = 0; tries < 12; tries++) {
+      const u = Math.random() * 0.9 + 0.05; // cos(theta) ∈ (0.05, 0.95): upper sky
+      const phi = Math.random() * Math.PI * 2;
+      const r = Math.sqrt(1 - u * u);
+      m.origin.set(r * Math.cos(phi), u, r * Math.sin(phi));
+      if (m.origin.dot(tmpCam) > 0.57) break; // within ~55° of the lifted view
+    }
+    m.origin.multiplyScalar(METEOR_SHELL);
+    // Heading: random direction projected onto the shell's tangent plane (so the
+    // streak slides ACROSS the sky, never toward the camera), then pulled toward
+    // the local "down along the sky" tangent for the falling-star look.
+    tmpN.copy(m.origin).normalize(); // radial out
     m.heading
       .set(Math.random() * 2 - 1, -(Math.random() * 0.6 + 0.2), Math.random() * 2 - 1)
+      .addScaledVector(tmpN, -m.heading.dot(tmpN)) // strip the radial component
       .normalize();
+    m.length = METEOR_LENGTH_MIN + Math.random() * (METEOR_LENGTH_MAX - METEOR_LENGTH_MIN);
+    m.width = METEOR_WIDTH_MIN + Math.random() * (METEOR_WIDTH_MAX - METEOR_WIDTH_MIN);
+    materials[i].color.copy(Math.random() < METEOR_WARM_CHANCE ? METEOR_WARM : METEOR_COOL);
     m.start = now;
     m.active = true;
   };
 
-  useFrame(() => {
+  useFrame(({ camera }) => {
     if (!visibleRef.current) return; // paused while the tab is hidden
     const now = performance.now();
     uTime.value = now / 1000;
 
-    // Schedule the first streak lazily (after mount) so it doesn't fire instantly.
-    if (nextAt.current === 0) {
-      nextAt.current =
-        now + METEOR_MIN_GAP_MS + Math.random() * (METEOR_MAX_GAP_MS - METEOR_MIN_GAP_MS);
-    }
+    for (let i = 0; i < METEOR_POOL; i++) {
+      // Schedule lazily (after mount) so nothing fires instantly; stagger the
+      // slots so the pool doesn't sync up.
+      if (nextAts.current[i] === 0) nextAts.current[i] = now + gap() * (i + 1) * 0.5;
 
-    const m = meteor.current;
-    if (!m.active && now >= nextAt.current) {
-      fireMeteor(now);
-      nextAt.current =
-        now + METEOR_MIN_GAP_MS + Math.random() * (METEOR_MAX_GAP_MS - METEOR_MIN_GAP_MS);
-    }
+      const m = meteors.current[i];
+      if (!m.active && now >= nextAts.current[i]) {
+        fireMeteor(i, now, camera);
+        nextAts.current[i] = now + gap();
+      }
 
-    const group = groupRef.current;
-    const line = lineRef.current;
-    if (m.active && group && line) {
-      const t = (now - m.start) / METEOR_FADE_MS; // 0 → 1 over the streak's life
-      if (t >= 1) {
-        m.active = false;
-        group.visible = false;
-      } else {
-        group.visible = true;
-        // Slide the streak along its heading and orient local +X to that heading.
-        tmpDir.copy(m.heading);
-        group.position.copy(m.origin).addScaledVector(tmpDir, t * METEOR_TRAVEL);
-        // local +X (the line runs along X) → world heading
-        group.quaternion.setFromUnitVectors(xAxis, tmpDir);
-        // Ease-out fade: bright at birth, gone by ~800ms.
-        const mat = line.material as THREE.Material & { opacity: number };
-        mat.opacity = (1 - t) * (1 - t);
+      const mesh = meshRefs.current[i];
+      if (m.active && mesh) {
+        const t = (now - m.start) / METEOR_FADE_MS; // 0 → 1 over the streak's life
+        if (t >= 1) {
+          m.active = false;
+          mesh.visible = false;
+          materials[i].opacity = 0;
+        } else {
+          mesh.visible = true;
+          // Slide along the heading; orient the quad: local +X = travel heading
+          // (the texture's head points +X), local +Z = radial (tangent to the
+          // shell, so the quad faces the camera region at the centre).
+          mesh.position.copy(m.origin).addScaledVector(m.heading, t * METEOR_TRAVEL);
+          tmpN.copy(mesh.position).normalize();
+          tmpY.crossVectors(tmpN, m.heading).normalize();
+          tmpZ.crossVectors(m.heading, tmpY).normalize();
+          tmpM.makeBasis(m.heading, tmpY, tmpZ);
+          mesh.quaternion.setFromRotationMatrix(tmpM);
+          mesh.scale.set(m.length, m.width, 1);
+          // Ease-out fade: bright at birth, gone by ~900ms.
+          materials[i].opacity = METEOR_OPACITY * (1 - t) * (1 - t);
+        }
       }
     }
 
-    // Twinkle repaints every visible frame; an active meteor keeps it alive too.
+    // Twinkle repaints every visible frame; active meteors keep it alive too.
     invalidate();
   });
 
-  // Two-point segment along local +X; the group positions/orients/fades it.
-  const points = useMemo<[number, number, number][]>(
-    () => [
-      [-METEOR_LENGTH / 2, 0, 0],
-      [METEOR_LENGTH / 2, 0, 0],
-    ],
-    [],
-  );
-
   return (
-    <group ref={groupRef} visible={false}>
-      <Line
-        ref={lineRef}
-        points={points}
-        color={METEOR_COLOR}
-        lineWidth={1.6}
-        transparent
-        opacity={0}
-        depthWrite={false}
-        raycast={() => null}
-      />
-    </group>
+    <>
+      {materials.map((mat, i) => (
+        <mesh
+          key={i}
+          ref={(el) => {
+            meshRefs.current[i] = el;
+          }}
+          visible={false}
+          geometry={quad}
+          material={mat}
+          raycast={() => null}
+        />
+      ))}
+    </>
   );
 }
 
@@ -549,11 +771,10 @@ export function SpaceEnvironment({ onSurface = false }: { onSurface?: boolean })
   const [uTime] = useState(() => ({ value: 0 }));
   return (
     <>
-      {/* Milky-Way equirect TEXTURE on scene.background (imperative loader, black
-          fallback). Its per-view yaw + brightness live on <HdrBackdrop>'s
-          <Environment> (the single owner of backgroundRotation/backgroundIntensity)
-          so drei's every-render re-apply can't reset them — see the notes there. */}
-      <StarBackground />
+      {/* Milky-Way 16k starmap on a camera-following inward sphere (imperative
+          loader, black fallback). The sphere owns its per-view yaw/roll/pitch +
+          brightness outright — nothing else touches them. */}
+      <SkySphere onSurface={onSurface} />
       {/* Sparse foreground star points (per-vertex size/brightness/color),
           twinkled by the shared uTime clock (issue #106). */}
       <Starfield uTime={uTime} />
@@ -561,7 +782,7 @@ export function SpaceEnvironment({ onSurface = false }: { onSurface?: boolean })
           the tab is hidden (issue #106). */}
       <SkyAnimator uTime={uTime} />
       {/* HDR under Suspense (never block paint) + error boundary (never blank).
-          `onSurface` swings the band's per-view yaw (drei owns backgroundRotation). */}
+          `onSurface` selects the per-view IBL grade (drei owns environmentIntensity). */}
       <EnvErrorBoundary>
         <Suspense fallback={null}>
           <HdrBackdrop onSurface={onSurface} />

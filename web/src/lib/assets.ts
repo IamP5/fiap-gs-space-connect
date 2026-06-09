@@ -33,7 +33,7 @@ import { preloadTexture } from "./textureCache";
 import { reportAssetWarning } from "./assetLog";
 import { ROVER_MODEL_REF, REGOLITH_MAPS, loadGLTF } from "../components/Scene3D";
 import { SCENERY_MODEL_REFS, loadScenery } from "../components/LaunchScenery";
-import { HDR_FILE, STAR_BG_FILE } from "../components/SpaceEnvironment";
+import { HDR_FILE, STAR_BG_FILE, STAR_BG_KTX2 } from "../components/SpaceEnvironment";
 import {
   MOON_COLOR,
   MOON_NORMAL,
@@ -82,10 +82,17 @@ export const TEXTURE_ASSETS: readonly string[] = [
 // HDR environment maps — loaded with RGBELoader (the .hdr decoder). IBL only.
 export const HDR_ASSETS: readonly string[] = [HDR_FILE];
 
+// Binary assets warmed by a plain fetch (no decoder runs at preload — a renderer
+// is needed to transcode KTX2, and there is none until the Canvas mounts). The 16k
+// Basis-UASTC starmap rides here so its bytes land in the HTTP cache behind the
+// splash; SpaceEnvironment's <StarBackground> does the GPU transcode at mount, off
+// that warm cache. The 8k JPG (in TEXTURE_ASSETS) stays warmed as the fallback.
+export const BINARY_ASSETS: readonly string[] = [STAR_BG_KTX2];
+
 // The flat list of every asset URL (deduped). Exported so assets.test.ts can
 // assert it is non-empty and free of duplicate URLs.
 export const ALL_ASSETS: readonly string[] = Array.from(
-  new Set<string>([...GLB_ASSETS, ...TEXTURE_ASSETS, ...HDR_ASSETS]),
+  new Set<string>([...GLB_ASSETS, ...TEXTURE_ASSETS, ...HDR_ASSETS, ...BINARY_ASSETS]),
 );
 
 // --- per-loader preloaders (each SETTLES — never rejects, ADR-0004) ---------
@@ -131,6 +138,22 @@ function preloadHDR(url: string): Promise<void> {
   });
 }
 
+// Warm a binary asset into the browser HTTP cache (no decode). Used for the KTX2
+// starmap, whose GPU transcode is deferred to scene mount (it needs a renderer).
+// SETTLES on failure (ADR-0004): a miss just means <StarBackground> falls back to
+// the 8k JPG, so we log and count it done rather than rejecting the batch.
+function preloadBinary(url: string): Promise<void> {
+  return fetch(url)
+    .then((r) => {
+      if (!r.ok) throw new Error(`HTTP ${r.status}`);
+      return r.arrayBuffer();
+    })
+    .then(
+      () => undefined,
+      (err) => reportAssetWarning("binary", url, err),
+    );
+}
+
 /**
  * Preload EVERY asset behind the splash. Calls `onProgress(loaded, total)` after
  * each asset SETTLES (success or failure). Resolves once all have settled; NEVER
@@ -151,6 +174,7 @@ export function preloadAllAssets(
     ...GLB_ASSETS.map((url) => preloadGLB(url).then(tick)),
     ...TEXTURE_ASSETS.map((url) => preloadTexture(url).then(tick)),
     ...HDR_ASSETS.map((url) => preloadHDR(url).then(tick)),
+    ...BINARY_ASSETS.map((url) => preloadBinary(url).then(tick)),
   ];
 
   // Report the initial 0/total so the bar renders immediately (before the first

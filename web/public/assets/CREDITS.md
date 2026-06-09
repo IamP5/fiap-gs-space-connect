@@ -358,6 +358,7 @@ Downloaded & converted: 2026-06-07.
 | File | Source asset | Author | Source URL | License |
 |------|--------------|--------|-----------|---------|
 | `starmap_2020_8k_gal.jpg` | Deep Star Maps 2020 (SVS 4851) → `starmap_2020_8k_gal.exr`, converted offline to 8192×4096 sRGB JPG (warm-graded) | NASA/Goddard SVS (Gaia DR2: ESA/Gaia/DPAC) | https://svs.gsfc.nasa.gov/4851/ | Public Domain (NASA-PD) + ESA/Gaia co-credit |
+| `starmap_2020_16k_gal.ktx2` | SAME Deep Star Maps 2020 source at **16384×8192**, GPU-compressed to Basis-LZ/ETC1S KTX2 (tone-matched to the 8k JPG above) | NASA/Goddard SVS (Gaia DR2: ESA/Gaia/DPAC) | https://svs.gsfc.nasa.gov/4851/ | Public Domain (NASA-PD) + ESA/Gaia co-credit |
 
 Original download (8192×4096 EXR; converted offline, not committed as-is):
 `https://svs.gsfc.nasa.gov/vis/a000000/a004800/a004851/starmap_2020_8k_gal.exr`
@@ -369,6 +370,41 @@ bring out the brown dust band):
 magick starmap_2020_8k_gal.exr -set colorspace RGB -colorspace sRGB \
   -modulate 112,125,100 -depth 8 -quality 82 \
   web/public/assets/starmap_2020_8k_gal.jpg
+```
+
+### 16k KTX2 upgrade (`starmap_2020_16k_gal.ktx2`) — PRIMARY backdrop
+
+The PRIMARY space backdrop is now the **16k** Deep Star Maps render, GPU-compressed
+to a Basis-LZ/ETC1S `.ktx2` so the 4× linear resolution (crisp pinpoint stars +
+finer dust) ships **without** a VRAM cost: on desktop it transcodes to BC7
+(~1 byte/texel), so 16384×8192 with mips is ~179 MB on the GPU — the same as the
+8k RGBA8 it replaces. The real saving comes from HOW it renders: the starmap is
+sampled directly on a sky-sphere mesh (`SpaceEnvironment.tsx <SkySphere>`), NOT
+via `scene.background` — three r169 converts equirect backgrounds to a cubemap
+render target sized `image.height` (8192³×6 ≈ 1.6 GB for this map, and the RT
+inherits a mipmap filter with no mipmaps from the CompressedTexture, so it samples
+black), meaning the background slot is both broken for KTX2 and was silently
+costing the old 8k JPG path a ~536 MB cubemap. The 8k JPG above stays as the
+ADR-0004 fallback (used if the GPU can't transcode KTX2). The transcoder
+(`basis_transcoder.js` + `.wasm`, three's copy) is vendored to `assets/basis/`.
+
+Original download (16384×8192 EXR, 366 MB; ImageMagick can't decode its
+compression, so ffmpeg does the EXR→PNG step):
+`https://svs.gsfc.nasa.gov/vis/a000000/a004800/a004851/starmap_2020_16k_gal.exr`
+
+Offline conversion (ffmpeg applies the linear→sRGB transfer the EXR carries; the
+`-gamma 1.30` is tuned so the result's luminance/contrast/saturation MATCH the 8k
+JPG above, so the per-view `backgroundIntensity` grades need no re-tuning; `basisu`
+= Basis Universal v2.10):
+
+```sh
+# 1. EXR (linear half-float) → 16k sRGB PNG
+ffmpeg -apply_trc iec61966_2_1 -i starmap_2020_16k_gal.exr starmap_16k_srgb.png
+# 2. tone-match the established 8k look
+magick starmap_16k_srgb.png -gamma 1.30 -depth 8 starmap_16k_final.png
+# 3. ETC1S KTX2 + mipmaps (sRGB-correct mip filtering), y-flipped for equirect
+basisu -q 255 -comp_level 2 -mipmap -mip_srgb -ktx2 -y_flip \
+  -output_file starmap_2020_16k_gal.ktx2 starmap_16k_final.png
 ```
 
 NASA's Deep Star Maps are derived from ESA's Gaia DR2 (plus Hipparcos/Tycho)
