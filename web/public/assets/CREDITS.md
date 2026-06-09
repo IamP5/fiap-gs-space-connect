@@ -175,7 +175,7 @@ as a courtesy. Downloaded: 2026-06-06.
 |------|-------------|--------------|--------|-----------|---------|--------------|
 | `models/solar-panel.glb` | `solar-panel` | NASA 3D Resources → `3D Models/Solar Sail Concept/Solar Sail Concept.glb` | NASA / NASA 3D Resources | https://github.com/nasa/NASA-3D-Resources/tree/master/3D%20Models/Solar%20Sail%20Concept | NASA / US-gov public domain | up=z + recenter + fit-to-unit + `--compress draco` (238 KB → 54 KB) |
 | `models/comms-mast.glb` | `comms-mast` | NASA 3D Resources → `3D Models/Tether/Tether.glb` | NASA / NASA 3D Resources | https://github.com/nasa/NASA-3D-Resources/tree/master/3D%20Models/Tether | NASA / US-gov public domain | up=z + recenter + fit-to-unit + `--compress draco` (492 KB → 14 KB) |
-| `models/comms-dish.glb` | `comms-dish` | NASA 3D Resources → `3D Models/70-meter Dish/70 meter dish.glb` | NASA / NASA 3D Resources | https://github.com/nasa/NASA-3D-Resources/tree/master/3D%20Models/70-meter%20Dish | NASA / US-gov public domain | textures detached (no embedded images at runtime) + up=z + recenter + fit-to-unit + `--compress draco` (2.2 MB → 90 KB) |
+| `models/nasa_dish_70m.glb` | `comms-dish` / `dish-70m` | NASA 3D Resources → `3D Models/70-meter Dish/70 meter dish.glb` | NASA / NASA 3D Resources | https://github.com/nasa/NASA-3D-Resources/tree/master/3D%20Models/70-meter%20Dish | NASA / US-gov public domain | Milestone 08: re-conditioned WITH its baseColor texture kept (the prior `comms-dish.glb` detached it → flat grey) via `gltf-transform optimize --compress draco --texture-compress webp` (2.2 MB → 207 KB). Shared by the lunar comms ridge (hero) + Shackleton, scaled per site. Replaces `comms-dish.glb`. |
 
 Source repository (the `.glb` files above are fetched verbatim from branch
 `master`, then conditioned offline as noted): `https://github.com/nasa/NASA-3D-Resources`.
@@ -416,3 +416,26 @@ carried no insignia (its only decal was an undistributed external diffuse map,
 which was stripped). The Astronaut's remaining grey patches are mechanical EVA
 suit hardware (chest controls / valves), not insignia. NASA's image and media
 usage guidelines: https://www.nasa.gov/nasa-brand-center/images-and-media/.
+
+## Composed base — EVA suit + comms dish (NASA-PD — milestone 08 / #174)
+
+Two NASA 3D Resources models added (the EMU) / re-conditioned (the 70-m dish) for
+the composed lunar base layout (Milestone 08, WS-2/WS-6). Both are decorative,
+snapshot-independent **Scenery** rendered by `LaunchScenery.tsx`, each with a
+mandatory primitive fallback (ADR-0004) and raycast-suppressed (non-pickable). US
+public-domain works; this project is **not** affiliated with or endorsed by NASA,
+and **no NASA insignia or US flag is displayed**. Downloaded & conditioned 2026-06-08.
+
+| File | Source asset | Author | Source URL | License | Conditioning |
+|------|--------------|--------|-----------|---------|--------------|
+| `models/nasa_emu.glb` | NASA 3D Resources → `3D Models/Extravehicular Mobility Unit/Extravehicular Mobility Unit.glb` (EVA spacesuit, a scale figure near the worksite) | NASA / NASA 3D Resources | https://github.com/nasa/NASA-3D-Resources/tree/master/3D%20Models/Extravehicular%20Mobility%20Unit | NASA / US-gov public domain | **ALL textures stripped** (the source baseColor atlases carried a US flag + a mission patch + EVA-control labels; per §7 the flag/insignia must not ship, so every texture slot was removed and the suit renders from a neutral grey baseColorFactor — same approach as `base-station.glb`); then `gltf-transform optimize --compress draco` (3.45 MB → 352 KB). Shipped `.glb` has **0 textures** (re-verified post-encode). |
+| `models/nasa_dish_70m.glb` | NASA 3D Resources → `3D Models/70-meter Dish/70 meter dish.glb` | NASA / NASA 3D Resources | https://github.com/nasa/NASA-3D-Resources/tree/master/3D%20Models/70-meter%20Dish | NASA / US-gov public domain | Textured re-condition of the dish that previously shipped (with textures detached → flat grey) as `comms-dish.glb`: kept its baseColor texture via `gltf-transform optimize --compress draco --texture-compress webp` (2.2 MB → 207 KB). Its single texture is the antenna's metal/structure surface (no insignia/flag). **Replaces `comms-dish.glb`**; shared by the lunar comms ridge (hero, scaled large) + Shackleton. See the props table above. |
+
+Original downloads (raw `master`; conditioned, not committed as-is):
+
+- `https://raw.githubusercontent.com/nasa/NASA-3D-Resources/master/3D%20Models/Extravehicular%20Mobility%20Unit/Extravehicular%20Mobility%20Unit.glb`
+- `https://raw.githubusercontent.com/nasa/NASA-3D-Resources/master/3D%20Models/70-meter%20Dish/70%20meter%20dish.glb`
+
+NASA's 3D Resources are released into the public domain; the NASA insignia/worm/
+seal and US flag are excluded and are NOT shipped here. See
+https://www.nasa.gov/nasa-brand-center/images-and-media/.

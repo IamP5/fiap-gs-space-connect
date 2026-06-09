@@ -63,7 +63,7 @@ import { batteryPercent } from "../lib/format";
 import { suppressRaycast } from "../lib/suppressRaycast";
 import { applyGltfTextureFidelity, polishGltfMaterials } from "../lib/textureFidelity";
 import { loadTexture, preloadTexture } from "../lib/textureCache";
-import { reportAssetError } from "../lib/assetLog";
+import { reportAssetError, reportAssetWarning } from "../lib/assetLog";
 import {
   CRATER_OUTER_RADIUS,
   EARTH_POSITION,
@@ -114,9 +114,14 @@ import {
   idleSwayOffset,
   zoomExposure,
 } from "../lib/cameraFeel";
-import { OPEN_MS, openAzimuthOffset } from "../lib/reel/openArc";
+import {
+  OPEN_MS,
+  alignOpenCameraElevation,
+  openAzimuthOffset,
+} from "../lib/reel/openArc";
 import { LaunchScenery } from "./LaunchScenery";
 import { LavaTubeSkylight, LavaTubeBoulders } from "./LavaTube";
+import { LunarBaseDecals } from "./BaseDecals";
 
 // Functional telemetry colors (DESIGN.md: live-data signals only — the brand
 // palette itself is black + white). Matched to the 2D canvas so the two
@@ -403,7 +408,15 @@ const ROVER_SCALE = (ROVER_SCENE_SIZE / ROVER_BASE_SIZE) * ROVER_HERO_SCALE;
 function fitAndSeatRover(obj: THREE.Object3D, fit: number) {
   obj.updateMatrixWorld(true);
   const box = new THREE.Box3().setFromObject(obj);
-  if (box.isEmpty()) return;
+  if (box.isEmpty()) {
+    // Degenerate glTF (no renderable geometry → empty bbox): seat at the group
+    // origin and apply the target scale so it still lands sanely rather than at raw
+    // native coords/scale (#171 audit carry-over). Logged so the cause is visible.
+    obj.scale.setScalar(fit);
+    obj.position.set(0, 0, 0);
+    reportAssetWarning("fitAndSeatRover", "empty bounding box (no renderable geometry)");
+    return;
+  }
   const size = box.getSize(new THREE.Vector3());
   const center = box.getCenter(new THREE.Vector3());
   const maxDim = Math.max(size.x, size.y, size.z) || 1;
@@ -3012,6 +3025,10 @@ function SceneContents({
             <>
               <LavaTubeSkylight />
               <LavaTubeBoulders />
+              {/* Graded pads + rover tracks anchoring the composed base zones to
+                  the regolith (Milestone 08, WS-2). Lunar only — Shackleton's
+                  crater bowl already grounds its outpost. */}
+              <LunarBaseDecals />
             </>
           )}
 
@@ -3445,20 +3462,25 @@ function CinematicOpen({
     // (the cold-hold fallback) and controls/CameraFeel keep their current state.
     if (!active || onSurface || !controls || !camera) return;
 
-    // Capture the LIVE rest pose at the moment the cue fires — NOT the hardcoded
-    // ORBIT_POSE. The open is a there-and-back: it must settle EXACTLY where it
-    // started so the world-fixed backdrop (the Milky-Way equirect band + NebulaHero)
-    // is byte-identical on return. The equirect background is sampled purely by
-    // camera ORIENTATION, so even a few degrees of idle-sway azimuth between the live
-    // pose and the canonical ORBIT_POSE would rotate the warm dust band out of frame
-    // on settle (the reported "dust gone after the arc"). Snapping back to the live
-    // start pose removes that drift entirely.
+    // Capture the LIVE target + horizontal berth at the moment the cue fires. The
+    // equirect background is sampled by camera orientation, so preserving the live
+    // X/Z offset avoids the old azimuth snap that rotated the warm dust band away.
+    // The Y offset is intentionally restored to ORBIT_POSE's startup elevation:
+    // regardless of a prior polar drag, the reveal sees the Sun and Moon with the
+    // same vertical alignment as the default app view.
     const startTarget = controls.target.clone();
     const startPos = camera.position.clone();
-    // The rest offset (position − target) the arc rotates a CLONE of around the
-    // target's up-axis so the radius + pitch are preserved and only the azimuth
-    // swings (CAMERA-ARC, not sun-arc).
-    const restOffset = startPos.clone().sub(startTarget);
+    const liveOffset = startPos.clone().sub(startTarget);
+    const defaultOffset = ORBIT_POSE.position.clone().sub(ORBIT_POSE.target);
+    const alignedOffset = alignOpenCameraElevation(
+      [liveOffset.x, liveOffset.y, liveOffset.z],
+      [defaultOffset.x, defaultOffset.y, defaultOffset.z],
+    );
+    // The arc rotates this aligned offset around the target's up-axis. Its elevation
+    // stays fixed at the startup value while only azimuth changes (CAMERA-ARC, not
+    // sun-arc); the final pose retains the live horizontal framing.
+    const restOffset = new THREE.Vector3(...alignedOffset);
+    const settledPos = startTarget.clone().add(restOffset);
     const up = camera.up.clone(); // world-up (0,1,0) in orbit — the azimuth axis
     const tmpOffset = new THREE.Vector3();
     const tmpQuat = new THREE.Quaternion();
@@ -3497,17 +3519,17 @@ function CinematicOpen({
       if (t < 1) {
         raf = requestAnimationFrame(step);
       } else {
-        // Settle EXACTLY on the live start pose (openAzimuthOffset(1) === 0, but snap
-        // to the captured pose so there is zero residual), re-enable controls, and
-        // hand the camera back to CameraFeel via onTransition(false) — idle drift
-        // eases in. Returning to the SAME pose keeps the backdrop dust band intact.
+        // Settle EXACTLY on the aligned rest pose (openAzimuthOffset(1) === 0, but
+        // snap so there is zero residual), re-enable controls, and hand the camera
+        // back to CameraFeel. The live azimuth keeps the backdrop continuous while
+        // the canonical Y keeps the Sun/Moon composition matched to app startup.
         finish();
       }
     };
 
     const finish = () => {
       finished = true;
-      camera.position.copy(startPos);
+      camera.position.copy(settledPos);
       camera.up.set(0, 1, 0);
       camera.lookAt(startTarget);
       controls.target.copy(startTarget);
@@ -3529,11 +3551,11 @@ function CinematicOpen({
       // back to CameraFeel/OrbitControls — there is nothing to cancel, so DON'T touch
       // the camera (the operator may have orbited away since). Only an INTERRUPTED arc
       // (prop flips false / unmount mid-run) needs the restore: settle back to the
-      // live start pose and re-enable controls so nothing is left stuck-disabled or
-      // half-rotated.
+      // aligned rest pose and re-enable controls so nothing is left stuck-disabled
+      // or half-rotated.
       if (!finished) {
         if (controls) {
-          camera.position.copy(startPos);
+          camera.position.copy(settledPos);
           camera.up.set(0, 1, 0);
           camera.lookAt(startTarget);
           controls.target.copy(startTarget);

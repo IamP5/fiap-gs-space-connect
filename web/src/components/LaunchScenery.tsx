@@ -34,7 +34,7 @@ import {
   type SetPiece,
 } from "../lib/scene";
 import { CELESTIAL_BLOOM_LAYER } from "./Scene3D";
-import { reportAssetError } from "../lib/assetLog";
+import { reportAssetError, reportAssetWarning } from "../lib/assetLog";
 
 // Self-contained loader + cache (mirrors Scene3D's loadGLTF): N references to the
 // same .glb parse it ONCE, and the parsed scene is cloned per placement so
@@ -112,7 +112,17 @@ export const SCENERY_MODEL_REFS: readonly string[] = Array.from(
 function fitAndSeat(obj: THREE.Object3D, fit: number) {
   obj.updateMatrixWorld(true);
   const box = new THREE.Box3().setFromObject(obj);
-  if (box.isEmpty()) return;
+  if (box.isEmpty()) {
+    // A degenerate glTF (points/lines only, or no renderable geometry) yields an
+    // empty bbox, so there's no size to fit or centre to seat. Rather than leave
+    // the model at its raw native coords/scale (it could land anywhere, any size),
+    // seat it at the group origin and apply the target scale so it still lands
+    // sanely on the ground (#171 audit carry-over). Logged so the cause is visible.
+    obj.scale.setScalar(fit);
+    obj.position.set(0, 0, 0);
+    reportAssetWarning("fitAndSeat", "empty bounding box (no renderable geometry)");
+    return;
+  }
   const size = box.getSize(new THREE.Vector3());
   const center = box.getCenter(new THREE.Vector3());
   const maxDim = Math.max(size.x, size.y, size.z) || 1;
@@ -167,48 +177,52 @@ function mergeSetPiece(root: THREE.Object3D): {
     { material: THREE.Material; geometries: THREE.BufferGeometry[] }
   >();
 
+  // Bucket a single baked geometry slice under its (material, attribute-signature)
+  // key. Shared by the single- and multi-material paths below.
+  const pushGeom = (geom: THREE.BufferGeometry, material: THREE.Material) => {
+    geom.applyMatrix4(local);
+    // Identify by material reference (pixel-identical) + attribute signature.
+    const matKey = registerMaterial(material);
+    const sigKey = attributeSignature(geom);
+    const key = `${matKey}|${sigKey}`;
+    let bucket = buckets.get(key);
+    if (!bucket) {
+      bucket = { material, geometries: [] };
+      buckets.set(key, bucket);
+    }
+    bucket.geometries.push(geom);
+  };
+
   root.traverse((o) => {
     if (!(o as THREE.Mesh).isMesh) return;
     const mesh = o as THREE.Mesh;
-    // A child could carry a material ARRAY (multi-material mesh w/ geometry
-    // groups). Split it into per-group geometries so each piece pairs with its
-    // single material and merges cleanly; a single material is the common case.
-    const materials = Array.isArray(mesh.material)
-      ? mesh.material
-      : [mesh.material];
 
     // Bake the child's FULL normalized world matrix (includes fitAndSeat's root
     // scale + recenter/seat), so the merged geometry renders at the fitted size.
     local.copy(mesh.matrixWorld);
 
-    for (let g = 0; g < materials.length; g++) {
-      const material = materials[g];
-      if (!material) continue;
+    if (Array.isArray(mesh.material)) {
+      // Multi-material mesh (geometry groups). Each group pairs with the material
+      // its OWN `materialIndex` points at — NOT its sequential position in the
+      // groups array (#171 audit carry-over: a glTF whose groups are reordered or
+      // whose materialIndex skips would otherwise get the wrong material painted on
+      // a slice). Carve out each group's index range so the slice pairs with that
+      // one material, then merge per slice. sliceGroup clones internally.
+      const materials = mesh.material;
+      const groups = mesh.geometry.groups;
+      for (let gi = 0; gi < groups.length; gi++) {
+        const material = materials[groups[gi].materialIndex ?? 0];
+        if (!material) continue;
+        const sliced = sliceGroup(mesh.geometry, gi);
+        if (!sliced) continue;
+        pushGeom(sliced, material);
+      }
+    } else {
+      const material = mesh.material;
+      if (!material) return;
       // Clone so we never mutate the shared cached source geometry, then bake the
       // transform into the clone's positions/normals/tangents.
-      let geom: THREE.BufferGeometry;
-      if (Array.isArray(mesh.material)) {
-        // Multi-material mesh: carve out just this group's index range so the
-        // slice pairs with materials[g] alone, then merge per slice. sliceGroup
-        // clones internally, so we don't clone again here.
-        const sliced = sliceGroup(mesh.geometry, g);
-        if (!sliced) continue;
-        geom = sliced;
-      } else {
-        geom = mesh.geometry.clone();
-      }
-      geom.applyMatrix4(local);
-
-      // Identify by material reference (pixel-identical) + attribute signature.
-      const matKey = registerMaterial(material);
-      const sigKey = attributeSignature(geom);
-      const key = `${matKey}|${sigKey}`;
-      let bucket = buckets.get(key);
-      if (!bucket) {
-        bucket = { material, geometries: [] };
-        buckets.set(key, bucket);
-      }
-      bucket.geometries.push(geom);
+      pushGeom(mesh.geometry.clone(), material);
     }
   });
 

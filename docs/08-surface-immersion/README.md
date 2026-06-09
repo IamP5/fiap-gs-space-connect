@@ -5,7 +5,7 @@
 > coherent base composition, robotic-reading rovers, crisp regolith, real NASA
 > structures, and cinematic lunar lighting.
 
-Status: **PLANNED** · Created 2026-06-08 · Targets R3F v8 · Ships CC0 + NASA-PD only.
+Status: **COMPLETE** (all 6 slices on `feat/08-surface-immersion`) · Created 2026-06-08 · Targets R3F v8 · Ships CC0 + NASA-PD only.
 Tracking: **GitHub milestone #3** (`08 — Lunar Surface Immersion Overhaul`) — this
 initiative is grouped by a milestone, not a `type:epic` issue (see
 [`docs/harness/issue-tracking.md`](../harness/issue-tracking.md)).
@@ -20,7 +20,7 @@ feature to `passing`.
 - [x] #171 — 08-P4 Robotic rover readability: scale 2.5–3× + load-fix + material (WS-3) · `r3d-171` · _branch `feat/08-surface-immersion`_
 - [x] #172 — 08-P3 Cinematic lunar lighting + exposure (WS-5) · `r3d-172` · _branch `feat/08-surface-immersion` (Earth-framing sub-task deferred)_
 - [x] #173 — 08-P6 Hero lava-tube cave skylight + boulder scatter (WS-4) · `r3d-173` · _branch `feat/08-surface-immersion`_
-- [ ] #174 — 08-P5 Composed base layout + NASA-PD assets [HITL] (WS-2+WS-6) · `r3d-174` · _blocked by #169_
+- [x] #174 — 08-P5 Composed base layout + NASA-PD assets [HITL] (WS-2+WS-6) · `r3d-174` · _branch `feat/08-surface-immersion`_
 
 ---
 
@@ -106,20 +106,20 @@ Full findings in [ASSET-RESEARCH.md](./ASSET-RESEARCH.md). Headlines:
 
 ## Definition of Done (epic-level)
 
-- [ ] Worksite at rest shows **no translucent ghost-box field** — clean surface
-      (WS-1).
-- [ ] Set-pieces read as **one coherent base** with pad/cluster/power/comms zones
-      (WS-2).
-- [ ] Rovers are **immediately legible as robots** at default camera distance
-      and don't fall back to primitive boxes (WS-3).
-- [ ] Ground reads as **grey Moon regolith** (not brown dirt), no obvious texture
-      tiling at working distance, with boulders + a hero crater on the lunar site
-      (WS-4).
-- [ ] Sunlit surface is bright with near-black shadows; Earth-over-horizon framing
-      is a hero shot (WS-5).
-- [ ] All new GLBs Draco-conditioned, insignia-audited, credited (WS-6).
-- [ ] Headline replay reel + the Epic 07 cinematic still read correctly (no
-      regressions to the 2:30 roteiro).
+- [x] Worksite at rest shows **no translucent ghost-box field** — clean surface
+      (WS-1, #169).
+- [x] Set-pieces read as **one coherent base** with pad/cluster/power/comms zones
+      (WS-2, #174).
+- [x] Rovers are **immediately legible as robots** at default camera distance
+      and don't fall back to primitive boxes (WS-3, #171).
+- [x] Ground reads as **grey Moon regolith** (not brown dirt), no obvious texture
+      tiling at working distance, with boulders + a hero crater/skylight on the
+      lunar site (WS-4, #170 + #173).
+- [x] Sunlit surface is bright with near-black shadows; Earth-over-horizon framing
+      is a hero shot (WS-5, #172 — Earth re-framing sub-task deferred).
+- [x] All new GLBs Draco-conditioned, insignia-audited, credited (WS-6, #174).
+- [x] Headline replay reel + the Epic 07 cinematic still read correctly (no
+      regressions to the 2:30 roteiro) — worksite centre/`wall-1` stage kept clear.
 
 See [IMPLEMENTATION-PLAN.md](./IMPLEMENTATION-PLAN.md) for file-level tasks,
 slice breakdown, and risks.

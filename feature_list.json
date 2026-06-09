@@ -1796,7 +1796,7 @@
       "area": "surface-immersion",
       "title": "Composed base layout + NASA-PD assets [HITL] (08-P5)",
       "user_visible_behavior": "The surface reads as one designed base with clear zones (landing pad / habitat cluster / power farm / comms ridge), structures grounded by pad + rover-track decals, populated with insignia-clean NASA-PD GLBs (Apollo LM, Astronaut, EMU, 70-m dish, habitat parts).",
-      "status": "not_started",
+      "status": "passing",
       "issue": 174,
       "milestone": 3,
       "depends_on": [
@@ -1807,8 +1807,8 @@
         "HITL: design review of the composed layout before merge",
         "manual: zoned base, nothing randomly dropped, pad/track decals ground structures; new GLBs Draco-conditioned + insignia-audited + credited; Epic 07 cinematic (lunar/wall-1 + orbit bookend) unaffected"
       ],
-      "evidence": "",
-      "notes": "Milestone 08. Plan WS-2 + WS-6. HITL (art-direction review). NASA-PD only; audit each GLB for NASA insignia (meatball/worm/seal) and strip/hide. Skip Gateway Core (66 MB). Asset URLs in docs/08-surface-immersion/ASSET-RESEARCH.md."
+      "evidence": "LUNAR_SET_PIECES rewritten in lib/scene.ts into 5 zones — launch complex (crawler/mobile-launcher/gantry, back), landing pad (lander), habitat cluster (habitat-1/2 + radome + base-station, right), comms ridge (70-m dish hero + mast), power farm (4-panel solar ROW), + astronaut & EMU scale figures; SW skylight (-26,-8) and centre wall-1 stage kept clear. New BaseDecals.tsx LunarBaseDecals renders graded pads + rover-track CanvasTexture decals (data in scene.ts LUNAR_BASE_PADS/LUNAR_ROVER_TRACKS), gated lunar-only, raycast-suppressed. WS-6: downloaded + conditioned nasa_emu.glb (3.45MB→352KB, ALL textures stripped to kill the source US-flag + mission patch per §7 — ships 0 textures) and nasa_dish_70m.glb (textured 2.2MB→207KB); replaced the flat textures-detached comms-dish.glb (deleted) on BOTH sites with the textured dish. Carry-over guards: fitAndSeat/fitAndSeatRover empty-bbox fallback (seat at origin + target scale + warn); mergeSetPiece pairs groups via geometry.groups[g].materialIndex not sequential index. CREDITS.md updated (insignia audit: EMU flag/patch stripped, dish texture is metal surface only). Tests: scene.test.ts +5 (roster present, unique keys/refs, centre + skylight clearance for pieces/pads/tracks), updated the stale 'disjoint hardware per site' test to 'distinct composition'. tsc clean, eslint 0 errors, 254 vitest pass, vite build OK. Live: descended to lunar surface — zones populate with real NASA geometry (no box fallbacks), graded pads + boulders render, no [asset] errors (only favicon 404), worksite centre/wall-1 unobstructed (Epic 07 intact).",
+      "notes": "Milestone 08. Plan WS-2 + WS-6. HITL (art-direction review): user chose Zoned layout + Pads&tracks + fetch-new-assets. NASA-PD only; EMU textures fully stripped (carried US flag + mission patch); 70-m dish was already in-repo as comms-dish.glb (re-conditioned textured, old one deleted). Skipped Gateway Core (66 MB)."
     }
   ]
 }

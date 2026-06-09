@@ -40,6 +40,7 @@ export const SCENE_UNITS_PER_METER = 0.12;
 export const REAL_METERS = {
   rover: 2.5,
   astronaut: 2.0,
+  emu: 2.2,
   habitat: 6.0,
   baseStation: 4.0,
   crawler: 40,
@@ -49,6 +50,9 @@ export const REAL_METERS = {
   solarPanel: 10,
   commsMast: 12,
   commsDish: 6,
+  // The 70-m DSN dish at literal scale would tower 8.4 u — read instead as a hero
+  // comms landmark sized to sit between the gantry and the habitats (Milestone 08).
+  dish70: 26,
   radome: 5,
 } as const;
 
@@ -74,16 +78,31 @@ export type SetPiece = {
   fallbackShape?: "box" | "capsule";
 };
 
-// The LUNAR launch complex (the original SET_PIECES). The mobile launcher
-// (120 m → 14.4 u) + gantry (90 m → 10.8 u) tower over the ~2.5 m rovers; the
-// crawler sits low/wide; the human-scale base station + astronaut anchor the
-// scale. POSITIONS are art-directed for the literal scale (literal sizes, staged
-// layout — what every NASA press render does).
+// The LUNAR base — a DESIGNED master layout (Milestone 08, WS-2), not scattered
+// props. Five zones compose one coherent spaceport, read against two fixed
+// landforms: the SW lava-tube SKYLIGHT (SKYLIGHT_CENTER ≈ [-26,-8], with its
+// boulder rim out to ~17 u) and the CENTRE worksite stage (the Epic 07 climax at
+// `wall-1` + the rover swarm). Camera looks down −Z, so −Z = BACK (away).
+//
+//   • LAUNCH COMPLEX  (back, −Z): crawler + mobile launcher + gantry clustered as
+//     one launch group — the 120 m launcher (14.4 u) + 90 m gantry (10.8 u) tower.
+//   • LANDING PAD     (back-right): the lunar module on a graded pad decal.
+//   • HABITAT CLUSTER (right flank, +X): two habitat demo units + a science radome
+//     + the base station, grouped on a shared grading pad.
+//   • COMMS RIDGE     (far right): the 70-m dish (hero comms landmark) + a mast.
+//   • POWER FARM      (front-right): a ROW of solar panels facing the sun azimuth.
+//   • SCALE FIGURES   : an astronaut + an EMU-suited figure near the worksite edge
+//     so the towers read at their true ~60:1 scale.
+//
+// The LEFT half stays open for the skylight hero + the SW Earthrise sightline; the
+// CENTRE stays a clean stage. POSITIONS are art-directed but every piece is still
+// drawn at its literal real-metres scale (realMeters · SCENE_UNITS_PER_METER).
 export const LUNAR_SET_PIECES: SetPiece[] = [
+  // ---- launch complex (back) ----
   {
     key: "crawler",
     modelRef: "/assets/models/nasa_crawler.glb",
-    position: [-22, 0, -26],
+    position: [-18, 0, -32],
     rotation: [0, Math.PI / 5, 0],
     realMeters: REAL_METERS.crawler,
     fallbackColor: "#5a5a4e",
@@ -91,7 +110,7 @@ export const LUNAR_SET_PIECES: SetPiece[] = [
   {
     key: "mobile-launcher",
     modelRef: "/assets/models/nasa_mobile_launcher.glb",
-    position: [-9, 0, -34],
+    position: [-5, 0, -38],
     rotation: [0, 0, 0],
     realMeters: REAL_METERS.mobileLauncher,
     fallbackColor: "#6b6b72",
@@ -99,26 +118,121 @@ export const LUNAR_SET_PIECES: SetPiece[] = [
   {
     key: "gantry",
     modelRef: "/assets/models/nasa_gantry.glb",
-    position: [12, 0, -32],
+    position: [8, 0, -34],
     rotation: [0, -Math.PI / 8, 0],
     realMeters: REAL_METERS.gantry,
     fallbackColor: "#7a4a3a",
   },
+  // ---- landing pad (back-right) ----
   {
     key: "lander",
     modelRef: "/assets/models/nasa_lunar_module.glb",
-    position: [22, 0, -22],
+    position: [25, 0, -24],
     rotation: [0, -Math.PI / 4, 0],
     realMeters: REAL_METERS.lander,
     fallbackColor: "#b8a070",
   },
+  // ---- habitat cluster (right flank) ----
+  {
+    key: "habitat-1",
+    modelRef: "/assets/models/habitat-demo-unit-1.glb",
+    position: [19, 0, -6],
+    rotation: [0, Math.PI / 5, 0],
+    realMeters: 22,
+    fallbackColor: "#9aa0aa",
+  },
+  {
+    key: "habitat-2",
+    modelRef: "/assets/models/habitat-demo-unit-2.glb",
+    position: [24, 0, 1],
+    rotation: [0, -Math.PI / 6, 0],
+    realMeters: 20,
+    fallbackColor: "#929aa6",
+  },
+  {
+    key: "radome",
+    modelRef: "/assets/models/radome.glb",
+    position: [15, 0, 6],
+    rotation: [0, -Math.PI / 4, 0],
+    realMeters: 14,
+    fallbackColor: "#8b929e",
+  },
   {
     key: "base-station",
     modelRef: "/assets/models/base-station.glb",
-    position: [4, 0, -6],
+    position: [12, 0, -12],
     rotation: [0, Math.PI / 6, 0],
     realMeters: REAL_METERS.baseStation,
     fallbackColor: "#8c8c84",
+  },
+  // ---- comms ridge (far right) ----
+  {
+    key: "dish-70m",
+    modelRef: "/assets/models/nasa_dish_70m.glb",
+    position: [31, 0, -13],
+    rotation: [0, Math.PI / 2.6, 0],
+    realMeters: REAL_METERS.dish70,
+    fallbackColor: "#b4b8be",
+  },
+  {
+    key: "comms-mast",
+    modelRef: "/assets/models/comms-mast.glb",
+    position: [32, 0, -4],
+    rotation: [0, 0, 0],
+    realMeters: REAL_METERS.commsMast,
+    fallbackColor: "#7d8590",
+  },
+  // ---- power farm (front-right): a solar ROW facing the back-right sun ----
+  {
+    key: "solar-1",
+    modelRef: "/assets/models/solar-panel.glb",
+    position: [14, 0, 14],
+    rotation: [0, -Math.PI / 9, 0],
+    realMeters: REAL_METERS.solarPanel,
+    fallbackColor: "#3f4656",
+  },
+  {
+    key: "solar-2",
+    modelRef: "/assets/models/solar-panel.glb",
+    position: [19, 0, 15],
+    rotation: [0, -Math.PI / 9, 0],
+    realMeters: REAL_METERS.solarPanel,
+    fallbackColor: "#3f4656",
+  },
+  {
+    key: "solar-3",
+    modelRef: "/assets/models/solar-panel.glb",
+    position: [24, 0, 15],
+    rotation: [0, -Math.PI / 9, 0],
+    realMeters: REAL_METERS.solarPanel,
+    fallbackColor: "#3f4656",
+  },
+  {
+    key: "solar-4",
+    modelRef: "/assets/models/solar-panel.glb",
+    position: [29, 0, 14],
+    rotation: [0, -Math.PI / 9, 0],
+    realMeters: REAL_METERS.solarPanel,
+    fallbackColor: "#3f4656",
+  },
+  // ---- scale figures (worksite edge) ----
+  {
+    key: "astronaut",
+    modelRef: "/assets/models/astronaut.glb",
+    position: [11, 0, 5],
+    rotation: [0, -Math.PI / 3, 0],
+    realMeters: REAL_METERS.astronaut,
+    fallbackColor: "#c8ccd4",
+    fallbackShape: "capsule",
+  },
+  {
+    key: "emu",
+    modelRef: "/assets/models/nasa_emu.glb",
+    position: [8, 0, -9],
+    rotation: [0, Math.PI / 4, 0],
+    realMeters: REAL_METERS.emu,
+    fallbackColor: "#d2d6dc",
+    fallbackShape: "capsule",
   },
 ];
 
@@ -166,7 +280,10 @@ export const SHACKLETON_SET_PIECES: SetPiece[] = [
   },
   {
     key: "shk-comms-dish",
-    modelRef: "/assets/models/comms-dish.glb",
+    // Shares the lunar comms hero's TEXTURED 70-m dish (Milestone 08): the prior
+    // comms-dish.glb was the same NASA source with textures detached (flat grey) —
+    // upgraded here so both sites' dishes read as real dish surfaces, scaled per site.
+    modelRef: "/assets/models/nasa_dish_70m.glb",
     position: [-13, 0, 2],
     rotation: [0, Math.PI / 2.5, 0],
     realMeters: 10,
@@ -573,6 +690,39 @@ export function skylightProfile(dr: number): number {
   // Outer flank: ejecta rim crest easing back down to the plain.
   return SKYLIGHT_RIM_LIP * (1 - smoothstep01(SKYLIGHT_RIM_RADIUS, SKYLIGHT_OUTER_RADIUS, dr));
 }
+
+// ---- lunar base ground decals (Milestone 08, WS-2) -------------------------
+//
+// Flat ground decals that anchor the set-piece zones to the regolith so the
+// structures read as a PREPARED base, not props floating on raw dirt. Pure data
+// here (scene-space x/z + size, no three) so the layout is unit-testable and the
+// renderer (LunarBaseDecals) is a thin mapping. Two kinds:
+//
+//   • GradePad   — a darker, compacted-regolith disc under a zone cluster.
+//   • RoverTrack — a faint wheel-track streak between two zones (a lived-in path).
+//
+// Both sit just above y=0 and are non-pickable. Authored to stay clear of the SW
+// skylight (SKYLIGHT_CENTER, out to SKYLIGHT_OUTER_RADIUS) and the centre stage.
+
+export type GradePad = { center: [number, number]; radius: number };
+export type RoverTrack = { from: [number, number]; to: [number, number]; width: number };
+
+// One graded pad per ground-anchored zone (the launch towers + comms ridge read
+// as built ON the regolith and get none). Centres/radii track the LUNAR_SET_PIECES
+// clusters above.
+export const LUNAR_BASE_PADS: GradePad[] = [
+  { center: [25, -24], radius: 7 }, // landing pad (lunar module)
+  { center: [19, -3], radius: 12 }, // habitat cluster (habitats + radome + base-stn)
+  { center: [22, 15], radius: 9 }, // power farm (solar row)
+];
+
+// Faint wheel tracks stitching the base together: pad → habitat → power, plus a
+// spur from the habitat toward the worksite stage (the rovers' commute).
+export const LUNAR_ROVER_TRACKS: RoverTrack[] = [
+  { from: [25, -24], to: [19, -3], width: 1.4 }, // landing pad → habitat
+  { from: [19, -3], to: [22, 15], width: 1.4 }, // habitat → power farm
+  { from: [19, -3], to: [4, 2], width: 1.2 }, // habitat → worksite stage
+];
 
 // ---- habitat dome: rising-by-completion ordering ---------------------------
 
