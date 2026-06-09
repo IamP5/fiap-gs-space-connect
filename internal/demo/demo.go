@@ -305,19 +305,21 @@ func siteRovers(siteID string, base domain.Vec2) []agent.Config {
 }
 
 // DomeBlueprint is the lunar habitat dome as a positioned, SINGLE-SITE blueprint
-// (TECHSPEC §5): four foundations (no deps) on an inner ring, eight walls on an
-// outer octagon (wall-i needs foundation-((i-1)/2+1)), and a dome-cap keystone at
-// the centre that needs all eight walls. The geometry is a top-down dome footprint
-// so the structure visibly rises as the swarm builds it. It carries no SiteID
-// (single default site) and is kept for the single-site tooling/tests; the live
-// two-site demo board is assembled by DomeScenario via siteDome.
+// (TECHSPEC §5): four foundations (no deps) on an inner ring, six walls on an outer
+// hexagon (wall-i needs foundation-((i-1)%4+1)), and a dome-cap keystone at the
+// centre that needs all six walls. The sparse six-wall ring lets the dome shell
+// read through the gaps (matching the refined mock hero) instead of boxing it in.
+// The geometry is a top-down dome footprint so the structure visibly rises as the
+// swarm builds it. It carries no SiteID (single default site) and is kept for the
+// single-site tooling/tests; the live two-site demo board is assembled by
+// DomeScenario via siteDome.
 func DomeBlueprint() []coordinator.BlueprintTask {
 	// Kept in sync with internal/blueprint.domeBlueprint (the live catalog): the
 	// compact ring hugs the walls/foundations to the dome skirt instead of scattering
 	// them across the plain. This standalone copy feeds only the offline bake tool
 	// (cmd/bake), but it must match so baked specs reflect the real geometry.
-	wallPos := ring(8, 12, 90)       // outer octagon, wall-1 at 12 o'clock
-	foundationPos := ring(4, 11, 68) // inner ring, offset to sit under each wall pair
+	wallPos := ring(6, 12, 90)       // outer hexagon, wall-1 at 12 o'clock
+	foundationPos := ring(4, 11, 68) // inner ring, walls distributed round-robin over the four
 
 	var bp []coordinator.BlueprintTask
 	for i := 1; i <= 4; i++ {
@@ -326,11 +328,11 @@ func DomeBlueprint() []coordinator.BlueprintTask {
 			Pos:  foundationPos[i-1],
 		})
 	}
-	wallIDs := make([]domain.TaskID, 0, 8)
-	for i := 1; i <= 8; i++ {
+	wallIDs := make([]domain.TaskID, 0, 6)
+	for i := 1; i <= 6; i++ {
 		id := domain.TaskID(fmt.Sprintf("wall-%d", i))
 		wallIDs = append(wallIDs, id)
-		foundation := domain.TaskID(fmt.Sprintf("foundation-%d", (i-1)/2+1))
+		foundation := domain.TaskID(fmt.Sprintf("foundation-%d", (i-1)%4+1))
 		bp = append(bp, coordinator.BlueprintTask{
 			Task: domain.Task{ID: id, Type: taskWall, Deps: []domain.TaskID{foundation}},
 			Pos:  wallPos[i-1],

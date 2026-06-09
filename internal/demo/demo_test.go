@@ -14,8 +14,8 @@ import (
 // TestDomeBlueprint_LoadsAsValidDAG proves the scripted demo board is a valid,
 // acyclic, fully-connected DAG: planner.Load rejects cycles and dangling deps,
 // so a successful Load is the strongest single check that the blueprint is
-// buildable. It also pins the shape (4 foundations + 8 walls + dome-cap = 13)
-// and that the dome-cap keystone depends on all eight walls.
+// buildable. It also pins the shape (4 foundations + 6 walls + dome-cap = 11)
+// and that the dome-cap keystone depends on all six walls.
 func TestDomeBlueprint_LoadsAsValidDAG(t *testing.T) {
 	bp := DomeBlueprint()
 
@@ -28,13 +28,13 @@ func TestDomeBlueprint_LoadsAsValidDAG(t *testing.T) {
 		t.Fatalf("planner.Load(DomeBlueprint) = %v, want nil (blueprint must be an acyclic, fully-connected DAG)", err)
 	}
 
-	if len(tasks) != 13 {
-		t.Fatalf("DomeBlueprint has %d tasks, want 13 (4 foundations + 8 walls + dome-cap)", len(tasks))
+	if len(tasks) != 11 {
+		t.Fatalf("DomeBlueprint has %d tasks, want 11 (4 foundations + 6 walls + dome-cap)", len(tasks))
 	}
 
 	foundations, walls, caps, capTask := countByType(t, tasks)
-	if foundations != 4 || walls != 8 || caps != 1 {
-		t.Fatalf("blueprint shape = %d foundations, %d walls, %d dome-cap; want 4, 8, 1", foundations, walls, caps)
+	if foundations != 4 || walls != 6 || caps != 1 {
+		t.Fatalf("blueprint shape = %d foundations, %d walls, %d dome-cap; want 4, 6, 1", foundations, walls, caps)
 	}
 
 	assertCapDependsOnAllWalls(t, capTask)
@@ -61,7 +61,7 @@ func countByType(t *testing.T, tasks []domain.Task) (foundations, walls, caps in
 }
 
 // assertCapDependsOnAllWalls checks the dome-cap keystone depends on exactly the
-// eight walls.
+// six walls.
 func assertCapDependsOnAllWalls(t *testing.T, capTask domain.Task) {
 	t.Helper()
 	if capTask.ID != domain.TaskID(taskDomeCap) {
@@ -71,14 +71,14 @@ func assertCapDependsOnAllWalls(t *testing.T, capTask domain.Task) {
 	for _, d := range capTask.Deps {
 		depSet[d] = true
 	}
-	for i := 1; i <= 8; i++ {
+	for i := 1; i <= 6; i++ {
 		wall := domain.TaskID("wall-" + strconv.Itoa(i))
 		if !depSet[wall] {
-			t.Fatalf("dome-cap deps = %v, missing %s (must depend on all 8 walls)", capTask.Deps, wall)
+			t.Fatalf("dome-cap deps = %v, missing %s (must depend on all 6 walls)", capTask.Deps, wall)
 		}
 	}
-	if len(capTask.Deps) != 8 {
-		t.Fatalf("dome-cap has %d deps, want exactly 8 (the walls)", len(capTask.Deps))
+	if len(capTask.Deps) != 6 {
+		t.Fatalf("dome-cap has %d deps, want exactly 6 (the walls)", len(capTask.Deps))
 	}
 }
 
@@ -164,7 +164,7 @@ func TestDomeScenario_IsDeterministic(t *testing.T) {
 // (nothing seeded), spawns nothing in-process, and arms no scripted kill; rovers join
 // over NATS and the operator drops a Blueprint from the dashboard for them to build,
 // and kills are real pod deletes. The inproc default is cross-checked alongside so the
-// backward-compatible path is pinned: it DOES seed both domes (26 tasks), carries the
+// backward-compatible path is pinned: it DOES seed both domes (22 tasks), carries the
 // twelve-rover swarm, and the single rehearsal kill.
 func TestExternal_YieldsEmptyBoardNoRoversNoScriptedKills(t *testing.T) {
 	ext := DomeScenario("nats://x", External())
@@ -179,12 +179,12 @@ func TestExternal_YieldsEmptyBoardNoRoversNoScriptedKills(t *testing.T) {
 		t.Fatalf("External scenario has %d scripted kills, want none (kills are real pod deletes)", len(ext.ScriptedKills))
 	}
 
-	// Cross-check: the inproc default seeds BOTH domes (13 tasks each = 26), carries
+	// Cross-check: the inproc default seeds BOTH domes (11 tasks each = 22), carries
 	// BOTH site swarms (6 lunar + 6 shackleton = 12, epic 04), and exactly one scripted
 	// kill (on the lunar site) — so EmptyBoard is what changed, not the rover hosting.
 	inproc := DomeScenario("nats://x", Rehearsal())
-	if len(inproc.Blueprint) != 26 {
-		t.Fatalf("inproc scenario seeds %d tasks, want 26 (two domes of 13)", len(inproc.Blueprint))
+	if len(inproc.Blueprint) != 22 {
+		t.Fatalf("inproc scenario seeds %d tasks, want 22 (two domes of 11)", len(inproc.Blueprint))
 	}
 	if len(inproc.Rovers) != 12 {
 		t.Fatalf("inproc scenario has %d rovers, want 12 (two six-rover swarms, one per site)", len(inproc.Rovers))
@@ -251,7 +251,7 @@ func TestCinematic_KeepsSwarmDisarmsAutoKillHoldsHeroWall(t *testing.T) {
 
 // TestDomeScenario_IsTwoSite asserts the live demo board carries BOTH worksites
 // (epic 04): every task and every rover is tagged with one of the two site ids,
-// both sites build a full dome (13 tasks each, site-prefixed ids), and each site
+// both sites build a full dome (11 tasks each, site-prefixed ids), and each site
 // has its own six-rover swarm. The site tag is what gates the auction, so a
 // mistagged board would let a rover bid across the map.
 func TestDomeScenario_IsTwoSite(t *testing.T) {
@@ -264,8 +264,8 @@ func TestDomeScenario_IsTwoSite(t *testing.T) {
 		}
 		tasksPerSite[bt.SiteID]++
 	}
-	if tasksPerSite[SiteLunar] != 13 || tasksPerSite[SiteShackleton] != 13 {
-		t.Fatalf("tasks per site = %v, want 13 each (4 foundations + 8 walls + dome-cap)", tasksPerSite)
+	if tasksPerSite[SiteLunar] != 11 || tasksPerSite[SiteShackleton] != 11 {
+		t.Fatalf("tasks per site = %v, want 11 each (4 foundations + 6 walls + dome-cap)", tasksPerSite)
 	}
 
 	roversPerSite := map[string]int{}

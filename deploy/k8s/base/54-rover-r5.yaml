@@ -40,6 +40,7 @@ spec:
             - --capabilities=foundation,wall,dome-cap,panel,mast
             - --mode=container
             - --heartbeat-ms=700
+            - --op-every-ms=360 # slow the block-by-block habitat rise (~3x the brisk default) so the buildout reads on-camera
           env:
             - name: NATS_URL
               value: nats://nats:4222
