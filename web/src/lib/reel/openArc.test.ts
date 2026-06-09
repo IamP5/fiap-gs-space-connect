@@ -12,6 +12,7 @@ import {
   OPEN_AZIMUTH_RAD,
   OPEN_CUE_KEY,
   OPEN_MS,
+  alignOpenCameraElevation,
   isOpenCue,
   isRevealing,
   openAzimuthOffset,
@@ -20,6 +21,14 @@ import {
 const noMods = { metaKey: false, ctrlKey: false, altKey: false };
 
 describe("openArc — orbit-open camera-arc path", () => {
+  it("uses the default orbit elevation while preserving the live horizontal berth", () => {
+    const liveOffset = [310, 24, -75] as const;
+    const defaultOffset = [264, 85, 26] as const;
+
+    expect(alignOpenCameraElevation(liveOffset, defaultOffset)).toEqual([310, 85, -75]);
+    expect(liveOffset).toEqual([310, 24, -75]);
+  });
+
   it("starts back on the dark-limb side (negative offset, sun off-frame)", () => {
     // t=0: at/near the peak dark-limb offset (negative azimuth = away from the sun).
     expect(openAzimuthOffset(0)).toBeLessThan(0);

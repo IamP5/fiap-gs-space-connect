@@ -72,6 +72,17 @@ export const OPEN_AZIMUTH_RAD = (118 * Math.PI) / 180;
 // final ORBIT_POSE settle.
 export const DRIFT_SWAY_RAD = (7 * Math.PI) / 180;
 
+// Preserve the live horizontal berth (including any idle azimuth sway) while
+// restoring the startup orbit elevation. This keeps the world-fixed backdrop from
+// yaw-jumping when the cue starts, but gives the Sun/Moon reveal the same vertical
+// composition as the default app view.
+export function alignOpenCameraElevation(
+  liveOffset: readonly [number, number, number],
+  defaultOffset: readonly [number, number, number],
+): [number, number, number] {
+  return [liveOffset[0], defaultOffset[1], liveOffset[2]];
+}
+
 // easeInOutCubic — gentle accelerate-out, hard decelerate-in, for the reveal ARC so
 // the sun crests in smoothly and the camera settles into ORBIT_POSE without overshoot.
 const easeInOutCubic = (x: number) =>

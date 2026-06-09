@@ -32,6 +32,21 @@ stop. `feature_list.json` is the per-feature source of truth; this file is the n
 
 ## Session Log
 
+### Session 012 — 2026-06-08 — Orbit-open camera elevation alignment
+- **Goal:** Make the cinematic `O` camera arc use the same vertical Moon/Sun
+  composition as the app's default orbit view.
+- **Completed:** `CinematicOpen` now preserves the live horizontal X/Z berth
+  (including idle azimuth sway) but replaces its Y offset with `ORBIT_POSE`'s
+  canonical startup elevation. Natural completion and interruption both settle on
+  that aligned rest pose, so a prior polar drag cannot push the Sun above/below the
+  intended Moon reveal. Added pure `alignOpenCameraElevation()` coverage.
+- **Verification:** startup `WEB=1 ./init.sh` green; `cd web && npm run build`
+  green; `npm test` **255 passed** (20 files); `npm run lint` 0 errors (7 existing
+  warnings). Isolated headless-Chrome capture under `VITE_MOCK=1/?reel=1` confirmed
+  dark hold → Sun crest aligned above the Moon → startup-height settled framing.
+- **Scope:** only the r3d-158 camera path + test. Existing Milestone 08 working-tree
+  changes were preserved and excluded.
+
 ### Session 010 — 2026-06-07 — Epic 04 (two-site lunar surface) + Epic 05 (app-init refactor), parallel batch
 - **Goal:** Implement BOTH epics and converge them onto one testable feature branch,
   `feat/two-site-and-app-init` (cut from `main`). No human review until done; user tests
