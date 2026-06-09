@@ -1976,9 +1976,10 @@ function ShackletonShadows() {
 //                      Its intensity is spiked above base during a bid-war (#107).
 //   3. SelectiveBloom (celestial) — Sun core + Earth limb, lower threshold,
 //                      wider kernel, SCREEN blend + smoothed luminance.
-//   4. DepthOfField  — surface-only (mounted only on the surface): the distant
-//                      Earth/horizon fall soft while the worksite stays sharp. In
-//                      orbit it is OFF so the Moon hero stays deep-focus/crisp.
+//   4. DepthOfField  — surface-only, deliberately gentle: focal plane out on the
+//                      worksite + wide in-focus band, so the foreground stays sharp
+//                      and only the distant horizon softens. Off in orbit (Moon hero
+//                      stays deep-focus/crisp).
 //   5. ChromaticAberration — orbit-only (mounted only in orbit): a subtle lens
 //                      fringe on the deep-space vista; off on the surface so the
 //                      worksite UI/telemetry stays clean.
@@ -2145,13 +2146,17 @@ const CinematicFX = memo(function CinematicFX({
       ) : (
         <></>
       )}
-      {/* Surface-gated DoF — distant Earth/horizon soften while the worksite stays
-          sharp. Mounted ONLY on the surface; in orbit the Moon hero stays crisp. */}
+      {/* Surface-gated DoF — deliberately gentle. The old pass put the focal plane on
+          the camera (focusDistance 0 + focalLength 0.02), so the whole worksite fell
+          soft and immersion suffered. Now the focal plane sits out at the worksite and
+          the in-focus band is wide, so the rover/foreground stay crisp and only the
+          distant horizon picks up a faint, cinematic softness. Surface only; in orbit
+          the Moon hero stays deep-focus. */}
       {onSurface ? (
         <DepthOfField
-          focusDistance={0.0}
-          focalLength={0.02}
-          bokehScale={1.6}
+          focusDistance={0.05}
+          focalLength={0.15}
+          bokehScale={0.3}
           height={480}
         />
       ) : (
