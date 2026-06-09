@@ -1535,6 +1535,20 @@ function TaskBlock({
     }
   });
 
+  // WS-1 follow-up: at rest, an UNCLAIMED habitat dome cap shows up as a solid
+  // dark blob squatting over the worksite — the "pre-placed blueprint preview"
+  // the surface overhaul set out to kill (milestone 08, complaint #5). Two paths
+  // feed it, so we close both:
+  //   • the primitive dome-tier cap (geo.dome hemisphere), and
+  //   • the INTERPRETED build-spec model (model_ref) — and crucially the ghost
+  //     OPACITY fade only reaches primitive ghosts; a loaded model ignores it and
+  //     renders SOLID (we confirmed dark #262626 caps at opacity 1 live), which is
+  //     why only the domes read as solid blobs while the walls fade to a scribe.
+  // Drop the resting cap/model ghost entirely; it reappears the instant its task
+  // is LEASED (build begins) and rises for real. Primitive foundations/walls keep
+  // their faint footprint scribe, so the planned footprint still reads at rest.
+  if (isUnclaimedGhost && (isCap || interpreted)) return null;
+
   // INTERPRETED PATH — the richer structure. Each op is drawn by <SpecMesh>,
   // which renders a primitive (optionally textured, bh-07b) or a glTF model
   // (model_ref, bh-07b) with a primitive fallback. The group sits at the same
@@ -3473,8 +3487,8 @@ function CinematicOpen({
     const liveOffset = startPos.clone().sub(startTarget);
     const defaultOffset = ORBIT_POSE.position.clone().sub(ORBIT_POSE.target);
     const alignedOffset = alignOpenCameraElevation(
-      [liveOffset.x, liveOffset.y, liveOffset.z],
-      [defaultOffset.x, defaultOffset.y, defaultOffset.z],
+      [liveOffset.x, liveOffset.y - 10, liveOffset.z],
+      [defaultOffset.x, defaultOffset.y -20, defaultOffset.z],
     );
     // The arc rotates this aligned offset around the target's up-axis. Its elevation
     // stays fixed at the startup value while only azimuth changes (CAMERA-ARC, not

@@ -22,7 +22,7 @@ export const KillPanel = memo(function KillPanel({
 }) {
   const alive = rover.alive === true;
   return (
-    <aside className={`kill-panel panel ${alive ? "kill-panel-armed" : "kill-panel-down"}`}>
+    <aside className={`kill-panel ${alive ? "kill-panel-armed" : "kill-panel-down"}`}>
       <div className="kill-eyebrow">Selected rover</div>
       <div className="kill-id">{rover.id.toUpperCase()}</div>
       <div className="kill-stat">

@@ -114,7 +114,7 @@ export const Hotbar = memo(function Hotbar({
   );
 
   return (
-    <div className="hotbar panel hud-surface-panel" role="toolbar" aria-label="Build hotbar">
+    <div className="hotbar hud-surface-panel" role="toolbar" aria-label="Build hotbar">
       {/* Blueprint glyphs: footprint schematics generated from the catalog. */}
       <div className="hotbar-group hotbar-blueprints" role="group" aria-label="Blueprints">
         {CATALOG.map((b) => {
