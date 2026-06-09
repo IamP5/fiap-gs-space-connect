@@ -11,19 +11,14 @@
 package bake
 
 import (
-	"context"
 	"encoding/json"
 	"errors"
 	"fmt"
 	"strings"
 	"swarmbuild/internal/core/domain"
 	"swarmbuild/internal/harness/asset"
-	"swarmbuild/internal/harness/cache"
 	"swarmbuild/internal/harness/evaluator"
-	"swarmbuild/internal/harness/loop"
 	"swarmbuild/internal/harness/model"
-	"swarmbuild/internal/harness/trace"
-	"swarmbuild/internal/wire"
 )
 
 // Vec3 mirrors domain.Vec3 in the Build contract JSON (capital X/Y/Z), matching
@@ -119,163 +114,6 @@ type WorldContext struct {
 	Note          string                `json:"note,omitempty"`
 	SubjectOrigin domain.Vec3           `json:"subject_origin"`
 	Neighbours    []evaluator.Neighbour `json:"neighbours,omitempty"`
-}
-
-// Result is one bake outcome: the approved ops, whether a repair re-ask was
-// needed, and the cache key/path the entry was written to. For a loop bake it also
-// records the final disposition (accepted | fallback), the quality flag, and the
-// trace sidecar path.
-type Result struct {
-	Key         cache.Key
-	Path        string
-	TracePath   string
-	Ops         int
-	Repaired    bool
-	Result      trace.Result
-	QualityFlag trace.QualityFlag
-	Reason      string
-
-	// ops is the accepted Build spec (nil on fallback). It is unexported because
-	// callers read the COUNT via Ops; BakeAll uses opsForNeighbour to feed the
-	// geometry forward as a neighbour world for dependent Tasks.
-	ops []wire.BuildOp
-}
-
-// opsForNeighbour returns the accepted ops to hand a dependent Task as neighbour
-// geometry (a defensive copy, empty on fallback).
-func (r Result) opsForNeighbour() []wire.BuildOp {
-	out := make([]wire.BuildOp, len(r.ops))
-	copy(out, r.ops)
-	return out
-}
-
-// FellBack reports whether this bake took the primitive fallback (loop exhaustion,
-// nothing cached).
-func (r Result) FellBack() bool { return r.Result == trace.ResultFallback }
-
-// LowQuality reports whether this bake cached a spec flagged quality_flag:low.
-func (r Result) LowQuality() bool { return r.QualityFlag == trace.QualityLow }
-
-// Bake runs the Generator↔Evaluator refine loop for one Task and caches the result
-// (TECHSPEC §4/§5, ADR-0008). It builds the prompt from the contract + world
-// snapshot (including neighbour ops), drives loop.Run with the analytic Evaluator,
-// and:
-//   - on a hard-gate pass, writes the schema-valid spec to the cache (flagged
-//     quality_flag:low if its soft score is below threshold — cached, NOT withheld)
-//     AND a trace sidecar beside it;
-//   - on loop exhaustion (no passing spec), writes NOTHING to the spec cache but
-//     STILL writes the trace sidecar (so the fallback is inspectable) and returns
-//     model.ErrFallback so the caller knows the Task takes the primitive.
-//
-// provider/modelID are recorded in the cache key + entry so a vendor swap yields a
-// distinct cache file. m is the (already-constructed) Model seam — Bake never
-// constructs a provider itself, so a test can drive it with a fake.
-//
-// vision is the OPTIONAL bake-time vision pass (bh-06): when non-nil, each
-// hard-gate-passing spec is rendered on the real Scene3D headless, screenshotted,
-// and scored for silhouette, with the score folded into the trace and the quality
-// flag (a low silhouette within budget triggers another iteration; on exhaustion
-// the spec still caches flagged quality_flag:low — never withheld). When nil the
-// bake is analytic-only (bh-04 behaviour). It is wired ONLY by cmd/bake; the
-// headline never reaches here.
-func Bake(ctx context.Context, m model.Model, store *cache.Store, c Contract, world WorldContext, provider, modelID string, vision loop.SilhouetteScorer) (Result, error) {
-	contractJSON, err := c.JSON()
-	if err != nil {
-		return Result{}, err
-	}
-
-	messages, err := BuildPrompt(c, contractJSON, world)
-	if err != nil {
-		return Result{}, err
-	}
-
-	eval := evaluator.New(evaluator.Config{})
-	out := loop.Run(ctx, loop.ModelGenerator{M: m}, eval, loop.Request{
-		Messages:      messages,
-		Envelope:      c.EvalEnvelope(),
-		Done:          c.EvalDone(),
-		SubjectOrigin: world.SubjectOrigin,
-		Neighbours:    world.Neighbours,
-		Vision:        vision,
-		TaskType:      string(c.Type),
-	})
-
-	key := cache.Key{
-		BlueprintID:  c.BlueprintID,
-		TaskID:       string(c.TaskID),
-		ContractHash: cache.ContractHash(contractJSON),
-		Model:        modelID,
-	}
-
-	tr := trace.Trace{
-		BlueprintID: c.BlueprintID,
-		TaskID:      string(c.TaskID),
-		Model:       modelID,
-		Contract:    contractJSON,
-		Iterations:  out.Iterations,
-		Outcome: trace.Outcome{
-			Result:      out.Result,
-			Cached:      out.Accepted(),
-			QualityFlag: out.QualityFlag,
-			Reason:      out.Reason,
-		},
-	}
-	traceBytes, tErr := tr.Marshal()
-	if tErr != nil {
-		return Result{}, tErr
-	}
-
-	if !out.Accepted() {
-		// Exhaustion ⇒ fallback: write the trace (so the operator can inspect WHY)
-		// but cache no spec. The Task uses the primitive and still completes.
-		tracePath, wErr := store.WriteTrace(key, traceBytes)
-		if wErr != nil {
-			return Result{}, wErr
-		}
-		return Result{
-				Key:         key,
-				TracePath:   tracePath,
-				Result:      out.Result,
-				QualityFlag: out.QualityFlag,
-				Reason:      out.Reason,
-			},
-			fmt.Errorf("%w: %s", model.ErrFallback, out.Reason)
-	}
-
-	// A repair re-ask happened iff the loop took more than one iteration.
-	repaired := len(out.Iterations) > 1
-	entry := cache.Entry{
-		BlueprintID:  c.BlueprintID,
-		TaskID:       string(c.TaskID),
-		TaskType:     string(c.Type),
-		ContractHash: key.ContractHash,
-		Model:        modelID,
-		Provider:     provider,
-		Ops:          out.Ops,
-		Repaired:     repaired,
-		Contract:     contractJSON,
-		QualityFlag:  string(out.QualityFlag),
-	}
-
-	path, wErr := store.Write(key, entry)
-	if wErr != nil {
-		return Result{}, fmt.Errorf("cache write: %w", wErr)
-	}
-	tracePath, twErr := store.WriteTrace(key, traceBytes)
-	if twErr != nil {
-		return Result{}, twErr
-	}
-	return Result{
-		Key:         key,
-		Path:        path,
-		TracePath:   tracePath,
-		Ops:         len(out.Ops),
-		Repaired:    repaired,
-		Result:      out.Result,
-		QualityFlag: out.QualityFlag,
-		Reason:      out.Reason,
-		ops:         out.Ops,
-	}, nil
 }
 
 // BuildPrompt assembles the system + user messages for one generation: a system

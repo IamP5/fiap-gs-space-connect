@@ -198,13 +198,3 @@ func TestSoftRubric_ScoresQualityWithEvidence(t *testing.T) {
 		t.Fatalf("flat mass should score below the rich plinth: flat=%d rich=%d", low.SoftScore(), high.SoftScore())
 	}
 }
-
-// TestSilhouetteSlotReserved: the silhouette dimension is present but unscored (it
-// is supplied by the bh-06 vision pass), so it never inflates the soft score.
-func TestSilhouetteSlotReserved(t *testing.T) {
-	e := New(Config{})
-	v := e.Evaluate(goodPlinth(), foundationEnv(), demoDone(), domain.Vec3{}, nil)
-	if v.Rubric.Silhouette.Score != 0 {
-		t.Fatalf("silhouette is reserved for the vision pass and must stay 0 here, got %d", v.Rubric.Silhouette.Score)
-	}
-}

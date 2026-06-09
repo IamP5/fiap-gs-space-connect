@@ -1,12 +1,3 @@
-# Root kustomization for the SwarmBuild pod-per-rover swarm — the DEFAULT
-# (non-cinematic) deploy, unchanged in behaviour. The manifests moved into base/
-# (Epic 07 #160) so a cinematic overlay can layer on top without a kustomize root
-# cycle; this thin root just re-exports the base so the long-standing entrypoint
-#   kubectl apply -k deploy/k8s/        (and up.sh / down.sh / README)
-# renders byte-for-byte the same stack as before. Validate without a cluster:
-#   kubectl kustomize deploy/k8s/
-# The cinematic variant (Epic 07, ADR-0011) is the opt-in overlay:
-#   kubectl apply -k deploy/k8s/overlays/cinematic/
 apiVersion: kustomize.config.k8s.io/v1beta1
 kind: Kustomization
 

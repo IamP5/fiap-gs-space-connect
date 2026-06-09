@@ -41,7 +41,13 @@ import {
 } from "../lib/scene";
 import { applyMaxAnisotropy } from "../lib/textureFidelity";
 import { loadTexture, preloadTexture } from "../lib/textureCache";
-import { ROCK_DIFF, ROCK_NORMAL, ROCK_ROUGH } from "./DecorRocks";
+
+// Self-hosted CC0 boulder PBR set (Poly Haven "Rock Boulder Dry", 512), credited
+// in CREDITS.md. Exported so the preload manifest (lib/assets.ts) references the
+// SAME URLs the boulders tile — the manifest can't drift from the component.
+export const ROCK_DIFF = "/assets/textures/rock_boulder_dry_diff_512.jpg";
+export const ROCK_NORMAL = "/assets/textures/rock_boulder_dry_nor_gl_512.jpg";
+export const ROCK_ROUGH = "/assets/textures/rock_boulder_dry_rough_512.jpg";
 
 const [SKY_CX, SKY_CZ] = SKYLIGHT_CENTER;
 

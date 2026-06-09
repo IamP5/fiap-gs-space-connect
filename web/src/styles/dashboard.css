@@ -30,14 +30,6 @@
   pointer-events: auto;
 }
 
-.hud-stage.hud--hidden {
-  opacity: 0;
-}
-
-.hud-stage.hud--hidden > * {
-  pointer-events: none;
-}
-
 /* ---- animated view transitions (Epic 06 P4) ----
    The surface-only panels are kept mounted across BOTH views (see App.tsx) so they
    can animate IN on the descent and OUT on the ascent. Visibility is driven PURELY
@@ -1921,69 +1913,3 @@
   font-weight: 700;
 }
 
-/* Cinematic "armed" affordance (Epic 07 S2 · #155). A subtle top-centre badge,
-   shown ONLY while the operator has armed cinematic mode (`?reel=1` or `R`). It
-   is a SIBLING of `.hud-stage`, so the `H` HUD-hide never fades it — the
-   operator must keep seeing the armed state on a clean stage. Pointer-inert
-   (purely informational). Disarmed ⇒ the inner badge is not mounted, so nothing
-   renders and the normal app is byte-for-byte unchanged. */
-.reel-arm {
-  position: absolute;
-  top: calc(var(--s-xl) + 44px);
-  left: 50%;
-  transform: translateX(-50%);
-  z-index: 4;
-  pointer-events: none;
-  user-select: none;
-}
-
-.reel-arm__badge {
-  display: inline-flex;
-  align-items: center;
-  gap: 7px;
-  padding: 4px 12px;
-  font-family: var(--ui);
-  font-size: 11px;
-  font-weight: 600;
-  letter-spacing: 1px;
-  text-transform: uppercase;
-  color: var(--on-primary-mute);
-  background: color-mix(in srgb, var(--panel-bg) 90%, transparent);
-  border: 1px solid color-mix(in srgb, var(--signal-down) 55%, var(--panel-edge));
-  border-radius: var(--r-pill);
-  box-shadow: 0 0 0 1px rgba(0, 0, 0, 0.35),
-    0 0 16px color-mix(in srgb, var(--signal-down) 30%, transparent);
-  white-space: nowrap;
-}
-
-.reel-arm__badge b {
-  color: var(--on-primary);
-  font-weight: 700;
-}
-
-/* The live "REC"-style pulse dot — a recording-armed tell. */
-.reel-arm__dot {
-  width: 7px;
-  height: 7px;
-  border-radius: 50%;
-  background: var(--signal-down);
-  box-shadow: 0 0 8px var(--signal-down);
-  animation: reel-arm-pulse 1.4s ease-in-out infinite;
-}
-
-@keyframes reel-arm-pulse {
-  0%,
-  100% {
-    opacity: 1;
-  }
-  50% {
-    opacity: 0.35;
-  }
-}
-
-/* Respect reduced-motion: hold the dot steady rather than pulsing. */
-@media (prefers-reduced-motion: reduce) {
-  .reel-arm__dot {
-    animation: none;
-  }
-}

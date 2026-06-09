@@ -187,7 +187,6 @@ func (b *Builder) BuildLiveResult(ctx context.Context, task domain.TaskID, taskT
 		Done:           contract.EvalDone(),
 		SubjectOrigin:  world.SubjectOrigin,
 		Neighbours:     world.Neighbours,
-		TaskType:       string(contract.Type),
 		RetriesPerCall: loop.DefaultRetriesPerCall, // bh-08f: a transient blip retries before counting as a fault
 		MaxIterations:  liveMaxIterations,          // bh-08: many refine attempts before the primitive fallback
 		EmitAccepted:   stream.onIteration,

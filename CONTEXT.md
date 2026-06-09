@@ -101,11 +101,11 @@ The pluggable boundary between the orchestration core and the "world" (simulatio
 _Avoid_: Driver, plugin, interface (too generic — name this boundary specifically).
 
 **Kill**:
-The deliberate failing of a rover during the demo to trigger self-heal. The headline kill is instantaneous; an optional encore fails a rover as a genuinely separate running system.
+The deliberate failing of a rover during the demo to trigger self-heal: a recoverable in-process outage — the rover goes dark in place, its Lease expires, the swarm heals onto a neighbour, and the same rover revives after its outage window.
 _Avoid_: Stop, disable, crash, terminate.
 
 **Choreography**:
-The deliberate pacing of the demo so an evaluator can *see* the self-heal beats (lease draining, re-auction, the replacement driving over). Every beat is derived from a real worksite event, never fabricated. Pacing has two modes: **scripted** (the demo package widens the real auction/lease windows and auto-fires the rehearsal Kill — server-authoritative, deterministic) and **interactive** (an **operator** paces the demo live from the dashboard, firing *real* worksite events — the Kill, the Earth-latency climb — at the dramatic moment). Interactive choreography only moves the *when* of a real event to a human; it never fabricates a beat, so "derived from a real worksite event" still holds.
+The deliberate pacing of the demo so an evaluator can *see* the self-heal beats (lease draining, re-auction, the replacement driving over). Every beat is derived from a real worksite event, never fabricated. The demo package widens the real auction/lease windows (server-authoritative), and an **operator** paces the demo live from the dashboard, firing *real* worksite events — the Kill, the Earth-latency climb — at the dramatic moment. Interactive choreography only moves the *when* of a real event to a human; it never fabricates a beat, so "derived from a real worksite event" still holds.
 _Avoid_: Animation, scripting, demo mode, staging.
 
 **Scenery**:

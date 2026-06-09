@@ -88,10 +88,8 @@ type Score struct {
 }
 
 // Rubric is the advisory soft rubric: quality dimensions scored 0–2 with evidence.
-// Silhouette is reserved for the bh-06 vision pass and is left zero/empty here.
 type Rubric struct {
 	DoneCoverage Score `json:"done_coverage"`
-	Silhouette   Score `json:"silhouette"`
 	Coherence    Score `json:"coherence"`
 }
 
@@ -106,14 +104,11 @@ type Verdict struct {
 func (v Verdict) Pass() bool { return v.HardGate.Pass() }
 
 // SoftScore is the summed soft-rubric score over ALL scored dimensions
-// (done-coverage + coherence + silhouette). It is the value the caching policy
-// compares against a threshold to decide the quality_flag — it NEVER affects
-// HardGate.Pass. When the bh-06 vision pass has NOT run, Silhouette.Score is 0, so
-// the sum is exactly the analytic done-coverage + coherence (the bh-04 behaviour
-// is preserved); when it HAS run, the vision silhouette score counts toward the
-// quality flag like any other soft dimension (ADR-0008).
+// (done-coverage + coherence). It is the value the caching policy compares
+// against a threshold to decide the quality_flag — it NEVER affects
+// HardGate.Pass.
 func (v Verdict) SoftScore() int {
-	return v.Rubric.DoneCoverage.Score + v.Rubric.Coherence.Score + v.Rubric.Silhouette.Score
+	return v.Rubric.DoneCoverage.Score + v.Rubric.Coherence.Score
 }
 
 // Reasons returns a human-readable list of which hard-gate invariants FAILED, for
@@ -139,15 +134,7 @@ func (v Verdict) Reasons() []string {
 // collision).
 type Config struct {
 	SoftScoreThreshold int
-	// SilhouetteThreshold is the minimum vision silhouette score (0–2) a spec must
-	// reach to be flagged quality_flag:ok WHEN the bh-06 vision pass has run. A
-	// rendered spec that scores below it on silhouette — even with a perfect
-	// analytic score — is flagged low (it passes the analytic gate but "looks
-	// wrong"), which is exactly the (B)→(C) signal ADR-0008 wants. It is only
-	// consulted when a silhouette score is present; the analytic-only path ignores
-	// it. Zero ⇒ DefaultConfig's value.
-	SilhouetteThreshold int
-	CollisionEpsilon    float64
+	CollisionEpsilon   float64
 	// EnvelopeMargin is the fraction of each envelope half-extent an op's AABB may
 	// legitimately extend past the envelope wall before the `envelope` invariant
 	// fails. A real GPT-class spec authors structures that fill — and touch — the
@@ -163,7 +150,7 @@ type Config struct {
 // ok; a small epsilon keeps abutting neighbours from reading as a collision; and a
 // 12% envelope margin admits structures that fill the envelope to its walls.
 func DefaultConfig() Config {
-	return Config{SoftScoreThreshold: 3, SilhouetteThreshold: 1, CollisionEpsilon: 1e-6, EnvelopeMargin: 0.12}
+	return Config{SoftScoreThreshold: 3, CollisionEpsilon: 1e-6, EnvelopeMargin: 0.12}
 }
 
 // Evaluator grades a Build spec against a contract. It holds only configuration
@@ -178,9 +165,6 @@ func New(cfg Config) *Evaluator {
 	if cfg.SoftScoreThreshold == 0 {
 		cfg.SoftScoreThreshold = DefaultConfig().SoftScoreThreshold
 	}
-	if cfg.SilhouetteThreshold == 0 {
-		cfg.SilhouetteThreshold = DefaultConfig().SilhouetteThreshold
-	}
 	if cfg.CollisionEpsilon == 0 {
 		cfg.CollisionEpsilon = DefaultConfig().CollisionEpsilon
 	}
@@ -193,10 +177,6 @@ func New(cfg Config) *Evaluator {
 // Threshold returns the soft-score threshold below which a passing spec is flagged
 // quality_flag:low.
 func (e *Evaluator) Threshold() int { return e.cfg.SoftScoreThreshold }
-
-// SilhouetteThreshold returns the minimum vision silhouette score for an ok flag
-// (consulted only when the vision pass has supplied a silhouette score).
-func (e *Evaluator) SilhouetteThreshold() int { return e.cfg.SilhouetteThreshold }
 
 // Evaluate produces the layered verdict for ops authored in the subject's local
 // envelope frame, against its envelope/done-criteria and the world-frame
@@ -230,8 +210,6 @@ func (e *Evaluator) Evaluate(ops []wire.BuildOp, env Envelope, done DoneCriteria
 		Rubric: Rubric{
 			DoneCoverage: Score{Score: coverScore, Evidence: coverEvidence},
 			Coherence:    Score{Score: cohScore, Evidence: cohEvidence},
-			// Silhouette is supplied by the bh-06 vision pass; left zero here.
-			Silhouette: Score{Score: 0, Evidence: "silhouette scoring deferred to the vision pass (bh-06)"},
 		},
 	}
 }

@@ -1299,7 +1299,6 @@ function SiteMarker({
   name,
   status,
   onSelect,
-  forceLock = false,
 }: {
   position: [number, number, number];
   quaternion: [number, number, number, number];
@@ -1307,17 +1306,9 @@ function SiteMarker({
   name: string;
   status: string;
   onSelect: () => void;
-  // Cinematic lock-on cue (Epic 07 S4 · #157): forces the EXISTING hover lock-on
-  // look (brackets tighten + pop in, line widens, label brightens) WITHOUT a mouse
-  // hover, for the Beat-3/6 "lock on the target" moments. ORed with real hover so
-  // manual mouse-hover still works as a fallback. Scenery: asserts no World Model
-  // state. Defaults false ⇒ the un-cued marker is byte-for-byte unchanged.
-  forceLock?: boolean;
 }) {
   const [hover, setHover] = useState(false);
-  // The lock-on look fires on EITHER a real pointer hover OR the cinematic cue.
-  // Everything that read `hover` for the lock-on visual now reads `locked`.
-  const locked = hover || forceLock;
+  const locked = hover;
   // The reticle content (diamond + brackets + label) — pulsed/scaled per frame.
   const reticleRef = useRef<THREE.Group>(null);
   const diamondRef = useRef<THREE.Object3D>(null);
@@ -1453,34 +1444,13 @@ function useSiteMarkerSeat(site: SiteId) {
 
 // Renders both site markers on the orbit globe. `onSelectSite(siteId)` sets the
 // active site AND surface view (the descent) for the clicked site.
-//
-// Two optional cinematic Scenery cues (Epic 07 S4 · #157), both gated upstream on
-// the `cinematic` arm flag and asserting NO World Model state:
-//   · `lockedSite` — forces the lock-on look on that marker without a mouse hover
-//     (Beats 3/6). Undefined ⇒ both markers fall back to manual hover only.
-//   · `statusOverride` — flips the Shackleton marker amber→cyan / "in construction"
-//     →"operational" over the closing wide (Beat 15), so both diamonds read
-//     operational. A marker's status is "site established", not dome-complete
-//     (Scenery — CONTEXT.md). Undefined ⇒ Shackleton stays amber/"in construction".
 function SiteMarkers({
   onSelectSite,
-  lockedSite,
-  statusOverride = false,
 }: {
   onSelectSite: (site: SiteId) => void;
-  lockedSite?: SiteId;
-  statusOverride?: boolean;
 }) {
   const lunarSeat = useSiteMarkerSeat("lunar");
   const shackletonSeat = useSiteMarkerSeat("shackleton");
-  // The bookend flip reuses the Lunar marker's live cyan + "operational" status,
-  // so the two diamonds read identically operational — no second source of truth.
-  const shackletonColor = statusOverride
-    ? SITE_MARKERS.lunar.color
-    : SITE_MARKERS.shackleton.color;
-  const shackletonStatus = statusOverride
-    ? SITE_MARKERS.lunar.status
-    : SITE_MARKERS.shackleton.status;
   return (
     <>
       <SiteMarker
@@ -1490,16 +1460,14 @@ function SiteMarkers({
         name={SITE_MARKERS.lunar.name}
         status={SITE_MARKERS.lunar.status}
         onSelect={() => onSelectSite("lunar")}
-        forceLock={lockedSite === "lunar"}
       />
       <SiteMarker
         position={shackletonSeat.position}
         quaternion={shackletonSeat.quaternion}
-        color={shackletonColor}
+        color={SITE_MARKERS.shackleton.color}
         name={SITE_MARKERS.shackleton.name}
-        status={shackletonStatus}
+        status={SITE_MARKERS.shackleton.status}
         onSelect={() => onSelectSite("shackleton")}
-        forceLock={lockedSite === "shackleton"}
       />
     </>
   );
@@ -1642,17 +1610,11 @@ export function SkyBodies({
   viewMode,
   onSelectSite,
   sunRef,
-  lockedSite,
-  statusOverride,
 }: {
   viewMode: ViewMode;
   onSelectSite?: (site: SiteId) => void;
   // Shared ref to the Sun core disc, surfaced for the post-FX GodRays pass (#110).
   sunRef?: React.RefObject<THREE.Mesh>;
-  // Cinematic marker cues (Epic 07 S4 · #157) — see SiteMarkers. Both optional and
-  // additive Scenery; omitted ⇒ markers behave exactly as before (#155-gated cues).
-  lockedSite?: SiteId;
-  statusOverride?: boolean;
 }) {
   const inOrbit = viewMode === "orbit";
   // DECOUPLED sun (Wave 4): the visible flare follows the same swing as the key
@@ -1670,11 +1632,7 @@ export function SkyBodies({
       <NebulaHero visible onSurface={!inOrbit} />
       <EarthBody visible viewMode={viewMode} />
       {inOrbit && onSelectSite ? (
-        <SiteMarkers
-          onSelectSite={onSelectSite}
-          lockedSite={lockedSite}
-          statusOverride={statusOverride}
-        />
+        <SiteMarkers onSelectSite={onSelectSite} />
       ) : null}
     </>
   );

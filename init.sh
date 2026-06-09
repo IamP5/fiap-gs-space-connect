@@ -58,10 +58,10 @@ fi
 
 echo ""
 echo "✅ Baseline verification passed. The repo is in a known-good state."
-echo "   Full demo stack:  make demo            (dashboard at http://localhost:5173)"
-echo "   Pre-demo smoke:   ./deploy/smoke.sh    (end-to-end self-heal assertion)"
+echo "   Full stack on k8s:  ./deploy/k8s/up.sh   (dashboard at http://localhost:5173)"
+echo "   UI with no backend: (cd web && VITE_MOCK=1 npm run dev)"
 
 if [ "${RUN_START_COMMAND:-0}" = "1" ]; then
-  echo "==> Starting the full demo stack (docker compose up --build)…"
-  exec docker compose -f deploy/docker-compose.yml up --build
+  echo "==> Starting the full stack on kind…"
+  exec ./deploy/k8s/up.sh
 fi

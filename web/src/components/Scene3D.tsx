@@ -36,7 +36,7 @@
 //   - No custom physics; only LICENSED art (CC0/CC-BY/NASA-PD), each with a
 //     mandatory primitive fallback.
 
-import { memo, useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { memo, useEffect, useMemo, useRef, useState } from "react";
 import { Canvas, useFrame, useThree, type ThreeEvent } from "@react-three/fiber";
 import { ContactShadows, Html, Instance, Instances, Line, OrbitControls } from "@react-three/drei";
 import { SpaceEnvironment, STARFIELD_PARALLAX_NAME } from "./SpaceEnvironment";
@@ -93,8 +93,6 @@ import {
   activeBidders,
   beatProgress,
   bidWarStrobe,
-  earthriseEnvelope,
-  launchShake,
 } from "../lib/choreography";
 import { GLTFLoader } from "three/examples/jsm/loaders/GLTFLoader.js";
 import { DRACOLoader } from "three/examples/jsm/loaders/DRACOLoader.js";
@@ -116,11 +114,6 @@ import {
   idleSwayOffset,
   zoomExposure,
 } from "../lib/cameraFeel";
-import {
-  OPEN_MS,
-  alignOpenCameraElevation,
-  openAzimuthOffset,
-} from "../lib/reel/openArc";
 import { LaunchScenery } from "./LaunchScenery";
 import { LavaTubeSkylight, LavaTubeBoulders } from "./LavaTube";
 import { LunarBaseDecals } from "./BaseDecals";
@@ -2177,29 +2170,6 @@ type Scene3DProps = {
   // marker click calls BOTH this and onViewModeChange("surface"), descending to
   // the clicked site. Optional (tests / single-site path omit it).
   onActiveSiteChange?: (site: SiteId) => void;
-  // Cinematic marker cues (Epic 07 S4 · #157), threaded straight through to
-  // SkyBodies' orbit site markers. Both optional + additive Scenery (gated upstream
-  // on the `cinematic` arm flag), so omitting them leaves the markers unchanged:
-  //   · `lockedSite` forces the lock-on look on that marker without a mouse hover.
-  //   · `statusOverride` flips the Shackleton marker to cyan/"operational" (Beat 15).
-  lockedSite?: SiteId;
-  statusOverride?: boolean;
-  // Orbit-open camera-arc cue (Epic 07 S5 · #158, Beats 1–2). While true the
-  // <CinematicOpen> rig (mounted alongside CameraFeel) drifts the camera along the
-  // dark lunar limb then ARCS it so the *fixed* sun's godrays/bloom crest in,
-  // easing into ORBIT_POSE — "lost in the dark, found by the sun". Additive Scenery
-  // gated upstream on the `cinematic` arm flag (it invents ZERO snapshot/wire
-  // fields). Omitted/false ⇒ the orbit behaves exactly as today (the script-
-  // sanctioned cold-hold fallback): the rig NEVER blocks anything. Only meaningful
-  // in orbit view; the rig itself no-ops on the surface.
-  cinematicOpen?: boolean;
-  // One-shot disarm: the orbit-open is a fire-once intro beat, so the rig calls
-  // this when its arc finishes OR is interrupted, and App flips `cinematicOpen`
-  // back to false. Without it the flag stays latched and `active` re-fires the arc
-  // every time the view returns to orbit (e.g. the ascent bookend) — the arc then
-  // captures a mid-ascent pose and fights the ascent driver (flicker + a camera
-  // stuck close on the Moon). Must be a STABLE callback (it's an effect dep).
-  onCinematicOpenDone?: () => void;
 };
 
 // Per-mode OrbitControls clamps + target. Both presets are clamped (ADR-0004):
@@ -2351,26 +2321,6 @@ export function traverseEnvelope(t: number) {
   const k = c * c * (3 - 2 * c);
   return { veil, k, swapped: c >= 0.5 };
 }
-
-// ---- Earthrise hero pose (#108) --------------------------------------------
-// The `earthrise-hero` beat lerps the SURFACE camera from its current pose to a
-// framing that holds Earth over the lunar horizon: aim down the azimuth TOWARD
-// Earth (so Earth's disc sits in frame above the regolith line), at a low pitch
-// so a band of horizon reads beneath it. Derived from EARTH_POSITION so the aim
-// can never drift from the rendered Earth. Camera backs off slightly along the
-// opposite (away-from-Earth) heading and lifts a touch for a hero vantage.
-const EARTHRISE_HERO_POSE: Pose = (() => {
-  // Horizontal heading from the worksite toward Earth (ignore Earth's depth/Y).
-  const dir = new THREE.Vector2(EARTH_POSITION[0], EARTH_POSITION[2]).normalize();
-  // Look at a far point on that heading, raised so Earth's disc frames ABOVE the
-  // horizon (Earth is far + slightly below the plane, but its apparent disc rides
-  // the limb when aimed up the heading) — a touch of lift keeps the horizon in shot.
-  const target = new THREE.Vector3(dir.x * 60, 9, dir.y * 60);
-  // Camera sits behind the worksite, opposite Earth's heading, at surface height
-  // so the regolith plain leads the eye out to the Earthrise.
-  const position = new THREE.Vector3(-dir.x * 22, 8, -dir.y * 22);
-  return { position, target };
-})();
 
 // ---- descent easing (#84, SVS 4444) ----------------------------------------
 // The descent is choreographed with ASYMMETRIC easing instead of the old
@@ -2588,208 +2538,6 @@ function PlacementPlane({
 // grey dusk (#101); Shackleton uses a tighter/darker fog for the pole. Surface-
 // only; orbit skips it so the Moon globe stays crisp.
 
-// ---- cinematic camera beats (#108) -----------------------------------------
-//
-// CinematicCamera drives the camera-affecting Wave-3 beats (earthrise-hero +
-// launch shake) from the live beat list. It lives INSIDE the Canvas so it can
-// reach the camera/OrbitControls via useThree and animate them in a useFrame.
-// Like every beat it only DECORATES the snapshot — it never invents world state,
-// and it returns the camera to its base pose (and re-enables controls) the moment
-// the last beat clears, so the demand loop idles at 0 fps (the invariant; SceneⅭ
-// ontents' own useFrame keeps the loop alive while beats are live).
-//
-// EARTHRISE-HERO: disables controls, lerps the camera from its current pose to
-// EARTHRISE_HERO_POSE (Earth over the horizon), holds, then lerps back and
-// restores controls at the pose it left — driven by earthriseEnvelope (0 at both
-// ends, 1 in the hold), so the move is fully reversible with no residual offset.
-//
-// LAUNCH: leaves OrbitControls in charge and adds a DECAYING positional shake
-// (launchShake) on top of the camera each frame — applied as a transient offset
-// that is removed before the next frame's read, so it never accumulates and
-// settles to exactly zero (pick/click-to-kill stay intact: the shake never
-// touches controls.enabled or the raycaster).
-type CinematicControls = {
-  target: THREE.Vector3;
-  update: () => void;
-  enabled: boolean;
-};
-
-function CinematicCamera({ beats }: { beats: React.RefObject<ActiveBeat[]> }) {
-  const camera = useThree((s) => s.camera);
-  const controls = useThree((s) => s.controls) as CinematicControls | null;
-  const invalidate = useThree((s) => s.invalidate);
-
-  // Earthrise takeover state: the pose the camera was at when the beat began, so
-  // we can lerp out and restore it exactly. Null when no earthrise beat is active.
-  const heroFrom = useRef<Pose | null>(null);
-  // The shake offset applied last frame, removed at the top of the next frame so
-  // the shake is purely additive and never accumulates into the base pose.
-  const shakeOffset = useRef(new THREE.Vector3(0, 0, 0));
-  const tmpPos = useRef(new THREE.Vector3());
-  const tmpTgt = useRef(new THREE.Vector3());
-
-  useFrame(() => {
-    const list = beats.current;
-    // Always undo last frame's shake offset first so the base pose is clean,
-    // whether or not a launch beat is still active this frame.
-    if (shakeOffset.current.lengthSq() > 0) {
-      camera.position.sub(shakeOffset.current);
-      shakeOffset.current.set(0, 0, 0);
-    }
-    if (!list || list.length === 0) {
-      // No beats: if we were mid-earthrise (e.g. the beat was pruned), restore.
-      if (heroFrom.current) {
-        if (controls) {
-          controls.enabled = true;
-          controls.update();
-        }
-        heroFrom.current = null;
-        invalidate();
-      }
-      return;
-    }
-
-    const now = performance.now();
-    let hero = 0;
-    let launch = 0;
-    for (const b of list) {
-      if (b.kind === "earthrise-hero") hero = Math.max(hero, beatProgress(b, now));
-      else if (b.kind === "launch") launch = Math.max(launch, beatProgress(b, now));
-    }
-
-    // EARTHRISE-HERO — disable controls, lerp toward the hero framing, hold, then
-    // lerp back. earthriseEnvelope is 0 at both ends so we land back on `heroFrom`.
-    const heroActive = hero > 0 && hero < 1;
-    if (heroActive) {
-      if (!heroFrom.current) {
-        // Capture the pose to fly FROM (and back TO). Disable controls for the move.
-        heroFrom.current = {
-          position: camera.position.clone(),
-          target: controls ? controls.target.clone() : new THREE.Vector3(0, 4, 0),
-        };
-        if (controls) controls.enabled = false;
-      }
-      const k = earthriseEnvelope(hero);
-      tmpPos.current.lerpVectors(heroFrom.current.position, EARTHRISE_HERO_POSE.position, k);
-      tmpTgt.current.lerpVectors(heroFrom.current.target, EARTHRISE_HERO_POSE.target, k);
-      camera.position.copy(tmpPos.current);
-      camera.up.set(0, 1, 0);
-      camera.lookAt(tmpTgt.current);
-      if (controls) controls.target.copy(tmpTgt.current);
-    } else if (heroFrom.current) {
-      // Earthrise just finished — settle exactly back on the captured pose and
-      // hand the camera back to OrbitControls.
-      camera.position.copy(heroFrom.current.position);
-      camera.up.set(0, 1, 0);
-      camera.lookAt(heroFrom.current.target);
-      if (controls) {
-        controls.target.copy(heroFrom.current.target);
-        controls.enabled = true;
-        controls.update();
-      }
-      heroFrom.current = null;
-    }
-
-    // LAUNCH — decaying screen shake. A small positional jitter that decays to 0;
-    // applied AFTER any earthrise pose so a launch during the hold still rattles.
-    if (launch > 0 && launch < 1) {
-      const SHAKE = 0.5; // peak amplitude in scene units (subtle, not nauseating)
-      shakeOffset.current.set(
-        launchShake(launch, 0) * SHAKE,
-        launchShake(launch, 1) * SHAKE,
-        launchShake(launch, 2) * SHAKE * 0.5,
-      );
-      camera.position.add(shakeOffset.current);
-    }
-
-    invalidate();
-  });
-
-  return null;
-}
-
-// LaunchFlare draws the launch beat's additive exhaust + godray flare: a stack of
-// emissive, non-tone-mapped billboards at the launch pad that bloom up and fade
-// over the beat. Always mounted but hidden; visibility/scale/opacity are driven
-// in useFrame so it costs nothing between beats (mirrors the winner/recovery
-// rings). On the bloom layer so the flare glows. Snapshot-INDEPENDENT decoration.
-function LaunchFlare({ beats }: { beats: React.RefObject<ActiveBeat[]> }) {
-  const groupRef = useRef<THREE.Group>(null);
-  const coreMatRef = useRef<THREE.MeshBasicMaterial>(null);
-  const plumeMatRef = useRef<THREE.MeshBasicMaterial>(null);
-
-  // Put the flare on the bloom layer so it glows like the halos.
-  useEffect(() => {
-    groupRef.current?.traverse((o) => o.layers.enable(HALO_BLOOM_LAYER));
-  }, []);
-
-  useFrame(() => {
-    const group = groupRef.current;
-    if (!group) return;
-    const list = beats.current;
-    let launch = 0;
-    if (list) {
-      const now = performance.now();
-      for (const b of list) {
-        if (b.kind === "launch") {
-          launch = Math.max(launch, beatProgress(b, now));
-        }
-      }
-    }
-    const active = launch > 0 && launch < 1;
-    if (!active) {
-      if (group.visible) group.visible = false;
-      return;
-    }
-    group.visible = true;
-    // Ignition flash ramps up fast then the plume climbs and fades over the beat.
-    const ignite = Math.min(1, launch / 0.12); // quick flash-up in the first 12%
-    const fade = 1 - launch; // overall decay toward the end
-    const core = coreMatRef.current;
-    const plume = plumeMatRef.current;
-    if (core) core.opacity = ignite * fade;
-    if (plume) plume.opacity = ignite * fade * 0.8;
-    // The plume billboard stretches upward as the launch climbs.
-    group.scale.set(1, 1 + launch * 2.2, 1);
-  });
-
-  // Placed at the launch-pad corner of the worksite (matches LaunchScenery's
-  // edge placement). Two stacked emissive quads: a tight bright core + a taller
-  // soft plume, both additive + non-tone-mapped so they read as raw light.
-  return (
-    <group ref={groupRef} position={[GROUND_SPAN * 0.7, 0, GROUND_SPAN * 0.7]} visible={false}>
-      {/* Bright ignition core at the pad base. */}
-      <mesh position={[0, 1.2, 0]} raycast={() => null}>
-        <planeGeometry args={[2.2, 2.6]} />
-        <meshBasicMaterial
-          ref={coreMatRef}
-          color="#fff3d8"
-          transparent
-          opacity={0}
-          blending={THREE.AdditiveBlending}
-          depthWrite={false}
-          toneMapped={false}
-          side={THREE.DoubleSide}
-        />
-      </mesh>
-      {/* Taller soft exhaust plume climbing above the core. */}
-      <mesh position={[0, 3.4, 0]} raycast={() => null}>
-        <planeGeometry args={[1.6, 5.0]} />
-        <meshBasicMaterial
-          ref={plumeMatRef}
-          color="#ffd29a"
-          transparent
-          opacity={0}
-          blending={THREE.AdditiveBlending}
-          depthWrite={false}
-          toneMapped={false}
-          side={THREE.DoubleSide}
-        />
-      </mesh>
-    </group>
-  );
-}
-
 // The actual scene contents (inside <Canvas>). The snapshot → meshes mapping is
 // a single pure pass that re-renders ONLY when a new snapshot arrives. Beats
 // animate via per-mesh useFrame ref-mutation (in Rover3D/TaskBlock), so the
@@ -2810,8 +2558,6 @@ function SceneContents({
   onViewModeChange,
   activeSite = "lunar",
   onActiveSiteChange,
-  lockedSite,
-  statusOverride,
 }: Scene3DProps) {
   const lightRef = useRef<THREE.DirectionalLight>(null);
   // Shared ref to the Sun core disc — surfaced from SkyBodies so the GodRays
@@ -2974,8 +2720,6 @@ function SceneContents({
         viewMode={viewMode}
         onSelectSite={onSelectSite}
         sunRef={sunRef}
-        lockedSite={lockedSite}
-        statusOverride={statusOverride}
       />
 
       {/* The WORKSITE — only in surface view AND once the first snapshot exists. In
@@ -3068,15 +2812,6 @@ function SceneContents({
               Per-site pieces (Epic 04 P2): the two sites reuse the same GLBs but
               compose/retint them — Shackleton is a leaner, cooler outpost. */}
           <LaunchScenery pieces={frame.pieces} />
-
-          {/* Launch-beat flare (#108): additive exhaust + godray billboards at the
-              pad, hidden until a `launch` beat ramps them in useFrame. */}
-          <LaunchFlare beats={beats} />
-
-          {/* Decorative rock scatter removed for the cinematic — the worksite reads
-              cleaner with just the NASA-PD set-pieces on the regolith (Epic 07). The
-              DecorRocks component is kept (and its PBR textures still preload) so the
-              field can be re-mounted per-site if a dressed look is wanted later. */}
         </>
       )}
 
@@ -3096,11 +2831,6 @@ function SceneContents({
           onRotate={onPlaceRotate}
         />
       ) : null}
-
-      {/* Cinematic camera beats (#108): earthrise-hero framing + decaying launch
-          shake. Reads the live beat list; idles (no camera motion) when no beat
-          is active, so the demand loop stays at 0 fps. */}
-      <CinematicCamera beats={beats} />
 
       {/* Cinematic post-processing stack (#99) — layer-gated bloom (halos +
           celestial Sun/Earth), SMAA, surface-gated DoF, orbit-only chromatic
@@ -3391,173 +3121,6 @@ function CameraFeel({ active, onSurface }: { active: boolean; onSurface: boolean
   return null;
 }
 
-// Stable no-op for optional callbacks used as effect deps (a fresh `() => {}` each
-// render would re-run the effect). Module-level so its identity never changes.
-const NOOP = () => {};
-
-// CinematicOpen — the orbit-open camera-arc rig (Epic 07 S5 · #158, Beats 1–2
-// "WANDERING" + "SUN REVEAL"). The film's opening Scenery beat: "lost in the dark,
-// found by the sun." A scene-mounted rig driven by a PROP FLAG (the same pattern as
-// CameraFeel above — NOT an imperative camera handle), so it respects the one-effect-
-// owns-the-camera invariant.
-//
-// While `active`, it drifts the camera laterally along the Moon's dark limb (sun
-// off-frame) and then ARCS the CAMERA so the *fixed* sun's GodRays + celestial bloom
-// crest into frame, easing into ORBIT_POSE. The motion is a CAMERA azimuth offset
-// (lib/reel/openArc.openAzimuthOffset) applied by rotating the settled ORBIT_POSE
-// offset around the target's up-axis — CAMERA-ARC, NOT SUN-ARC (grilling outcome 5):
-// the sun STAYS at ORBIT_SUN_POSITION (moving it would be physically wrong + snapshot-
-// independent motion). It runs under frameloop="always" (ADR-0004 Wave-4) and invents
-// ZERO snapshot/wire fields (pure decorative Scenery, ADR-0004 purity intact).
-//
-// Transition discipline: while running it calls `onTransition(true)` so Scene3D sets
-// `transitioning` — which deactivates CameraFeel (its idle sway can't fight the arc)
-// and disables OrbitControls rotate. It ALSO owns `controls.enabled=false` directly
-// (mirrors runDescent). On completion OR cancel (prop flips false / unmount), it
-// settles EXACTLY on ORBIT_POSE, re-enables controls, and calls `onTransition(false)`
-// so CameraFeel re-arms and idle drift eases back in — no stuck-disabled controls, no
-// leaked state. The cleanup runs on EVERY teardown, so cancelling mid-arc restores
-// cleanly to the framed orbit pose (never a half-rotated camera).
-//
-// FALLBACK (script-sanctioned, Beats 1–2): if this cue is never fired, the orbit
-// behaves EXACTLY as today — a cold static ORBIT_POSE hold + idle sway, and the
-// "found by light" read moves to the descent glare (Beat 4). The rig is inert when
-// `active` is false, so it NEVER blocks the rest of the film. Only meaningful in
-// orbit; on the surface it no-ops (the open is an orbit vista beat).
-function CinematicOpen({
-  active,
-  onSurface,
-  onTransition,
-  onDone,
-}: {
-  active: boolean;
-  onSurface: boolean;
-  onTransition: (running: boolean) => void;
-  // Fire-once: called when the arc finishes OR is interrupted, so the upstream
-  // `cinematicOpen` flag disarms and the arc can't re-trigger on the next return
-  // to orbit (the ascent bookend). Must be STABLE — it's an effect dependency.
-  onDone: () => void;
-}) {
-  const controls = useThree((s) => s.controls) as FeelControls | null;
-  const camera = useThree((s) => s.camera);
-  const invalidate = useThree((s) => s.invalidate);
-
-  useEffect(() => {
-    // Inert unless armed-and-triggered AND in orbit (the open is an orbit vista
-    // beat). On the surface or when not cued, do nothing — the orbit is untouched
-    // (the cold-hold fallback) and controls/CameraFeel keep their current state.
-    if (!active || onSurface || !controls || !camera) return;
-
-    // Capture the LIVE target + horizontal berth at the moment the cue fires. The
-    // equirect background is sampled by camera orientation, so preserving the live
-    // X/Z offset avoids the old azimuth snap that rotated the warm dust band away.
-    // The Y offset is intentionally restored to ORBIT_POSE's startup elevation:
-    // regardless of a prior polar drag, the reveal sees the Sun and Moon with the
-    // same vertical alignment as the default app view.
-    const startTarget = controls.target.clone();
-    const startPos = camera.position.clone();
-    const liveOffset = startPos.clone().sub(startTarget);
-    const defaultOffset = ORBIT_POSE.position.clone().sub(ORBIT_POSE.target);
-    const alignedOffset = alignOpenCameraElevation(
-      [liveOffset.x, liveOffset.y - 10, liveOffset.z],
-      [defaultOffset.x, defaultOffset.y -20, defaultOffset.z],
-    );
-    // The arc rotates this aligned offset around the target's up-axis. Its elevation
-    // stays fixed at the startup value while only azimuth changes (CAMERA-ARC, not
-    // sun-arc); the final pose retains the live horizontal framing.
-    const restOffset = new THREE.Vector3(...alignedOffset);
-    const settledPos = startTarget.clone().add(restOffset);
-    const up = camera.up.clone(); // world-up (0,1,0) in orbit — the azimuth axis
-    const tmpOffset = new THREE.Vector3();
-    const tmpQuat = new THREE.Quaternion();
-
-    // We own the camera for the duration: disable controls and tell Scene3D we're
-    // transitioning (deactivates CameraFeel, disables OrbitControls rotate). Mirrors
-    // runDescent's discipline so the two rigs never fight over the camera.
-    controls.enabled = false;
-    onTransition(true);
-
-    let raf = 0;
-    let start = 0;
-    let cancelled = false;
-    // True once the arc has run to completion and handed the camera back. Guards the
-    // cleanup from re-snapping the camera to ORBIT_POSE on a LATER teardown (e.g. the
-    // operator toggles the cue off, or orbits away then unmounts) — after a natural
-    // finish there is nothing to cancel, so the cleanup must not yank the camera.
-    let finished = false;
-
-    const apply = (t: number) => {
-      const azOffset = openAzimuthOffset(t);
-      tmpOffset.copy(restOffset).applyQuaternion(tmpQuat.setFromAxisAngle(up, azOffset));
-      camera.position.copy(startTarget).add(tmpOffset);
-      camera.up.set(0, 1, 0);
-      camera.lookAt(startTarget);
-      // Keep OrbitControls' target on the Moon so it resumes from the framed pose.
-      controls.target.copy(startTarget);
-      invalidate();
-    };
-
-    const step = (now: number) => {
-      if (cancelled) return;
-      if (!start) start = now;
-      const t = Math.min(1, (now - start) / OPEN_MS);
-      apply(t);
-      if (t < 1) {
-        raf = requestAnimationFrame(step);
-      } else {
-        // Settle EXACTLY on the aligned rest pose (openAzimuthOffset(1) === 0, but
-        // snap so there is zero residual), re-enable controls, and hand the camera
-        // back to CameraFeel. The live azimuth keeps the backdrop continuous while
-        // the canonical Y keeps the Sun/Moon composition matched to app startup.
-        finish();
-      }
-    };
-
-    const finish = () => {
-      finished = true;
-      camera.position.copy(settledPos);
-      camera.up.set(0, 1, 0);
-      camera.lookAt(startTarget);
-      controls.target.copy(startTarget);
-      controls.enabled = true;
-      onTransition(false);
-      // One-shot: disarm so the arc plays exactly once. Returning to orbit later
-      // (the ascent bookend) must NOT replay it — that re-fire captured a
-      // mid-ascent pose and fought the ascent driver (flicker + stuck-close Moon).
-      onDone();
-      invalidate();
-    };
-
-    raf = requestAnimationFrame(step);
-
-    return () => {
-      cancelled = true;
-      cancelAnimationFrame(raf);
-      // If the arc already finished naturally, `finish()` settled + handed the camera
-      // back to CameraFeel/OrbitControls — there is nothing to cancel, so DON'T touch
-      // the camera (the operator may have orbited away since). Only an INTERRUPTED arc
-      // (prop flips false / unmount mid-run) needs the restore: settle back to the
-      // aligned rest pose and re-enable controls so nothing is left stuck-disabled
-      // or half-rotated.
-      if (!finished) {
-        if (controls) {
-          camera.position.copy(settledPos);
-          camera.up.set(0, 1, 0);
-          camera.lookAt(startTarget);
-          controls.target.copy(startTarget);
-          controls.enabled = true;
-        }
-        onTransition(false);
-        // Disarm on interruption too (e.g. descent started mid-arc): a one-shot
-        // intro should not resume/replay when the view next returns to orbit.
-        onDone();
-        invalidate();
-      }
-    };
-  }, [active, onSurface, controls, camera, invalidate, onTransition, onDone]);
-
-  return null;
-}
 
 // The canonical settled pose for a (view, site) pair — the start/end of every
 // transition. Orbit is site-agnostic (one Moon vista for both markers); the
@@ -3584,10 +3147,6 @@ export function Scene3D({
   onViewModeChange,
   activeSite = "lunar",
   onActiveSiteChange,
-  lockedSite,
-  statusOverride,
-  cinematicOpen,
-  onCinematicOpenDone,
 }: Scene3DProps) {
   // Initial camera pose, seeded to the DEFAULT view so the app opens already
   // framed on it. The Canvas `camera` prop is applied ONCE on mount, so this is
@@ -3622,15 +3181,6 @@ export function Scene3D({
   const [shownSite, setShownSite] = useState<SiteId>(activeSite);
   const shownSiteRef = useRef<SiteId>(activeSite);
   const [transitioning, setTransitioning] = useState(false);
-
-  // The orbit-open rig (#158) reuses the SAME `transitioning` discipline as the
-  // descent/traverse runners: while it owns the camera it flips `transitioning` so
-  // CameraFeel stands down and OrbitControls rotate is disabled, then clears it on
-  // settle so idle drift eases back in (one-effect-owns-the-camera). Memoised so the
-  // rig's effect (which depends on it) doesn't re-run on unrelated re-renders.
-  const runOpenTransition = useCallback((running: boolean) => {
-    setTransitioning(running);
-  }, []);
 
   // Live handles to the in-Canvas camera/controls/invalidate, captured by RigBridge.
   const cameraRef = useRef<THREE.Camera | null>(null);
@@ -4040,8 +3590,6 @@ export function Scene3D({
           // worksite + per-site lighting/fog/scenery swap unseen behind the flash.
           activeSite={shownSite}
           onActiveSiteChange={onActiveSiteChange}
-          lockedSite={lockedSite}
-          statusOverride={statusOverride}
         />
         <RigBridge
           cameraRef={cameraRef}
@@ -4078,19 +3626,6 @@ export function Scene3D({
             never reads the snapshot. Orbit exposure is scaled down so deep space
             reads darker (the sunlit limb + celestial bloom stop blowing out). */}
         <CameraFeel active={!placing && !transitioning} onSurface={shown === "surface"} />
-        {/* Orbit-open camera-arc (#158): the film's opening Scenery beat. Driven by
-            the `cinematicOpen` prop (gated upstream on the cinematic arm flag); while
-            running it sets `transitioning` (via runOpenTransition) so CameraFeel +
-            OrbitControls stand down, then settles into ORBIT_POSE and hands the camera
-            back. The SUN never moves (camera-arc, not sun-arc). Inert + non-blocking
-            when the cue isn't fired — the orbit then behaves exactly as today (the
-            script-sanctioned cold-hold fallback). Orbit-only; no-ops on the surface. */}
-        <CinematicOpen
-          active={cinematicOpen === true && shown === "orbit" && !placing}
-          onSurface={shown === "surface"}
-          onTransition={runOpenTransition}
-          onDone={onCinematicOpenDone ?? NOOP}
-        />
       </Canvas>
       {/* Glare overlay for the descent transition. A child of .stage (position:
           relative), so it fills the stage; pointer-events:none keeps clicks going

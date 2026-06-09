@@ -36,8 +36,8 @@ export function ringColor(fraction: number): string {
 // ---- transient beats ------------------------------------------------------
 
 // How long each beat kind's decoration stays on screen, in ms. Unknown kinds
-// (e.g. "expired"/"killed" with no bespoke visual) get a short default so they
-// are dropped quickly and never linger.
+// (with no bespoke visual) get a short default so they are dropped quickly and
+// never linger.
 export function beatLifetimeMs(kind: string): number {
   switch (kind) {
     case "bid":
@@ -50,61 +50,9 @@ export function beatLifetimeMs(kind: string): number {
       return 1100; // a deliberate, legible recovery pulse — the in-place comeback
     case "expired":
       return 500;
-    // ---- Wave 3 cinematic beats (#108) — longer, camera-driving set-pieces.
-    case "launch":
-      // A liftoff: exhaust + flare ramp-up, then a decaying screen shake that
-      // needs room to settle smoothly back to zero (~3.2s reads as a real launch).
-      return 3200;
-    case "earthrise-hero":
-      // A held hero shot: ~1s lerp IN to frame Earth, a hold, then lerp OUT and
-      // restore. The whole arc lives inside this one beat's lifetime.
-      return 4500;
     default:
       return 500;
   }
-}
-
-// ---- cinematic-beat shaping (#108) ----------------------------------------
-//
-// Pure, DOM-free curves for the Wave-3 camera beats, kept here so they stay
-// unit-testable in vitest's node env (no canvas/rAF). Scene3D drives the actual
-// camera/mesh refs in a useFrame from these numbers; nothing here invents world
-// state — a beat only ever DECORATES the authoritative snapshot.
-
-// Decaying camera-shake amplitude for the `launch` beat. A cheap, deterministic
-// stand-in for Perlin: a couple of out-of-phase sines (so x/y read uncorrelated)
-// modulated by an exponential envelope that is strong at ignition (p=0) and
-// rolls to 0 by the end (p=1). `axis` selects an independent waveform per camera
-// axis so the shake is 2D, not a diagonal wobble. Clamped progress in [0, 1];
-// guaranteed 0 at p>=1 so the camera settles exactly back on its base pose.
-export function launchShake(progress: number, axis: number): number {
-  const p = progress <= 0 ? 0 : progress >= 1 ? 1 : progress;
-  if (p >= 1) return 0;
-  // Exponential decay multiplied by a linear (1 - p) so the tail reaches exactly
-  // zero: a strong jolt at ignition, fully settled by the end (no residual drift).
-  const envelope = Math.exp(-3.2 * p) * (1 - p);
-  // High-frequency carrier; phase-offset per axis so axes don't move in lockstep.
-  const phase = axis * 1.7;
-  const carrier =
-    Math.sin(p * 90 + phase) * 0.6 + Math.sin(p * 137 + phase * 2.3) * 0.4;
-  return envelope * carrier;
-}
-
-// Eased 0→1 amplitude for the `earthrise-hero` beat: ramp the camera IN to the
-// hero framing, HOLD at full (1), then ramp back OUT to 0 so controls restore at
-// the same pose they left. `inFrac`/`outFrac` are the fractions of the beat spent
-// ramping in / out; the middle is the hold. Clamped progress in [0, 1]; 0 at both
-// ends. A smoothstep on each ramp keeps the move gentle (no velocity jump).
-export function earthriseEnvelope(
-  progress: number,
-  inFrac = 0.22,
-  outFrac = 0.24,
-): number {
-  const p = progress <= 0 ? 0 : progress >= 1 ? 1 : progress;
-  const smooth = (x: number) => x * x * (3 - 2 * x);
-  if (p < inFrac) return smooth(p / inFrac); // ramp in
-  if (p > 1 - outFrac) return smooth((1 - p) / outFrac); // ramp out
-  return 1; // hold at the hero framing
 }
 
 // A beat enriched with the wall-clock time it was received (performance.now()),

@@ -43,7 +43,7 @@ import {
   SUN_COLOR,
   NEBULA_VEIL,
 } from "../components/SkyBodies";
-import { ROCK_DIFF, ROCK_NORMAL, ROCK_ROUGH } from "../components/DecorRocks";
+import { ROCK_DIFF, ROCK_NORMAL, ROCK_ROUGH } from "../components/LavaTube";
 import { STRUCTURE_TEXTURES } from "../components/Structures";
 
 // --- the manifest, partitioned by loader -----------------------------------

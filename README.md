@@ -1,7 +1,7 @@
 # SwarmBuild
 
 Swarm-intelligence orchestration for autonomous construction in hostile, high-latency
-environments. The MVP scenario: rovers build a lunar habitat dome before humans arrive,
+environments. The scenario: rovers build a lunar habitat dome before humans arrive,
 and the worksite **reorganises itself when a rover fails — with no operator in the loop.**
 
 The whole pitch is a ~30-second money shot: kill a rover mid-wall, watch its task
@@ -11,7 +11,6 @@ re-auction and another rover finish the wall; the dome still closes.
 - Product requirements: [PRD-SwarmBuild-MVP.md](./docs/00-mvp/PRD-SwarmBuild-MVP.md)
 - Technical spec: [docs/TECHSPEC.md](./docs/00-mvp/TECHSPEC.md)
 - Load-bearing decisions: [docs/adr/](./docs/00-mvp/adr/)
-- Build backlog (vertical slices): [docs/issues/](./docs/00-mvp/issues/)
 - Working in this repo (the agent harness): [AGENTS.md](./AGENTS.md) · [feature_list.json](./feature_list.json) · [docs/harness/](./docs/harness/)
 
 ## Architecture
@@ -21,16 +20,17 @@ wrapped in a thin simulation + NATS bus + 3D dashboard that exist to make those 
 *visible*. See TECHSPEC §3.
 
 ```
-/cmd                  Go — coordinator / agent / gateway binaries (thin mains) ← built
-/internal/core        Go — deep modules (allocation, lease, world, planner)    ← built
-/internal/wire        Go — NATS subjects + JSON message/snapshot contract      ← built
-/internal/bus         Go — NATS wrapper (connect/retry, pub/sub, KV) + server  ← built
-/internal/agent       Go — robot agent (bid/execute/heartbeat)                 ← built
-/internal/coordinator Go — single-writer tick, auction, lease, world, KV       ← built
-/internal/gateway     Go — NATS→WebSocket fan-out + /healthz                   ← built
-/internal/demo        Go — blueprint + rover roster for the demo scenario      ← built
-/web                  React + Vite — 2D canvas scaffold (→ 3D later)           ← built
-/deploy               docker-compose.yml (nats, coordinator, gateway, web)     ← built
+/cmd                  Go — coordinator / agent / gateway binaries (thin mains)
+/internal/core        Go — deep modules (allocation, lease, world, planner)
+/internal/wire        Go — NATS subjects + JSON message/snapshot contract
+/internal/bus         Go — NATS wrapper (connect/retry, pub/sub, KV) + server
+/internal/agent       Go — robot agent (bid/execute/heartbeat, replay/live build)
+/internal/coordinator Go — single-writer tick, auction, lease, world, KV
+/internal/gateway     Go — NATS→WebSocket fan-out + /healthz
+/internal/demo        Go — pacing + scenario assembly for the sandbox
+/internal/harness     Go — Build harness (contracts, refine loop, replay cache)
+/web                  React + Vite — 3D dashboard (react-three-fiber)
+/deploy               k8s manifests + kind bring-up (pod-per-rover swarm)
 ```
 
 Application code lives under `internal/` (standard Go layout — private, not importable
@@ -38,38 +38,39 @@ by other modules); the `main` packages stay thin under `cmd/`.
 
 ## Run the stack
 
+Two supported ways to run SwarmBuild:
+
 ```sh
-# Full stack in Docker (NATS + coordinator + gateway + web):
-docker compose -f deploy/docker-compose.yml up --build
-# → dashboard at http://localhost:5173, gateway WS/health at :8080
-# Pre-demo smoke (build, assert healthy + auction completes, tear down):
-./deploy/smoke.sh            # add --keep to leave it running
+# 1. Full stack on a local kind cluster (NATS + coordinator + gateway + web +
+#    six Rover Pods). Builds the images, loads them into kind, applies the
+#    manifests, and port-forwards web→:5173 / gateway→:8080.
+./deploy/k8s/up.sh           # → open http://localhost:5173
+./deploy/k8s/down.sh         # tear down (add --cluster to delete the kind cluster)
+
+# 2. Dashboard only, no backend (a hardcoded in-browser mock snapshot):
+cd web && VITE_MOCK=1 npm run dev
 ```
 
-The optional **container encore** (`docker kill` a real Rover container that heals over
-the bus) ships in the same compose file. See [docs/encore.md](./docs/00-mvp/encore.md) for how
-to run and rehearse it (and the Adapter seam for a spin-off capability profile).
+The board starts empty: drop a Blueprint (dome / solar-array / comms-mast) from the
+dashboard hotbar and the Rover Pods drive over and build it. Mid-build, KILL a rover —
+it goes dark in place, its Lease expires, the swarm self-heals onto a neighbour, and
+the same rover revives after ~6s. With an API key in `.env` (see `.env.example`),
+placements dropped in "LLM Generated" mode are generated live by the rovers'
+Generator↔Evaluator loop; without one, every placement replays the committed baked specs.
 
-For the **pod-per-rover** variant — every Rover as its own Kubernetes Pod, the
-Coordinator running with no in-process Rovers, and the dashboard KILL doing a real
-`kubectl delete pod` that Self-heals by Re-auction onto a surviving Pod — see
-[deploy/k8s/README.md](./deploy/k8s/README.md) (`./deploy/k8s/up.sh` on a local kind
-cluster). The fast in-process compose stack above stays the headline (ADR-0001); this
-is the opt-in "each Rover is a real, separately-killable system" proof.
+See [deploy/k8s/README.md](./deploy/k8s/README.md) for the pod-per-rover details.
 
-## Deep core (built)
+## Deep core
 
 Four pure modules under `internal/core/`, importing only `swarmbuild/internal/core/domain`
-+ stdlib — no
-NATS, no simulation, no wall clock. This is the PRD's real acceptance: it ships fully
-tested even if everything after is cut (TECHSPEC §6 step 1).
++ stdlib — no NATS, no simulation, no wall clock.
 
 | Module | Package | What it does |
 |---|---|---|
 | **Domain contract** | `internal/core/domain` | Shared types: `Task`, `RobotID`, `TaskStatus`, `Vec2`, `Lamport`, `Clock`/`Tick`, `RoverState`. The single contract the four modules agree on. |
 | **Allocation Engine** | `internal/core/allocation` | Contract Net auction. `cost = w_dist·dist + w_bat·(1/battery) + w_load·load`; ineligible rovers (capability ∞) don't bid; lowest cost wins; tie → lower `RobotID`. |
 | **Lease Manager** | `internal/core/lease` | TTL + heartbeat over an injectable logical clock. Grant → renew → complete; expiry on heartbeat silence releases the task **exactly once** (idempotent). |
-| **World Model** | `internal/core/world` | Authoritative single-writer task state + a pure, property-tested CRDT `Merge` (commutative, idempotent, associative; concurrent-claim tiebreak by lower rover id). Live path uses the single writer; the CRDT is proven in tests (ADR-0003). |
+| **World Model** | `internal/core/world` | Authoritative single-writer task state + a pure, property-tested CRDT `Merge` (commutative, idempotent, associative; concurrent-claim tiebreak by lower rover id). |
 | **Task Planner** | `internal/core/planner` | Blueprint → DAG. Rejects cycles and dangling deps at load; computes the **ready set** (deps all DONE); marking a task DONE unblocks dependents; deterministic topological order. |
 
 ### Run the tests
@@ -77,16 +78,5 @@ tested even if everything after is cut (TECHSPEC §6 step 1).
 ```sh
 go test -race ./...
 go vet ./...
+(cd web && npm test)
 ```
-
-## Build sequence
-
-Robustness-first, cut-able tail (TECHSPEC §6). Status:
-
-1. ✅ **Deep core + tests** — the four modules above.
-2. ⬜ Sim + coordinator (goroutine rovers, behaviour tree, single-writer tick, integration test).
-3. ⬜ NATS on the path (auction/telemetry/uplink; KV mirror; hardened bootstrap).
-4. ⬜ WS gateway + 2D canvas scaffold (kill→heal→complete visible — first demoable milestone).
-5. ⬜ Choreography (pace beats off real events).
-6. ⬜ react-three-fiber 3D (swap renderer; 2D stays as fallback).
-7. ⬜ Stretch: container encore; live CRDT partition toggle.
