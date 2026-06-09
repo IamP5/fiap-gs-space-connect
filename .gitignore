@@ -8,14 +8,11 @@ dist/
 tmp/
 .env
 
-# Throwaway demo screenshots captured during dev-tools runs
 /web/demo-*.png
 
-# Secrets: never commit a real .env. The committed template is .env.example.
 .env
 .env.*
 !.env.example
 .e2e-captures/
 
-# Asset conditioning sources (not shipped; conditioned .glb is committed instead)
 sources/

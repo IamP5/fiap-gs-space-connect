@@ -1,47 +1,22 @@
-// Wire contract — must match wire/wire.go EXACTLY.
-//
-// The gateway fans out a full world Snapshot (~10 Hz) over the WebSocket. The
-// dashboard is a pure, stateless re-render of the latest snapshot — no
-// client-side simulation (TECHSPEC §4, ADR-0004). NOTE: positions use capital
-// X/Y (Go's domain.Vec2 has no JSON tags, so it marshals as {X, Y}).
 
 export type Vec2 = { X: number; Y: number };
 
-// Vec3 mirrors Go's domain.Vec3 (no JSON tags, so capital X/Y/Z), used by the
-// Build spec for a position, rotation (Euler radians), or scale in the Task's
-// Build-envelope frame.
 export type Vec3 = { X: number; Y: number; Z: number };
 
 export type TaskStatus = "UNCLAIMED" | "LEASED" | "DONE";
 
-// --- Build spec (TECHSPEC §4, ADR-0006, bh-08a) — forward-compatible
-// geometry-as-data.
-//
-// An append-only PATCH LOG of declarative BuildOps the renderer FOLDS into
-// current geometry, never executes. Mirrors wire.go's BuildOp/Material exactly
-// (snake_case JSON field names) so the two round-trip. box|cylinder|sphere render
-// today; "model" (with model_ref) and material `map` are reserved future
-// glTF/texture slots the current renderer treats as no-ops.
-// "module" places one build STEP of a procedural immersive structure
-// (Structures.tsx, milestone 08): the op's `part` names the StructureKind and the
-// renderer reveals the structure step-by-step as the per-step module ops fold in.
 export type BuildShape = "box" | "cylinder" | "sphere" | "model" | "module";
 
 export type Material = {
   color: string;
-  roughness?: number; // 0..1; omitted ⇒ renderer default
-  metalness?: number; // 0..1; omitted ⇒ renderer default
-  map?: string; // diffuse/albedo texture reference (sRGB); falls back to color
-  normal_map?: string; // tangent-space normal map (linear); best-effort
-  roughness_map?: string; // roughness map (linear, R channel); best-effort
-  ao_map?: string; // ambient-occlusion map (linear); needs uv2, best-effort
+  roughness?: number;
+  metalness?: number;
+  map?: string;
+  normal_map?: string;
+  roughness_map?: string;
+  ao_map?: string;
 };
 
-// A single patch-log op. `op` is the kind; `id` is the stable piece key the
-// renderer folds on — a `place` introduces an id, a later `move`/`delete` targets
-// it. A place-only log gives every op a distinct id and folds to itself (today's
-// cache + primitive stream, pixel-identical replay). move/delete carry only the
-// fields the fold needs (id, and pos/rot/scale for move).
 export type BuildOp = {
   op: "place" | "move" | "delete";
   id: string;
@@ -50,21 +25,18 @@ export type BuildOp = {
   rot: Vec3;
   scale: Vec3;
   material: Material;
-  model_ref?: string; // future glTF reference; only with shape "model"
-  asset_key?: string; // curated Asset catalog key (ADR-0010); the server resolves it to model_ref before this reaches the browser
-  part?: string; // StructureKind a "module" op builds one step of (milestone 08); required with shape "module"
+  model_ref?: string;
+  asset_key?: string;
+  part?: string;
 };
 
 export type RoverView = {
   id: string;
   pos: Vec2;
-  battery: number; // 0..1
+  battery: number;
   alive: boolean;
   load: number;
-  task?: string; // task id the rover currently holds, if any
-  // Worksite the rover is stationed at (two-site lunar surface, epic 04). The
-  // dashboard slices rovers by site so each surface view shows only its own swarm.
-  // Absent ⇒ the single default site (back-compat). Mirrors wire.go RoverView.Site.
+  task?: string;
   site?: string;
 };
 
@@ -77,22 +49,12 @@ export type TaskView = {
   lease_expiry?: number;
   version: number;
   deps?: string[];
-  // Worksite this task belongs to (two-site lunar surface, epic 04). The dashboard
-  // slices tasks by site so each surface view shows only its own structure. Absent
-  // ⇒ the single default site (back-compat). Mirrors wire.go TaskView.Site.
   site?: string;
-  // Accumulated, ordered Build spec (ADR-0006). Absent ⇒ the renderer falls back
-  // to the deterministic `tierOf` primitive, so the field is purely additive.
   build_spec?: BuildOp[];
 };
 
-// A choreography beat (slice 06), derived server-side from a REAL engine event
-// and carried in the snapshot's `events`. The browser only DECORATES the
-// authoritative world with these (a bid flash, a winner glow); a beat must never
-// contradict the rovers/tasks state. Beats are transient — each snapshot carries
-// only those since the previous one. `value` carries the bid cost for "bid".
 export type WorldEvent = {
-  kind: string; // "bid" | "won" | "expired" | "solidify" | "killed" | "revived"
+  kind: string;
   task_id?: string;
   robot_id?: string;
   value?: number;
@@ -108,61 +70,25 @@ export type Snapshot = {
   at: number;
 };
 
-// EarthUplink — the DELAYED Earth-bound telemetry view (issue 09). It rides the
-// `earth.uplink` subject ONLY (ADR-0002: the latency shim never touches
-// heartbeats or the tactical loop), so it is a lagging copy of the world. At
-// high latency it trails the live Snapshot — that visible gap is the whole point
-// ("Earth never knew"). `type` is always "earth" so the browser routes it apart
-// from a Snapshot. Marshals as wire.go's EarthUplink: {type,rovers,tasks,at}.
 export type EarthUplink = {
   type: "earth";
   rovers: RoverView[];
   tasks: TaskView[];
-  at: number; // the world time this view reflects (lag = snapshot.at - earth.at)
+  at: number;
 };
 
-// Browser → server control message (TECHSPEC §4). `cmd`/`robot`/`value` already
-// cover every command — no shape change per command:
-//   · kill            (robot) — flag-flip an in-proc rover dead (the headline)
-//   · killContainer   (robot) — the encore: gateway relays it onto NATS and a
-//                                killer sidecar runs `docker kill` on the real
-//                                rover container (R7), which then self-heals
-//                                (Expiry → Re-auction → Self-heal); issue 11
-//   · reloadDemo               — reset the board so the swarm rebuilds the dome
-//                                from scratch (the Coordinator re-seeds the
-//                                worksite); cmd-only, no robot/value
-//   · cueKill                  — Epic 07 climax cue (ADR-0011): the Coordinator
-//                                releases the held hero wall (lunar/wall-1), lets a
-//                                Rover lease + drive to it, then fires the in-process
-//                                kill on that Rover (Expiry → Re-auction → a surviving
-//                                Rover seals the dome). The browser only ARMS + fires;
-//                                the "which Rover / when" stays in Go (deterministic).
-//                                cmd-only, no robot/value
-//   · setFailureProb  (value) — 0..1 per-rover induced failure rate (issue 08)
-//   · setLatency      (value) — ms of delay on the earth.uplink feed (issue 09)
-//   · placeBlueprint  (blueprint_id, origin, rotation, mode) — drag a pre-authored
-//                       Blueprint into the world; the coordinator validates
-//                       bounds/terrain/no-overlap then injects its task DAG, which
-//                       the Auction builds exactly as today (bh-05). `mode` picks
-//                       replay (the default) or live PER PLACEMENT (bh-08c). The
-//                       fields are snake_case to mirror wire.go's Control JSON tags.
 export type Control = {
   cmd: string;
   robot?: string;
   value?: number;
-  blueprint_id?: string; // placeBlueprint: catalog Blueprint id
-  origin?: Vec2; // placeBlueprint: worksite anchor for the injected DAG
-  rotation?: number; // placeBlueprint: radians about the origin
-  mode?: BuildMode; // placeBlueprint: "replay" (default) | "live" build mode (bh-08c)
+  blueprint_id?: string;
+  origin?: Vec2;
+  rotation?: number;
+  mode?: BuildMode;
 };
 
-// BuildMode is the per-placement build mode the operator chooses before dropping a
-// Blueprint (bh-08c): "replay" replays the deterministic cache/primitive stream
-// (the default), "live" runs the Build harness inline. Mirrors agent.Mode in Go.
 export type BuildMode = "replay" | "live";
 
-// Narrow an arbitrary parsed JSON value to a Snapshot. Defensive: a malformed
-// frame must never crash the pure render.
 export function isSnapshot(v: unknown): v is Snapshot {
   if (typeof v !== "object" || v === null) return false;
   const o = v as Record<string, unknown>;
@@ -174,8 +100,6 @@ export function isSnapshot(v: unknown): v is Snapshot {
   );
 }
 
-// Narrow an arbitrary parsed JSON value to an EarthUplink. Same defensive ethos
-// as isSnapshot: a malformed earth frame must never crash the pure render.
 export function isEarthUplink(v: unknown): v is EarthUplink {
   if (typeof v !== "object" || v === null) return false;
   const o = v as Record<string, unknown>;

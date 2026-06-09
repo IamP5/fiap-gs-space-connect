@@ -8,8 +8,6 @@ import (
 	"testing"
 )
 
-// keyedContract builds a minimal valid Build contract scoped to the given Asset
-// catalog, so the prompt-injection tests do not depend on DefaultCatalog() data.
 func keyedContract(cat *asset.Catalog) Contract {
 	return Contract{
 		BlueprintID: "bp",
@@ -21,11 +19,6 @@ func keyedContract(cat *asset.Catalog) Contract {
 	}
 }
 
-// TestBuildPrompt_CarriesCatalogKeyList proves the assembled prompt offers the
-// model the contract's Asset catalog by KEY (with each key's suited task type),
-// instructs it that it may set asset_key, and — the load-bearing invariant
-// (ADR-0010) — NEVER leaks a model_ref URL/path into the prompt. It injects its own
-// catalog with known entries rather than relying on DefaultCatalog().
 func TestBuildPrompt_CarriesCatalogKeyList(t *testing.T) {
 	t.Parallel()
 	cat := asset.NewCatalog(
@@ -51,15 +44,12 @@ func TestBuildPrompt_CarriesCatalogKeyList(t *testing.T) {
 	}
 	all := sb.String()
 
-	// The key list (names + suited types) is present.
 	for _, want := range []string{"test-foundation", "test-wall", "asset_key", string(typeFoundation), string(typeWall)} {
 		if !strings.Contains(all, want) {
 			t.Fatalf("prompt missing %q\n---\n%s", want, all)
 		}
 	}
 
-	// The resolved model_ref URLs/paths are NEVER in the prompt: the model picks a
-	// key, the server resolves it before the browser ever sees a URL.
 	for _, leak := range []string{
 		"/assets/secret-foundation.glb", "/assets/secret-wall.glb",
 		"secret-foundation.glb", "secret-wall.glb", ".glb",
@@ -70,9 +60,6 @@ func TestBuildPrompt_CarriesCatalogKeyList(t *testing.T) {
 	}
 }
 
-// TestBuildPrompt_EmptyCatalogNoAssetOffer: a contract scoped to an EMPTY catalog
-// adds no Asset offer to the prompt (the prompt stays purely procedural), so a Task
-// with no curated Assets never sees a dangling "available keys" header.
 func TestBuildPrompt_EmptyCatalogNoAssetOffer(t *testing.T) {
 	t.Parallel()
 	c := keyedContract(asset.NewCatalog())
@@ -91,12 +78,6 @@ func TestBuildPrompt_EmptyCatalogNoAssetOffer(t *testing.T) {
 	}
 }
 
-// TestResolveOp_InjectedCatalogClearsKey proves the live emit→resolve seam end to
-// end on a SELF-INJECTED catalog (not DefaultCatalog): a place op carrying a valid
-// in-catalog key resolves to shape=model + the self-hosted model_ref with the
-// AssetKey CLEARED, and the entry's normalization transform composed onto the op's
-// own pos/rot/scale (ADR-0010). This is the same ResolveSpec path the coordinator
-// runs at publishSnapshot before the browser sees the op.
 func TestResolveOp_InjectedCatalogClearsKey(t *testing.T) {
 	t.Parallel()
 	cat := asset.NewCatalog(
@@ -109,7 +90,7 @@ func TestResolveOp_InjectedCatalogClearsKey(t *testing.T) {
 	)
 	op := wire.BuildOp{
 		Op:       wire.BuildOpPlace,
-		Shape:    wire.ShapeBox, // fallback shape on the keyed op
+		Shape:    wire.ShapeBox,
 		Pos:      domain.Vec3{X: 5, Y: 1, Z: 1},
 		Scale:    domain.Vec3{X: 3, Y: 3, Z: 3},
 		Material: wire.Material{Color: "#ffffff"},
@@ -128,7 +109,6 @@ func TestResolveOp_InjectedCatalogClearsKey(t *testing.T) {
 	if got.ModelRef != "/assets/secret-foundation.glb" {
 		t.Fatalf("ResolveOp: model_ref = %q, want the self-hosted URL", got.ModelRef)
 	}
-	// Transform composes: scale multiplies (3*2=6), offset adds to pos (5+1=6).
 	if got.Scale.X != 6 || got.Pos.X != 6 {
 		t.Fatalf("ResolveOp: transform not composed: scale=%+v pos=%+v", got.Scale, got.Pos)
 	}

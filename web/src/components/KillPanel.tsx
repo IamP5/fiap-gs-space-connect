@@ -1,11 +1,3 @@
-// KillPanel — the top-right selection affordance: surfaces the selected rover
-// and a two-step KILL action (select, then KILL, so a stray click never kills).
-//
-// Rendered only while a live selection resolves against the latest snapshot
-// (App owns that). The alive-guard lives here visually: a live rover gets an
-// armed KILL button; a dead one gets a disabled DOWN, so onKill can only ever
-// fire for a killable rover. Callbacks are stable (App passes useCallback refs),
-// so the memo skips re-renders that don't change this rover.
 
 import { memo } from "react";
 import { batteryPercent } from "../lib/format";

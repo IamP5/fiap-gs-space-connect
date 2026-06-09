@@ -9,8 +9,6 @@ import (
 	"testing"
 )
 
-// validSpecJSON is a well-formed strict-output envelope: one box op that passes
-// spec.Validate. Used as the "model got it right" response.
 func validSpecJSON(t *testing.T) json.RawMessage {
 	t.Helper()
 	ops := []wire.BuildOp{{
@@ -21,7 +19,6 @@ func validSpecJSON(t *testing.T) json.RawMessage {
 		Scale:    vec(1, 1, 1),
 		Material: wire.Material{Color: "#cfcfd6"},
 	}}
-	// Sanity: the fixture must itself be valid, else the test proves nothing.
 	if err := spec.Validate(ops); err != nil {
 		t.Fatalf("valid fixture failed validation: %v", err)
 	}
@@ -32,8 +29,6 @@ func validSpecJSON(t *testing.T) json.RawMessage {
 	return b
 }
 
-// invalidSpecJSON is a structurally-decodable but schema-INVALID envelope: a
-// degenerate zero scale, which spec.Validate rejects. It drives the repair path.
 func invalidSpecJSON(t *testing.T) json.RawMessage {
 	t.Helper()
 	ops := []wire.BuildOp{{
@@ -41,7 +36,7 @@ func invalidSpecJSON(t *testing.T) json.RawMessage {
 		Shape:    wire.ShapeBox,
 		Pos:      vec(0, 0, 0),
 		Rot:      vec(0, 0, 0),
-		Scale:    vec(0, 0, 0), // invalid: scale must be positive on every axis
+		Scale:    vec(0, 0, 0),
 		Material: wire.Material{Color: "#cfcfd6"},
 	}}
 	if err := spec.Validate(ops); err == nil {
@@ -59,9 +54,6 @@ func vec(x, y, z float64) (v domainVec3) {
 	return v
 }
 
-// domainVec3 mirrors domain.Vec3's JSON shape (capital X/Y/Z) without importing
-// the domain package into the test fixtures; wire.BuildOp's fields are
-// domain.Vec3 so we alias it.
 type domainVec3 = struct {
 	X, Y, Z float64
 }
@@ -73,8 +65,6 @@ func msgs() []Message {
 	}
 }
 
-// TestGenerateSpec_FirstTrySucceeds: a valid first response is returned as-is with
-// exactly one Model call (no needless repair).
 func TestGenerateSpec_FirstTrySucceeds(t *testing.T) {
 	f := &FakeModel{Responses: []json.RawMessage{validSpecJSON(t)}}
 	ops, err := GenerateSpec(context.Background(), f, msgs())
@@ -92,12 +82,10 @@ func TestGenerateSpec_FirstTrySucceeds(t *testing.T) {
 	}
 }
 
-// TestGenerateSpec_RepairsOnce: an invalid first response, valid on the repair
-// re-ask. Proves the validate-and-repair path: exactly two calls, valid ops out.
 func TestGenerateSpec_RepairsOnce(t *testing.T) {
 	f := &FakeModel{Responses: []json.RawMessage{
-		invalidSpecJSON(t), // rejected → triggers one repair re-ask
-		validSpecJSON(t),   // repaired
+		invalidSpecJSON(t),
+		validSpecJSON(t),
 	}}
 	ops, err := GenerateSpec(context.Background(), f, msgs())
 	if err != nil {
@@ -111,9 +99,6 @@ func TestGenerateSpec_RepairsOnce(t *testing.T) {
 	}
 }
 
-// TestGenerateSpec_FallbackOnExhaustion: invalid on BOTH the ask and the single
-// repair. Proves exhaustion signals ErrFallback (the caller then uses the
-// primitive geometry) and that we re-ask AT MOST once — exactly two calls.
 func TestGenerateSpec_FallbackOnExhaustion(t *testing.T) {
 	f := &FakeModel{Responses: []json.RawMessage{
 		invalidSpecJSON(t),
@@ -131,9 +116,6 @@ func TestGenerateSpec_FallbackOnExhaustion(t *testing.T) {
 	}
 }
 
-// TestGenerateSpec_TransportErrorFallsBack: a provider/transport error is not
-// repairable by re-asking, so GenerateSpec degrades to fallback immediately
-// (a single call, no wasted repair).
 func TestGenerateSpec_TransportErrorFallsBack(t *testing.T) {
 	f := &FakeModel{Err: errors.New("simulated timeout")}
 	_, err := GenerateSpec(context.Background(), f, msgs())
@@ -145,11 +127,9 @@ func TestGenerateSpec_TransportErrorFallsBack(t *testing.T) {
 	}
 }
 
-// TestGenerateSpec_MalformedJSONRepairs: a non-decodable response is a repairable
-// failure (re-ask once), then succeeds. Distinct from a schema-valid-but-wrong op.
 func TestGenerateSpec_MalformedJSONRepairs(t *testing.T) {
 	f := &FakeModel{Responses: []json.RawMessage{
-		json.RawMessage(`{"ops": not-json`), // undecodable
+		json.RawMessage(`{"ops": not-json`),
 		validSpecJSON(t),
 	}}
 	ops, err := GenerateSpec(context.Background(), f, msgs())
@@ -164,9 +144,6 @@ func TestGenerateSpec_MalformedJSONRepairs(t *testing.T) {
 	}
 }
 
-// TestSpecRequestSchema_ObjectRooted asserts the strict request schema is an
-// object with an "ops" array property and additionalProperties:false — the shape
-// OpenAI strict mode requires (an array root is rejected by strict mode).
 func TestSpecRequestSchema_ObjectRooted(t *testing.T) {
 	var s map[string]any
 	if err := json.Unmarshal(specRequestSchema(), &s); err != nil {
@@ -184,11 +161,6 @@ func TestSpecRequestSchema_ObjectRooted(t *testing.T) {
 	}
 }
 
-// TestSpecRequestSchema_AssetKeyNullable asserts the per-op schema offers a
-// nullable asset_key field (ADR-0010, issue #61): the model MAY emit a curated
-// Asset KEY (resolved server-side to a model_ref) instead of leaning on a
-// procedural shape. Nullable is the strict-mode form of optional, so a null/absent
-// asset_key is a plain procedural op.
 func TestSpecRequestSchema_AssetKeyNullable(t *testing.T) {
 	var s map[string]any
 	if err := json.Unmarshal(specRequestSchema(), &s); err != nil {
@@ -207,11 +179,6 @@ func TestSpecRequestSchema_AssetKeyNullable(t *testing.T) {
 	}
 }
 
-// TestSpecRequestSchema_StrictCompliant walks the whole schema and asserts every
-// object node sets additionalProperties:false AND lists ALL its properties in
-// "required" — the constraints OpenAI strict mode enforces. This is the guard
-// that prevents a regression where an "optional" (omitted-from-required) field
-// makes the API reject the schema and the live bake silently always falls back.
 func TestSpecRequestSchema_StrictCompliant(t *testing.T) {
 	var root any
 	if err := json.Unmarshal(specRequestSchema(), &root); err != nil {
@@ -241,7 +208,6 @@ func assertStrict(t *testing.T, node any, path string) {
 			t.Fatalf("%s: 'required' (%d) must list exactly the properties (%d)", path, len(required), len(props))
 		}
 	}
-	// Recurse into nested schemas (properties values and array items).
 	if props, ok := obj["properties"].(map[string]any); ok {
 		for name, v := range props {
 			assertStrict(t, v, path+"."+name)

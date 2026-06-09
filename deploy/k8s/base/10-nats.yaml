@@ -1,6 +1,3 @@
-# NATS — the swarm bus. Every Rover Pod, the coordinator, the gateway, and the
-# killer are plain NATS clients of this one service. JetStream on (-js), HTTP
-# monitoring on 8222 (-m) so we can readiness-probe /healthz.
 apiVersion: apps/v1
 kind: Deployment
 metadata:
@@ -24,7 +21,7 @@ spec:
       containers:
         - name: nats
           image: nats:2.10-alpine
-          args: ["-js", "-m", "8222"] # JetStream on; monitoring (/healthz) on 8222
+          args: ["-js", "-m", "8222"]
           ports:
             - name: client
               containerPort: 4222

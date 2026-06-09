@@ -1,18 +1,3 @@
-// Package coordinator is the SwarmBuild brain: the edge node (a lander) that
-// loads a blueprint, runs the auction over NATS, tracks the World Model, and
-// grants/expires leases.
-//
-// THE load-bearing design constraint (TECHSPEC §8, ADR-0003): a single-writer
-// goroutine owns ALL mutable state — the Task Planner, the World Model, the
-// Lease Manager, and the open auctions. Every state change flows through ONE
-// channel of inbound events, so an award and an expiry can never interleave and
-// no task is ever double-assigned. NATS subscription callbacks run on the NATS
-// dispatcher goroutine and NEVER touch state directly: they only enqueue events
-// onto the single-writer channel.
-//
-// This package wires the four pure deep modules through the bus. The deep
-// modules stay pure (no NATS/wall-clock imports); coordinator is the only place
-// they meet the live world.
 package coordinator
 
 import (
@@ -33,88 +18,27 @@ import (
 	"time"
 )
 
-// BlueprintTask pairs a domain.Task with its worksite position. domain.Task has
-// no position field (the deep modules do not care where a task is); the
-// coordinator keeps the geometry here so it can announce a task's Pos for
-// distance-based bidding without polluting the pure domain.
 type BlueprintTask struct {
-	Task domain.Task
-	Pos  domain.Vec2
-	// SiteID tags the worksite this task belongs to (two-site lunar surface, epic
-	// 04). It is folded into the coordinator's taskSite map at Run so the auction
-	// announces it (wire.Announce.SiteID) and the snapshot tags it (TaskView.Site).
-	// Empty ⇒ the single default site, so a single-site Blueprint is byte-for-byte
-	// unchanged.
+	Task   domain.Task
+	Pos    domain.Vec2
 	SiteID string
 }
 
-// Config configures one coordinator run: where NATS lives, the blueprint to
-// build, the rovers to spawn in-process, and the auction/lease timing.
 type Config struct {
-	// NATSURL is the bus to connect to; empty means nats.DefaultURL.
-	NATSURL string
-	// Blueprint is the tasks to build, with their worksite positions.
-	Blueprint []BlueprintTask
-	// Rovers are the in-process rovers to spawn (ADR-0001). Each becomes an
-	// independent NATS client.
-	Rovers []agent.Config
-	// AuctionWindow is how long an open auction collects bids before it closes
-	// and a winner is picked (e.g. 400ms).
-	AuctionWindow time.Duration
-	// HeartbeatEvery is the rover heartbeat cadence the lease TTL is sized
-	// against. If a rover Config leaves HeartbeatEvery zero it is defaulted to
-	// this.
-	HeartbeatEvery time.Duration
-	// TTLFactor multiplies HeartbeatEvery to get the lease TTL; must be ≥ 3 so a
-	// slow tick cannot false-expire a healthy rover (TECHSPEC §8). Values < 3
-	// are bumped to 3.
-	TTLFactor int
-	// SnapshotHz is how many world snapshots per second to publish (~10).
-	SnapshotHz int
-	// Catalog is the pre-authored Blueprint catalog the placeBlueprint control
-	// draws from (bh-05). Nil ⇒ blueprint.DefaultCatalog() is used, so a placed
-	// Blueprint always resolves against the shipped dome/solar-array/comms-mast.
-	Catalog *blueprint.Catalog
-	// AssetCatalog is the closed, curated Asset catalog (ADR-0010, issue #59): the
-	// key → model_ref registry the server resolves a Build op's AssetKey against
-	// before the spec rides a snapshot, so the browser only ever sees resolved
-	// self-hosted URLs (never raw keys). Nil ⇒ asset.DefaultCatalog() backs it, so
-	// the curated set is always available. It is DISTINCT from the blueprint Catalog
-	// above (placeable structures) — this one carries model Assets — but mirrors its
-	// "nil ⇒ default" style for consistency.
-	AssetCatalog *asset.Catalog
-	// WorldBounds is the half-extent (in worksite units) of the square build area
-	// a placed Blueprint must fit inside, centred on the origin: every injected
-	// task's envelope footprint must lie within [-WorldBounds, +WorldBounds] on
-	// both axes (placement validation). Zero ⇒ defaultWorldBounds.
-	WorldBounds float64
-	// BuilderDeathBreaker is the live-mode circuit-breaker threshold (bh-08g): the
-	// number of times a single Task may be re-auctioned BECAUSE its live builder
-	// DIED (the bh-08f model-failure death, signalled by a wire.Failed stamped
-	// wire.ReasonBuilderDied — distinct from an ordinary expiry/kill) before the
-	// coordinator trips the breaker and finishes the Task with the deterministic
-	// PRIMITIVE op-source as a last resort. This bounds a SYSTEMIC live-mode failure
-	// (bad key, provider outage, rate-limit) that would otherwise cascade — every
-	// rover retrying, dying, and depleting the swarm while the Task never completes
-	// and its dependents stay stuck forever. On trip the coordinator DOWNGRADES the
-	// Task to replay mode (clears its live tag) so the next rover builds it
-	// deterministically with ZERO model calls and the dome still closes; the
-	// coordinator never touches the Model seam (ADR-0005, archtest). Zero ⇒
-	// defaultBuilderDeathBreaker (≈3); a value < 1 is bumped to 1.
+	NATSURL             string
+	Blueprint           []BlueprintTask
+	Rovers              []agent.Config
+	AuctionWindow       time.Duration
+	HeartbeatEvery      time.Duration
+	TTLFactor           int
+	SnapshotHz          int
+	Catalog             *blueprint.Catalog
+	AssetCatalog        *asset.Catalog
+	WorldBounds         float64
 	BuilderDeathBreaker int
-	// BuildSpecs is an OPTIONAL per-Task Build spec (TECHSPEC §4, ADR-0006):
-	// declarative geometry the renderer interprets instead of the primitive
-	// fallback. In bh-01 this carries a single hardcoded SAMPLE spec to prove the
-	// wire seam end-to-end; a later slice replaces it with generated/cached specs
-	// streamed over NATS. It is validated once at Run (off the hot path) and then
-	// attached to the matching TaskView in each snapshot — pure additive data, so
-	// a Task without an entry renders exactly as before.
-	BuildSpecs map[domain.TaskID][]wire.BuildOp
+	BuildSpecs          map[domain.TaskID][]wire.BuildOp
 }
 
-// withDefaults returns a copy of cfg with the unset timing/catalog/bounds knobs
-// filled in to their defaults. Kept off Run so Run stays focused on wiring (and
-// under the cyclomatic-complexity gate); the defaults are a pure data transform.
 func (cfg Config) withDefaults() Config {
 	if cfg.SnapshotHz <= 0 {
 		cfg.SnapshotHz = 10
@@ -126,7 +50,7 @@ func (cfg Config) withDefaults() Config {
 		cfg.HeartbeatEvery = 500 * time.Millisecond
 	}
 	if cfg.TTLFactor < 3 {
-		cfg.TTLFactor = 3 // TECHSPEC §8: TTL ≥ 3× heartbeat
+		cfg.TTLFactor = 3
 	}
 	if cfg.Catalog == nil {
 		cfg.Catalog = blueprint.DefaultCatalog()
@@ -143,127 +67,51 @@ func (cfg Config) withDefaults() Config {
 	return cfg
 }
 
-// tickEvery is the single-writer loop's cadence: announce ready tasks, close
-// due auctions, sweep expired leases. Kept brisk so an auction window closes
-// promptly after it opens.
 const tickEvery = 50 * time.Millisecond
 
-// defaultWorldBounds is the half-extent (worksite units) of the square build
-// area a placed Blueprint must fit inside when Config.WorldBounds is unset
-// (bh-05). The demo dome's outer ring sits at radius ~46 and its cap envelope
-// reaches ~20 beyond that, so 150 comfortably holds a placed dome plus a couple
-// of satellite structures without colliding off-board.
 const defaultWorldBounds = 150.0
 
-// defaultBuilderDeathBreaker is the live-mode circuit-breaker threshold when
-// Config.BuilderDeathBreaker is left zero (bh-08g): after this many builder deaths
-// re-auction the SAME Task (each a bh-08f model-failure death, distinct from an
-// ordinary expiry/kill), the coordinator stops re-auctioning it live and finishes it
-// with the deterministic primitive op-source so dependents unblock and the dome still
-// closes under a systemic model outage. Small so a genuinely-dead provider is shed
-// quickly, > 1 so a single unlucky death does not abandon live mode prematurely.
 const defaultBuilderDeathBreaker = 3
 
-// inbound events fed to the single-writer goroutine. Each is a closure-free
-// value type so the channel carries plain data; the writer interprets them.
 type (
-	evBid       struct{ bid wire.Bid }
-	evComplete  struct{ done wire.Complete }
-	evFailed    struct{ failed wire.Failed }
-	evHeartbeat struct{ hb wire.Heartbeat }
-	evTelemetry struct{ tel wire.Telemetry }
-	// evBuildOp carries one streamed build op a Rover emitted on build.op.<task>
-	// (bh-02). Like every inbound message it enters the single writer via the
-	// events channel and is NEVER applied on the NATS dispatcher: the writer
-	// validates and appends it to the Task's accumulating Build spec.
-	evBuildOp struct{ msg wire.BuildOpMsg }
-	// evReload resets the demo board IN-PROCESS so the swarm rebuilds the dome
-	// from scratch (reloadDemo control). It MUTATES owned state, so — like every
-	// other event — it flows through the single-writer channel and is never
-	// handled on the NATS dispatcher (TECHSPEC §8).
-	evReload struct{}
-	// evPlaceBlueprint injects a catalog Blueprint's pre-baked task DAG at an
-	// origin (placeBlueprint control, bh-05). Like reloadDemo it MUTATES owned
-	// state (Planner, World Model, positions), so it runs ONLY on the single
-	// writer: the dispatcher merely enqueues it. The writer validates placement
-	// (bounds/terrain/no-overlap) BEFORE the tasks go live and rejects an invalid
-	// placement; the Auction then feeds on any injected tasks exactly as today.
+	evBid            struct{ bid wire.Bid }
+	evComplete       struct{ done wire.Complete }
+	evFailed         struct{ failed wire.Failed }
+	evHeartbeat      struct{ hb wire.Heartbeat }
+	evTelemetry      struct{ tel wire.Telemetry }
+	evBuildOp        struct{ msg wire.BuildOpMsg }
+	evReload         struct{}
 	evPlaceBlueprint struct{ ctl wire.Control }
 )
 
-// auction is one open auction: the bids received so far for a task during its
-// window (keyed by task in state.auctions), and the wall-clock time the window
-// closes.
 type auction struct {
 	bids     map[domain.RobotID]float64
 	closesAt time.Time
 }
 
-// state is everything the single writer owns. Nothing here is touched outside
-// the writer goroutine (TECHSPEC §8).
 type state struct {
 	plan     *planner.Plan
 	model    *world.Model
 	leases   *lease.Manager
-	pos      map[domain.TaskID]domain.Vec2 // worksite geometry per task
-	taskSite map[domain.TaskID]string      // worksite (site) per task (two-site lunar surface, epic 04)
-	auctions map[domain.TaskID]*auction    // open auctions, keyed by task
+	pos      map[domain.TaskID]domain.Vec2
+	taskSite map[domain.TaskID]string
+	auctions map[domain.TaskID]*auction
 
-	rovers map[domain.RobotID]wire.Telemetry // latest telemetry per rover
+	rovers map[domain.RobotID]wire.Telemetry
 
-	// pendingEvents accumulates choreography beats (slice 06) emitted by real
-	// engine events since the last snapshot; publishSnapshot drains them.
 	pendingEvents []wire.Event
 
-	// blueprint is the pristine original captured at Run, used ONLY by onReload to
-	// rebuild the board from scratch (reloadDemo): the initial UNCLAIMED task set.
 	blueprint []domain.Task
 
-	// catalog is the pre-authored Blueprint catalog placeBlueprint draws from, and
-	// worldBounds the half-extent of the legal build square (bh-05). placedTasks
-	// accumulates every PlacedTask injected so far (the originals' worksite
-	// geometry), used both as live state and for no-overlap validation of the next
-	// placement; placeSeq is a monotonic counter that gives each placement a unique
-	// instance prefix so two placed copies of a Blueprint never share task ids.
-	// onReload clears placedTasks so a demo reload starts from the pristine board.
-	catalog     *blueprint.Catalog
-	worldBounds float64
-	placedTasks []blueprint.PlacedTask
-	placeSeq    int
-	// assetCatalog is the closed, curated Asset catalog (ADR-0010, issue #59): the
-	// key → model_ref registry the server resolves a Build op's AssetKey against
-	// just before a spec rides a snapshot, so the BROWSER only ever receives a
-	// resolved, self-hosted URL — never a raw catalog key. The durable buildSpecs
-	// and the KV mirror keep the original key-bearing ops; resolution is applied to
-	// the snapshot copy only. Never nil (Config defaults it to asset.DefaultCatalog).
+	catalog      *blueprint.Catalog
+	worldBounds  float64
+	placedTasks  []blueprint.PlacedTask
+	placeSeq     int
 	assetCatalog *asset.Catalog
-	// seedSpecs is a pristine copy of the static per-Task Build specs supplied at
-	// Run, used by onReload to reset buildSpecs back to the seed so a demo reload
-	// rebuilds the structure op-by-op from scratch instead of resuming a stale
-	// half-built spec. Empty unless the caller passed Config.BuildSpecs.
-	seedSpecs map[domain.TaskID][]wire.BuildOp
+	seedSpecs    map[domain.TaskID][]wire.BuildOp
 
-	// buildSpecs is each Task's accumulating, durable Build spec (TECHSPEC §4,
-	// ADR-0006/0007). It is seeded with any pre-validated static specs at Run, then
-	// GROWS op-by-op as Rovers stream ops on build.op.<task> (bh-02): onBuildOp
-	// appends each validated op here, the writer mirrors it to KV, and
-	// publishSnapshot attaches the matching spec to a TaskView so the structure
-	// rides the real WS snapshot and rises live. The accumulation is the durable
-	// partial state: it is NEVER cleared when a lease expires, so a replacement
-	// Rover resumes appending from the partial structure (the headline resume).
-	// Only the single-writer goroutine touches it (TECHSPEC §8).
 	buildSpecs map[domain.TaskID][]wire.BuildOp
 
-	// builderDeaths counts, PER TASK, how many times the Task has been re-auctioned
-	// because its LIVE builder DIED (bh-08g): a bh-08f model-failure death, reported
-	// as a wire.Failed stamped wire.ReasonBuilderDied — distinct from an ordinary
-	// expiry/kill or a plain cooperative release, neither of which is counted. Once
-	// the count reaches breakerThreshold the coordinator trips the circuit breaker:
-	// it DOWNGRADES the Task to replay mode (clears its live tag) so the next rover
-	// finishes it with the deterministic primitive op-source — bounding a systemic
-	// live-mode outage instead of letting every rover die on it forever. Only the
-	// single-writer goroutine touches it (TECHSPEC §8). onReload clears it so a demo
-	// reload starts the breaker fresh.
 	builderDeaths    map[domain.TaskID]int
 	breakerThreshold int
 
@@ -273,28 +121,16 @@ type state struct {
 	ttl    domain.Tick
 	window time.Duration
 
-	// earthCh hands a copy of each freshly-published tactical snapshot to the
-	// Earth-uplink shim (runEarthUplink) over a buffered channel. publishSnapshot
-	// sends NON-BLOCKING (drop on full), so the single writer never blocks on the
-	// shim and the tactical loop is provably untouched by latency (ADR-0002):
-	// snapshots are full-state and drop-safe, so a slow shim just loses frames.
 	earthCh chan wire.EarthUplink
 }
 
-// Run loads the blueprint, spawns the in-process rovers, and runs the
-// single-writer coordinator until ctx is cancelled. It returns the first fatal
-// error (or ctx.Err() on shutdown).
 func Run(ctx context.Context, cfg Config) error {
 	cfg = cfg.withDefaults()
 
-	// --- Load the blueprint into the Planner and seed the World Model. ---
 	tasks := make([]domain.Task, len(cfg.Blueprint))
 	posByTask := make(map[domain.TaskID]domain.Vec2, len(cfg.Blueprint))
 	siteByTask := make(map[domain.TaskID]string, len(cfg.Blueprint))
 	for i, bt := range cfg.Blueprint {
-		// Fold the BlueprintTask's site tag onto its domain.Task so the World Model
-		// record carries it too (two-site lunar surface, epic 04). The taskSite map is
-		// the coordinator's authoritative lookup the auction + snapshot read from.
 		bt.Task.SiteID = bt.SiteID
 		tasks[i] = bt.Task
 		posByTask[bt.Task.ID] = bt.Pos
@@ -307,10 +143,9 @@ func Run(ctx context.Context, cfg Config) error {
 
 	model := world.NewModel()
 	for _, t := range tasks {
-		model.Apply(t) // seed each record at its initial (UNCLAIMED) version
+		model.Apply(t)
 	}
 
-	// --- Connect the coordinator's own bus handle and seed the KV mirror. ---
 	conn, kv, err := connectBus(ctx, cfg.NATSURL, tasks)
 	if err != nil {
 		return err
@@ -320,78 +155,53 @@ func Run(ctx context.Context, cfg Config) error {
 	clk := wallClock{}
 	ttl := domain.Tick(cfg.HeartbeatEvery.Milliseconds() * int64(cfg.TTLFactor))
 
-	// --- Validate any optional Build specs ONCE, off the hot path (ADR-0006: a
-	// malformed spec must never reach a snapshot). A rejected spec fails Run loudly
-	// rather than silently shipping bad geometry to the browser. ---
 	buildSpecs, err := validatedBuildSpecs(cfg.BuildSpecs)
 	if err != nil {
 		return fmt.Errorf("coordinator: invalid build spec: %w", err)
 	}
 
 	st := &state{
-		plan:     plan,
-		model:    model,
-		leases:   lease.NewManager(clk, ttl),
-		pos:      posByTask,
-		taskSite: siteByTask,
-		auctions: make(map[domain.TaskID]*auction),
-		rovers:   make(map[domain.RobotID]wire.Telemetry),
-		conn:     conn,
-		kv:       kv,
-		clk:      clk,
-		ttl:      ttl,
-		window:   cfg.AuctionWindow,
-		// Pristine original for onReload (reloadDemo): the initial UNCLAIMED task set.
-		blueprint: append([]domain.Task(nil), tasks...),
-		// Blueprint catalog + legal build square for placeBlueprint (bh-05).
-		catalog:     cfg.Catalog,
-		worldBounds: cfg.WorldBounds,
-		// Curated Asset catalog: the server resolves Build-op AssetKeys against it so
-		// the browser only sees resolved URLs (ADR-0010, issue #59).
-		assetCatalog: cfg.AssetCatalog,
-		// Buffered so publishSnapshot's non-blocking send rarely drops; the shim
-		// owns the channel's receive side.
-		earthCh: make(chan wire.EarthUplink, 64),
-		// Each Task's accumulating Build spec, seeded with any pre-validated static
-		// specs and grown op-by-op by streamed ops (bh-02).
-		buildSpecs: buildSpecs,
-		// Pristine seed copy for onReload to reset the accumulation to.
-		seedSpecs: cloneSpecs(buildSpecs),
-		// Per-Task builder-death counter + the live-mode circuit-breaker threshold
-		// (bh-08g): once a Task's live builder has died this many times it is finished
-		// with the primitive op-source instead of re-auctioned live again.
+		plan:             plan,
+		model:            model,
+		leases:           lease.NewManager(clk, ttl),
+		pos:              posByTask,
+		taskSite:         siteByTask,
+		auctions:         make(map[domain.TaskID]*auction),
+		rovers:           make(map[domain.RobotID]wire.Telemetry),
+		conn:             conn,
+		kv:               kv,
+		clk:              clk,
+		ttl:              ttl,
+		window:           cfg.AuctionWindow,
+		blueprint:        append([]domain.Task(nil), tasks...),
+		catalog:          cfg.Catalog,
+		worldBounds:      cfg.WorldBounds,
+		assetCatalog:     cfg.AssetCatalog,
+		earthCh:          make(chan wire.EarthUplink, 64),
+		buildSpecs:       buildSpecs,
+		seedSpecs:        cloneSpecs(buildSpecs),
 		builderDeaths:    make(map[domain.TaskID]int),
 		breakerThreshold: cfg.BuilderDeathBreaker,
 	}
 
-	// Seed any static Build specs into KV so the durable spec key exists from the
-	// start, mirroring how connectBus seeds the task records (bh-02).
 	st.mirrorAllSpecs(ctx)
 
-	// --- Earth-uplink shim (issue 09): a SEPARATE goroutine owns the artificial
-	// delay and the earth.uplink publish. It NEVER touches single-writer state,
-	// heartbeats, telemetry, awards, or world.snapshot — only the new earth.uplink
-	// feed is delayed (ADR-0002 / TECHSPEC §8). Latency is read atomically. ---
 	shim := newEarthShim(conn, st.earthCh)
 
-	// --- Inbound event channel: the ONLY way state is mutated. ---
 	events := make(chan any, 256)
 
-	// Subscriptions: callbacks run on the NATS dispatcher and only enqueue.
 	unsub, err := subscribe(ctx, conn, events)
 	if err != nil {
 		return err
 	}
 	defer unsub()
 
-	// Control subscription: runs on the NATS dispatcher.
 	unsubCtl, err := subscribeControl(ctx, conn, shim, events)
 	if err != nil {
 		return err
 	}
 	defer unsubCtl()
 
-	// Start the shim goroutine; its lifecycle is tied to ctx.
 	shimDone := make(chan struct{})
 	go func() {
 		defer close(shimDone)
@@ -399,23 +209,17 @@ func Run(ctx context.Context, cfg Config) error {
 	}()
 	defer func() { <-shimDone }()
 
-	// --- Spawn in-process rovers, each its own independent NATS client. ---
 	roverCtx, cancelRovers := context.WithCancel(ctx)
 	defer cancelRovers()
 	if err := spawnRovers(roverCtx, cfg); err != nil {
 		return err
 	}
 
-	// Flush so subscriptions are registered on the server before the first
-	// announce goes out (deterministic test start).
 	_ = conn.Flush()
 
 	return st.runWriter(ctx, events, cfg)
 }
 
-// connectBus opens the coordinator's own hardened bus handle, binds the World
-// Model KV bucket, and mirrors the seed world so a reader sees the initial board
-// immediately. The caller owns conn and must Close it.
 func connectBus(ctx context.Context, natsURL string, tasks []domain.Task) (*bus.Conn, *bus.KV, error) {
 	conn, err := bus.Connect(ctx, natsURL, bus.ConnectOptions{
 		Name:    "coordinator",
@@ -439,12 +243,7 @@ func connectBus(ctx context.Context, natsURL string, tasks []domain.Task) (*bus.
 	return conn, kv, nil
 }
 
-// subscribe registers all coordinator subscriptions. Each callback runs on the
-// NATS dispatcher goroutine and only enqueues an event onto the single-writer
-// channel — it never touches state (TECHSPEC §8). It returns a single cleanup
-// func that unsubscribes every subscription.
 func subscribe(ctx context.Context, conn *bus.Conn, events chan<- any) (func(), error) {
-	// enqueue hands an event to the single writer, dropping it only if ctx ends.
 	enqueue := func(e any) {
 		select {
 		case events <- e:
@@ -506,20 +305,6 @@ func subscribe(ctx context.Context, conn *bus.Conn, events chan<- any) (func(), 
 	return cleanup, nil
 }
 
-// subscribeControl registers the dashboard control subscription, which runs on
-// the NATS dispatcher goroutine. The two commands it handles take deliberately
-// different paths (TECHSPEC §8):
-//
-//   - "setLatency" ONLY does an atomic store on the Earth-uplink shim. It does
-//     NOT enqueue onto the single-writer events channel, so changing latency
-//     cannot perturb auctions/leases/snapshots (ADR-0002).
-//   - "reloadDemo" MUTATES owned state (Planner, World Model, leases, auctions),
-//     so it must run on the single writer: the dispatcher only enqueues evReload.
-//   - "placeBlueprint" likewise MUTATES owned state (it injects a task DAG after a
-//     validation pass), so it too is enqueued for the single writer (bh-05).
-//
-// "kill" / "killContainer" / "setFailureProb" are handled by the agents and the
-// killer sidecar, not here.
 func subscribeControl(ctx context.Context, conn *bus.Conn, shim *earthShim, events chan<- any) (func(), error) {
 	unsubCtl, err := bus.SubscribeJSON(conn, wire.SubjControl, func(c wire.Control) {
 		switch c.Cmd {
@@ -531,9 +316,6 @@ func subscribeControl(ctx context.Context, conn *bus.Conn, shim *earthShim, even
 			case <-ctx.Done():
 			}
 		case "placeBlueprint":
-			// Drag-to-place (bh-05): MUTATES owned state (Planner, World Model,
-			// positions) after a validation pass, so it must run on the single writer
-			// — the dispatcher only enqueues, never validates or injects here.
 			select {
 			case events <- evPlaceBlueprint{ctl: c}:
 			case <-ctx.Done():
@@ -546,10 +328,6 @@ func subscribeControl(ctx context.Context, conn *bus.Conn, shim *earthShim, even
 	return unsubCtl, nil
 }
 
-// spawnRovers starts each in-process rover as its own independent NATS client
-// (ADR-0001), inheriting the coordinator's heartbeat cadence when unset. Each
-// rover runs in its own goroutine and closes its connection on exit; roverCtx
-// cancellation stops them all.
 func spawnRovers(roverCtx context.Context, cfg Config) error {
 	for _, rc := range cfg.Rovers {
 		if rc.HeartbeatEvery <= 0 {
@@ -572,9 +350,6 @@ func spawnRovers(roverCtx context.Context, cfg Config) error {
 	return nil
 }
 
-// runWriter is the single-writer goroutine. It is the only code that mutates
-// planner/world/lease/auction state. It drains inbound events and ticks the
-// auction/lease loop, and publishes snapshots.
 func (st *state) runWriter(ctx context.Context, events <-chan any, cfg Config) error {
 	tick := time.NewTicker(tickEvery)
 	defer tick.Stop()
@@ -597,7 +372,6 @@ func (st *state) runWriter(ctx context.Context, events <-chan any, cfg Config) e
 	}
 }
 
-// handle applies one inbound event to the owned state.
 func (st *state) handle(ctx context.Context, e any) {
 	switch ev := e.(type) {
 	case evBid:
@@ -609,9 +383,6 @@ func (st *state) handle(ctx context.Context, e any) {
 	case evHeartbeat:
 		st.onHeartbeat(ev.hb)
 	case evTelemetry:
-		// A downed rover coming back (alive false→true) is a real engine event:
-		// emit a "revived" beat so the dashboard can pulse the in-place comeback at
-		// the rover's recovery spot. The browser looks up the position by Robot id.
 		prev, had := st.rovers[ev.tel.Robot]
 		st.rovers[ev.tel.Robot] = ev.tel
 		if had && !prev.Alive && ev.tel.Alive {
@@ -626,17 +397,11 @@ func (st *state) handle(ctx context.Context, e any) {
 	}
 }
 
-// emit buffers a choreography beat (slice 06), stamped with the current clock,
-// to be drained into the next snapshot. Every beat reflects a real engine event
-// that just happened; the browser only decorates the authoritative world with
-// it (see wire Event kinds).
 func (st *state) emit(e wire.Event) {
 	e.At = st.clk.Now()
 	st.pendingEvents = append(st.pendingEvents, e)
 }
 
-// onBid records a bid against its open auction. Bids for an auction that has
-// already closed (or never opened) are dropped.
 func (st *state) onBid(b wire.Bid) {
 	a, ok := st.auctions[b.TaskID]
 	if !ok {
@@ -646,74 +411,35 @@ func (st *state) onBid(b wire.Bid) {
 	st.emit(wire.Event{Kind: wire.EventBid, TaskID: b.TaskID, Robot: b.Robot, Value: b.Cost})
 }
 
-// onHeartbeat renews the lease TTL for the holder.
 func (st *state) onHeartbeat(h wire.Heartbeat) {
 	st.leases.Heartbeat(h.TaskID, h.Robot)
 }
 
-// onBuildOp appends one streamed build op to the Task's accumulating Build spec
-// (bh-02), the headline streamed-durable-resumable path. It runs ONLY on the
-// single writer (the dispatcher merely enqueued it), so it freely mutates the
-// owned buildSpecs and World Model without further synchronisation (TECHSPEC §8).
-//
-// Three guards keep the accumulation correct and durable:
-//
-//   - Validate: every op is checked against the Build-spec schema
-//     (internal/harness/spec) BEFORE it is appended, so a malformed op never
-//     reaches a snapshot (ADR-0006 — validated before accepted). A rejected op is
-//     dropped, not appended.
-//   - Idempotent append by Seq: the op is appended only when its Seq equals the
-//     current spec length (the next expected slot). A duplicate or out-of-order
-//     redelivery (Seq < length), or a gap (Seq > length), is a no-op. This is
-//     what makes resume-on-kill converge: a replacement Rover re-emits the same
-//     deterministic stream from Seq 0, the already-present ops dedupe, and it
-//     continues appending from where the killed builder stopped.
-//   - Mirror: the grown spec is written to KV under wire.KVSpecKey so it is
-//     durable and an independent observer can read the partial structure.
-//
-// The op append also bumps the Task's Version and mirrors the Task record, so
-// the monotonic World Model and KV reflect that the structure advanced; the
-// accumulating spec then rides the next snapshot (publishSnapshot reads
-// buildSpecs). It is appended only while the Task is actively LEASED — a stray
-// op for an UNCLAIMED/DONE task is ignored.
 func (st *state) onBuildOp(ctx context.Context, m wire.BuildOpMsg) {
 	cur, ok := st.model.Get(m.TaskID)
 	if !ok || cur.Status != domain.Leased {
-		return // not an actively-built task: drop the stray op
+		return
 	}
 	existing := st.buildSpecs[m.TaskID]
 	if m.Seq != len(existing) {
-		return // duplicate, out-of-order, or gap: idempotent no-op (resume dedupe)
+		return
 	}
-	// Validate the candidate FOLDED log, not the op in isolation (bh-08a): a
-	// move/delete only makes sense against the accumulated log, so we fold
-	// existing+op and reject if the result is malformed (a move/delete of an
-	// unknown id, or a folded survivor that fails the schema gate). A copy avoids
-	// appending to `existing`'s backing array before the op is accepted.
 	candidate := append(append(make([]wire.BuildOp, 0, len(existing)+1), existing...), m.Op)
-	// Catalog-membership gate (ADR-0010, issue #60): the single-writer fold is the
-	// chokepoint where a hallucinated/unknown Asset KEY must be rejected so it never
-	// becomes durable Build spec. An op that references an Asset by key is dropped
-	// when the key is absent from this Task's closed catalog OR the entry does not
-	// suit the Task's type. spec.Validate stays catalog-agnostic by design, so this
-	// check lives here, before it. Procedural ops (no AssetKey) skip the gate.
 	if m.Op.AssetKey != "" {
 		entry, ok := st.assetCatalog.Get(m.Op.AssetKey)
 		if !ok || !entry.SuitsType(cur.Type) {
 			slog.Warn("rejected build op: asset key not in catalog",
 				"task", m.TaskID, "seq", m.Seq, "asset_key", m.Op.AssetKey, "task_type", cur.Type)
-			return // unknown/type-unsuited key: never appended (ADR-0010)
+			return
 		}
 	}
 	if err := spec.Validate(candidate); err != nil {
 		slog.Warn("rejected build op", "task", m.TaskID, "seq", m.Seq, "error", err)
-		return // malformed: never appended (ADR-0006)
+		return
 	}
 	st.buildSpecs[m.TaskID] = candidate
 	st.mirrorSpec(ctx, m.TaskID)
 
-	// Bump the Task version and re-mirror so the World Model/KV record that the
-	// structure advanced; the grown spec rides the next snapshot.
 	next := cur
 	next.Version = cur.Version + 1
 	if st.model.Apply(next) {
@@ -721,12 +447,9 @@ func (st *state) onBuildOp(ctx context.Context, m wire.BuildOpMsg) {
 	}
 }
 
-// onComplete handles a rover reporting its leased task finished: complete the
-// lease, move the task to DONE in the World Model (version bumped), unblock its
-// dependents in the Planner, and mirror to KV.
 func (st *state) onComplete(ctx context.Context, c wire.Complete) {
 	if !st.leases.Complete(c.TaskID, c.Robot) {
-		return // not the holder, or already terminal: idempotent no-op
+		return
 	}
 	cur, ok := st.model.Get(c.TaskID)
 	if !ok {
@@ -745,16 +468,9 @@ func (st *state) onComplete(ctx context.Context, c wire.Complete) {
 	}
 }
 
-// onFailed handles a rover cooperatively abandoning a leased task it cannot
-// finish (wire.Failed): release the lease PROMPTLY — scoped to the named holder
-// — and return the task to UNCLAIMED so the next tick re-auctions it, rather
-// than waiting for the TTL to expire (slice 03, the cooperative counterpart to
-// silent death by heartbeat timeout). The Release scoping is load-bearing: a
-// stale/redelivered failure from a PRIOR holder is rejected and must not release
-// a successor's fresh lease.
 func (st *state) onFailed(ctx context.Context, c wire.Failed) {
 	if !st.leases.Release(c.TaskID, c.Robot) {
-		return // not the holder, already terminal, or stale failure: idempotent no-op
+		return
 	}
 	cur, ok := st.model.Get(c.TaskID)
 	if !ok || cur.Status != domain.Leased {
@@ -766,20 +482,11 @@ func (st *state) onFailed(ctx context.Context, c wire.Failed) {
 	next.LeaseExpiry = 0
 	next.Version = cur.Version + 1
 
-	// Live-mode circuit breaker (bh-08g): a Failed stamped ReasonBuilderDied is a
-	// bh-08f model-failure DEATH (the rover crossed its threshold and went silent),
-	// NOT an ordinary cooperative release. Count it per Task; once the count reaches
-	// the breaker threshold, DOWNGRADE the Task to replay mode (clear its live tag)
-	// so the next rover finishes it with the deterministic primitive op-source — no
-	// model, coordinator stays model-free. This bounds a systemic live outage instead
-	// of re-auctioning the Task live to die on the same bad provider forever. A plain
-	// cooperative release (any other Reason) is untouched: it never counts and never
-	// downgrades, so replay mode and ordinary self-heal are unaffected.
 	if c.Reason == wire.ReasonBuilderDied && cur.Mode == string(agent.ModeLive) {
 		st.builderDeaths[c.TaskID]++
 		deaths := st.builderDeaths[c.TaskID]
 		if deaths >= st.breakerThreshold {
-			next.Mode = "" // downgrade to replay: the next award builds it primitively
+			next.Mode = ""
 			slog.Warn("live circuit breaker tripped: downgrading task to primitive op-source",
 				"task", c.TaskID, "builder_deaths", deaths, "threshold", st.breakerThreshold)
 		} else {
@@ -793,30 +500,15 @@ func (st *state) onFailed(ctx context.Context, c wire.Failed) {
 	}
 }
 
-// tick runs the periodic auction/lease work: announce newly-ready unclaimed
-// tasks, close due auctions and award winners, and sweep expired leases.
 func (st *state) tick(ctx context.Context) {
 	now := time.Now()
 
-	// Sweep expired leases first (slice 03 re-auction wiring; harmless now since
-	// heartbeats keep healthy leases alive). A swept task returns to UNCLAIMED.
 	for _, id := range st.leases.Sweep() {
 		st.onExpired(ctx, id)
 	}
 
-	// Announce ready + unclaimed tasks that have no open auction yet (skipping the
-	// Epic 07 held hero wall until its cue arrives).
 	st.announceReady()
 
-	// Close any auction whose window has elapsed. Process due auctions in a
-	// single deterministic (id-ordered) pass, tracking the rovers already awarded
-	// so no rover wins two concurrent tasks — one-task-per-rover. This guard is
-	// load-bearing for parallel building (slice 05): the dome releases several
-	// ready tasks at once (e.g. all four foundations), every rover bids on all of
-	// them BEFORE any award, so a single rover can be the top bidder on multiple
-	// simultaneous auctions. Awarding it two tasks would make its two in-process
-	// execute goroutines fight over one shared position. It lives at the single
-	// writer because only the writer sees the whole award pass atomically.
 	due := make([]domain.TaskID, 0, len(st.auctions))
 	for id, a := range st.auctions {
 		if !now.Before(a.closesAt) {
@@ -833,9 +525,6 @@ func (st *state) tick(ctx context.Context) {
 	}
 }
 
-// announceReady opens an auction for every ready + UNCLAIMED task that has no open
-// auction yet. Extracted from tick so tick stays under the cyclomatic gate; it is a
-// single-writer method like the rest, mutating only owned auction state.
 func (st *state) announceReady() {
 	for _, id := range st.plan.Ready() {
 		if _, open := st.auctions[id]; open {
@@ -849,9 +538,6 @@ func (st *state) announceReady() {
 	}
 }
 
-// busyRovers is the set of rovers currently holding a live lease, read from the
-// authoritative World Model. A busy rover is excluded from winning a further
-// concurrent auction (see tick): it is already driving/building one task.
 func (st *state) busyRovers() map[domain.RobotID]struct{} {
 	busy := make(map[domain.RobotID]struct{})
 	for _, t := range st.model.Snapshot() {
@@ -862,7 +548,6 @@ func (st *state) busyRovers() map[domain.RobotID]struct{} {
 	return busy
 }
 
-// openAuction announces a task for bidding and opens its collection window.
 func (st *state) openAuction(t domain.Task) {
 	pos := st.pos[t.ID]
 	st.auctions[t.ID] = &auction{
@@ -874,16 +559,9 @@ func (st *state) openAuction(t domain.Task) {
 	slog.Info("announce", "task", ann.TaskID, "type", ann.Type, "version", ann.Version)
 }
 
-// closeAuction picks the winner from the bids actually received and awards,
-// skipping any rover already busy this pass (one-task-per-rover). It returns the
-// winning rover and true if an award was made; ("", false) if the task is no
-// longer auctionable or every bidder is already busy (in which case the task is
-// re-announced next tick, once a rover frees up).
 func (st *state) closeAuction(ctx context.Context, id domain.TaskID, a *auction, busy map[domain.RobotID]struct{}) (domain.RobotID, bool) {
 	delete(st.auctions, id)
 
-	// A task may have changed status (completed/leased) while the window was
-	// open; only award if it is still UNCLAIMED.
 	t, ok := st.model.Get(id)
 	if !ok || t.Status != domain.Unclaimed {
 		return "", false
@@ -891,29 +569,24 @@ func (st *state) closeAuction(ctx context.Context, id domain.TaskID, a *auction,
 
 	winner, best, ok := pickWinner(a.bids, busy)
 	if !ok {
-		return "", false // no eligible (non-busy) bids; re-announced next tick
+		return "", false
 	}
 	st.award(ctx, t, winner, best)
 	return winner, true
 }
 
-// pickWinner selects the lowest-cost bid among rovers not already busy this
-// pass; ties break by lower RobotID. It reports ok=false when no eligible bid
-// remains. The live winner is chosen from the actual bids received
-// (allocation.Award is the pure cross-check, not the live source of truth —
-// TECHSPEC §4).
 func pickWinner(bids map[domain.RobotID]float64, busy map[domain.RobotID]struct{}) (domain.RobotID, float64, bool) {
 	ids := make([]domain.RobotID, 0, len(bids))
 	for id := range bids {
 		if _, isBusy := busy[id]; isBusy {
-			continue // already holds/just won a task: enforce one-task-per-rover
+			continue
 		}
 		ids = append(ids, id)
 	}
 	if len(ids) == 0 {
 		return "", 0, false
 	}
-	slices.Sort(ids) // deterministic tie-break
+	slices.Sort(ids)
 	winner := ids[0]
 	best := bids[winner]
 	for _, id := range ids[1:] {
@@ -924,11 +597,9 @@ func pickWinner(bids map[domain.RobotID]float64, busy map[domain.RobotID]struct{
 	return winner, best, true
 }
 
-// award grants the winning rover a lease, moves the task to LEASED (version
-// bumped), publishes the award, and mirrors to KV.
 func (st *state) award(ctx context.Context, t domain.Task, winner domain.RobotID, cost float64) {
 	if !st.leases.Grant(t.ID, winner) {
-		return // already leased/done: single-writer guard, should not happen here
+		return
 	}
 	expiry := st.clk.Now() + st.ttl
 	next := t
@@ -943,28 +614,17 @@ func (st *state) award(ctx context.Context, t domain.Task, winner domain.RobotID
 	_ = st.conn.PublishJSON(wire.SubjTaskAward, wire.Award{
 		TaskID:   t.ID,
 		Robot:    winner,
-		Type:     t.Type,       // so the winner knows which op stream to emit (bh-02)
-		Mode:     t.Mode,       // per-Task build mode so the winner honours replay/live (bh-08c)
-		Pos:      st.pos[t.ID], // where the winner must drive to (slice 02)
+		Type:     t.Type,
+		Mode:     t.Mode,
+		Pos:      st.pos[t.ID],
 		LeaseTTL: st.ttl,
 		Version:  next.Version,
-		// Hand the winner the Task's already-accumulated durable patch log (bh-08e):
-		// empty for a fresh Task, non-empty when this is a RE-auction of a Task whose
-		// predecessor was killed/expired mid-build (the patch log was never cleared —
-		// onExpired/onFailed return the Task to UNCLAIMED but leave buildSpecs intact).
-		// A live replacement Rover folds it and CONTINUES the harness loop from the
-		// half-built structure, resuming Seq after these ops. A defensive copy so a
-		// later append to the live accumulation can't mutate what this award shipped.
 		PriorOps: append([]wire.BuildOp(nil), st.buildSpecs[t.ID]...),
 	})
 	st.emit(wire.Event{Kind: wire.EventWon, TaskID: t.ID, Robot: winner})
 	slog.Info("award", "task", t.ID, "to", winner, "cost", cost, "version", next.Version)
 }
 
-// onExpired returns a swept (lease-expired) task to UNCLAIMED in the World Model
-// so it can be re-auctioned. Full re-auction choreography is slice 03; the state
-// transition is wired now and is harmless (Sweep returns nothing while rovers
-// heartbeat).
 func (st *state) onExpired(ctx context.Context, id domain.TaskID) {
 	cur, ok := st.model.Get(id)
 	if !ok || cur.Status != domain.Leased {
@@ -982,52 +642,21 @@ func (st *state) onExpired(ctx context.Context, id domain.TaskID) {
 	}
 }
 
-// onReload resets the demo board IN-PROCESS (reloadDemo control) so the swarm
-// rebuilds the dome from scratch — no pod/process restart. It runs on the single
-// writer, so it may freely touch the Planner, World Model, Lease Manager, and
-// open auctions without further synchronisation (TECHSPEC §8); it spawns no
-// goroutines.
-//
-// The crux is version monotonicity. world.Model.Apply is a strict version guard:
-// a record is accepted only if it beats the stored one. After a build, tasks sit
-// at a Version ≥ 2, so resetting them to Version 0 would be REJECTED and nothing
-// would change. So we stamp every reset record with base = (max stored Version) +
-// 1, which is strictly greater than every record currently held and therefore
-// always wins. The next tick then announces the now-UNCLAIMED ready tasks and the
-// swarm rebuilds.
 func (st *state) onReload(ctx context.Context) {
 	base := maxVersion(st.model.Snapshot()) + 1
 
-	// Rebuild the Planner fresh from the original blueprint so done/ready reset.
-	// The blueprint loaded cleanly once already, so a failure here is unexpected;
-	// log it and keep the prior plan rather than crash the writer.
 	if plan, err := planner.Load(st.blueprint); err != nil {
 		slog.Error("demo reload: reload planner", "error", err)
 	} else {
 		st.plan = plan
 	}
 
-	// Drop all live Leases by swapping in a fresh Manager. Stale Completes and
-	// Heartbeats from the prior epoch then find no live lease and become no-ops.
 	st.leases = lease.NewManager(st.clk, st.ttl)
 
-	// Clear open auctions and any pending choreography from the prior epoch so the
-	// rebuild starts clean.
 	st.auctions = make(map[domain.TaskID]*auction)
 	st.pendingEvents = nil
-	// Reset the per-Task builder-death counts so the live-mode circuit breaker (bh-08g)
-	// starts fresh on a reloaded board rather than carrying a tripped count into the
-	// rebuild.
 	st.builderDeaths = make(map[domain.TaskID]int)
 
-	// Drop any drag-placed Blueprints (bh-05): a reload rebuilds the pristine board
-	// only. The Planner was just reloaded from st.blueprint alone (above), so the
-	// placed tasks are no longer scheduled; here we forget their tracking +
-	// positions and bump their lingering World Model records to a terminal DONE at
-	// the winning version so they neither re-auction nor sit as stale UNCLAIMED
-	// work. placeSeq is deliberately NOT reset, so a placement made AFTER a reload
-	// gets a fresh instance id (bp{n+1}) and never collides with the now-terminal
-	// records of a forgotten placement that reused an id.
 	for _, p := range st.placedTasks {
 		done := p.Task
 		done.Status = domain.Done
@@ -1038,20 +667,15 @@ func (st *state) onReload(ctx context.Context) {
 			st.mirror(ctx, done)
 		}
 		delete(st.pos, p.Task.ID)
-		delete(st.taskSite, p.Task.ID) // forget the placed task's site too (epic 04)
+		delete(st.taskSite, p.Task.ID)
 	}
 	st.placedTasks = nil
 
-	// Reset the accumulating Build specs back to the pristine seed so the structure
-	// rebuilds op-by-op from scratch rather than resuming a stale half-built spec
-	// (bh-02). Re-mirror each reset spec so an observer sees the cleared structure.
 	st.buildSpecs = cloneSpecs(st.seedSpecs)
 	for _, t := range st.blueprint {
 		st.mirrorSpec(ctx, t.ID)
 	}
 
-	// Return every blueprint task to UNCLAIMED at the winning version and mirror it
-	// to KV so an independent observer sees the reset board immediately.
 	for _, t := range st.blueprint {
 		it := t
 		it.Status = domain.Unclaimed
@@ -1066,9 +690,6 @@ func (st *state) onReload(ctx context.Context) {
 	slog.Info("demo reloaded", "tasks", len(st.blueprint), "base_version", base)
 }
 
-// maxVersion returns the highest Version across the given task records, or 0 for
-// an empty set. onReload uses (maxVersion + 1) so every reset record strictly
-// beats the record currently held and is accepted by the monotonic World Model.
 func maxVersion(tasks []domain.Task) domain.Lamport {
 	var highest domain.Lamport
 	for _, t := range tasks {
@@ -1079,26 +700,17 @@ func maxVersion(tasks []domain.Task) domain.Lamport {
 	return highest
 }
 
-// validatedBuildSpecs copies and validates the optional per-Task Build specs
-// against the Build-spec schema (ADR-0006), returning the first rejection so Run
-// fails loudly rather than shipping malformed geometry to the browser. Runs once
-// at startup, never on the hot path. The returned map is always non-nil (the
-// writer appends streamed ops into it, bh-02); a nil/empty input yields an empty
-// map.
 func validatedBuildSpecs(in map[domain.TaskID][]wire.BuildOp) (map[domain.TaskID][]wire.BuildOp, error) {
 	out := make(map[domain.TaskID][]wire.BuildOp, len(in))
 	for id, ops := range in {
 		if err := spec.Validate(ops); err != nil {
 			return nil, fmt.Errorf("task %s: %w", id, err)
 		}
-		// Defensive copy so a caller mutating its slice can't alter what snapshots ship.
 		out[id] = append([]wire.BuildOp(nil), ops...)
 	}
 	return out, nil
 }
 
-// cloneSpecs deep-copies a per-Task spec map so the seed copy and the live
-// accumulation never alias each other's slices.
 func cloneSpecs(in map[domain.TaskID][]wire.BuildOp) map[domain.TaskID][]wire.BuildOp {
 	out := make(map[domain.TaskID][]wire.BuildOp, len(in))
 	for id, ops := range in {
@@ -1107,35 +719,24 @@ func cloneSpecs(in map[domain.TaskID][]wire.BuildOp) map[domain.TaskID][]wire.Bu
 	return out
 }
 
-// mirror writes the authoritative task record to NATS KV (the World Model
-// mirror, TECHSPEC §3 / ADR-0002).
 func (st *state) mirror(ctx context.Context, t domain.Task) {
 	if err := st.kv.PutJSON(ctx, string(t.ID), t); err != nil {
 		slog.Warn("kv mirror failed", "task", t.ID, "error", err)
 	}
 }
 
-// mirrorSpec writes a Task's accumulating Build spec to NATS KV under
-// wire.KVSpecKey so the durable partial structure survives independently of the
-// in-memory writer state and a reader can fetch it (bh-02). Best-effort like the
-// task mirror: a transient KV error is logged, not fatal — the authoritative
-// copy is the writer's buildSpecs, which the next snapshot still carries.
 func (st *state) mirrorSpec(ctx context.Context, id domain.TaskID) {
 	if err := st.kv.PutJSON(ctx, wire.KVSpecKey(id), st.buildSpecs[id]); err != nil {
 		slog.Warn("kv spec mirror failed", "task", id, "error", err)
 	}
 }
 
-// mirrorAllSpecs mirrors every currently-known Build spec to KV. Used at startup
-// (seed static specs) and after a demo reload (publish the cleared specs).
 func (st *state) mirrorAllSpecs(ctx context.Context) {
 	for id := range st.buildSpecs {
 		st.mirrorSpec(ctx, id)
 	}
 }
 
-// publishSnapshot pushes the full server-authoritative world snapshot
-// (~SnapshotHz) for the WS gateway/browser.
 func (st *state) publishSnapshot() {
 	tasks := st.model.Snapshot()
 	taskViews := make([]wire.TaskView, 0, len(tasks))
@@ -1149,18 +750,11 @@ func (st *state) publishSnapshot() {
 			LeaseExpiry: t.LeaseExpiry,
 			Version:     t.Version,
 			Deps:        t.Deps,
-			Site:        st.taskSite[t.ID], // tag the task's site (two-site lunar surface, epic 04)
-			// Attach the Task's pre-validated Build spec, if any, with every Asset KEY
-			// resolved to its self-hosted model_ref (ADR-0010): the browser receives
-			// only resolved URLs, never raw catalog keys. ResolveSpec copies (never
-			// mutates the durable buildSpecs) and leaves keyless ops untouched, so a
-			// spec with no Asset keys rides byte-identically to before. Absent ⇒ the
-			// field stays nil and the renderer uses the deterministic primitive fallback.
-			BuildSpec: st.assetCatalog.ResolveSpec(st.buildSpecs[t.ID]),
+			Site:        st.taskSite[t.ID],
+			BuildSpec:   st.assetCatalog.ResolveSpec(st.buildSpecs[t.ID]),
 		})
 	}
 
-	// rover → the task it currently holds (from the World Model assignees).
 	heldBy := make(map[domain.RobotID]domain.TaskID)
 	for _, t := range tasks {
 		if t.Status == domain.Leased && t.Assignee != "" {
@@ -1183,13 +777,10 @@ func (st *state) publishSnapshot() {
 			Alive:   tm.Alive,
 			Load:    tm.Load,
 			Task:    heldBy[id],
-			Site:    tm.Site, // the rover reports its site via Telemetry.Site (epic 04)
+			Site:    tm.Site,
 		})
 	}
 
-	// Drain the choreography beats accumulated since the last snapshot. They are
-	// transient: a reconnecting browser simply misses past beats and re-renders
-	// durable state from Rovers/Tasks (ADR-0004).
 	events := st.pendingEvents
 	st.pendingEvents = nil
 
@@ -1203,12 +794,6 @@ func (st *state) publishSnapshot() {
 		At:        at,
 	})
 
-	// AFTER the tactical snapshot is on the wire, hand a copy to the Earth-uplink
-	// shim with a NON-BLOCKING send: the single writer must never block, so a slow
-	// shim simply drops this frame (snapshots are full-state, drop-safe). No
-	// network or delay work happens on this writer goroutine — the shim owns it.
-	// This is the ONLY thing latency affects; world.snapshot above already went
-	// out undelayed (ADR-0002 / TECHSPEC §8).
 	select {
 	case st.earthCh <- wire.EarthUplink{Type: "earth", Rovers: roverViews, Tasks: taskViews, At: at}:
 	default:

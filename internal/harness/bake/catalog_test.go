@@ -6,14 +6,9 @@ import (
 	"testing"
 )
 
-// TestContractAssetCatalogFallback proves a contract that does not scope its own
-// Asset catalog falls back to the global asset.DefaultCatalog() (ADR-0010: a
-// default catalog backs contracts that don't specify one), and that a contract
-// WITH a catalog keeps it.
 func TestContractAssetCatalogFallback(t *testing.T) {
 	t.Parallel()
 
-	// No catalog set ⇒ the global default backs it (never nil), with curated keys.
 	var c Contract
 	got := c.AssetCatalog()
 	if got == nil {
@@ -23,7 +18,6 @@ func TestContractAssetCatalogFallback(t *testing.T) {
 		t.Fatal("default-backed catalog must carry curated keys")
 	}
 
-	// A contract-scoped catalog is returned verbatim.
 	custom := asset.NewCatalog(asset.NewEntry("only", "/o.glb", nil, asset.Identity()))
 	c.Catalog = custom
 	if c.AssetCatalog() != custom {
@@ -31,9 +25,6 @@ func TestContractAssetCatalogFallback(t *testing.T) {
 	}
 }
 
-// TestContractCatalogExcludedFromJSON guards that the Asset catalog does NOT leak
-// into the contract's canonical JSON (and so not into the cache key / ContractHash),
-// so re-scoping available Assets never re-bakes geometry.
 func TestContractCatalogExcludedFromJSON(t *testing.T) {
 	t.Parallel()
 	c := Contract{

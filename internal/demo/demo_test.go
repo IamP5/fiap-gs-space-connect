@@ -5,10 +5,6 @@ import (
 	"time"
 )
 
-// TestExternal_YieldsEmptyBoardNoRovers proves the pod-per-rover sandbox: the
-// scenario carries an EMPTY Blueprint and NO in-process Rovers. The coordinator
-// boots a fresh map; rovers join over NATS as their own pods and the operator
-// drops a Blueprint from the dashboard for them to build.
 func TestExternal_YieldsEmptyBoardNoRovers(t *testing.T) {
 	cfg := Scenario("nats://x", External())
 
@@ -23,10 +19,6 @@ func TestExternal_YieldsEmptyBoardNoRovers(t *testing.T) {
 	}
 }
 
-// TestExternal_PacingIsLegible pins the widened windows: the lease TTL
-// (HeartbeatEvery × TTLFactor) must comfortably exceed the auction window so the
-// orphan drain ring reads on screen before the re-auction, and the snapshot
-// cadence must be high enough for the beats to animate.
 func TestExternal_PacingIsLegible(t *testing.T) {
 	cfg := External()
 

@@ -12,10 +12,6 @@ import (
 	"time"
 )
 
-// earthHarness boots an embedded NATS server, runs a coordinator, and gives an
-// observer connection plus channels carrying the wall-clock arrival time of each
-// world.snapshot and earth.uplink frame. It lets a test assert latency affects
-// ONLY the earth.uplink feed (issue 09 / ADR-0002).
 type earthHarness struct {
 	conn     *bus.Conn
 	snapAt   chan time.Time
@@ -90,11 +86,10 @@ func earthTestConfig() coordinator.Config {
 		AuctionWindow:  150 * time.Millisecond,
 		HeartbeatEvery: 100 * time.Millisecond,
 		TTLFactor:      3,
-		SnapshotHz:     20, // ~50ms snapshot cadence
+		SnapshotHz:     20,
 	}
 }
 
-// waitFor reads the next value from ch within d, failing the test otherwise.
 func waitFor[T any](t *testing.T, ch <-chan T, d time.Duration, what string) T {
 	t.Helper()
 	select {
@@ -107,38 +102,26 @@ func waitFor[T any](t *testing.T, ch <-chan T, d time.Duration, what string) T {
 	}
 }
 
-// TestEarthUplink_ZeroLatencyPublishesLive asserts that with the default latency
-// (0) the coordinator publishes an EarthUplink on earth.uplink reflecting the
-// world, at roughly the same cadence as the tactical snapshot (Earth ≈ live).
 func TestEarthUplink_ZeroLatencyPublishesLive(t *testing.T) {
 	h := newEarthHarness(t, earthTestConfig())
 
-	// An EarthUplink arrives promptly and is shaped like the world.
 	e := waitFor(t, h.earthMsg, 3*time.Second, "earth uplink at latency 0")
 	if e.Type != "earth" {
 		t.Fatalf("earth.Type = %q, want \"earth\"", e.Type)
 	}
 
-	// Both feeds keep flowing: drain a snapshot and an earth frame within a single
-	// snapshot interval's worth of slack.
 	_ = waitFor(t, h.snapAt, 2*time.Second, "world.snapshot at latency 0")
 	_ = waitFor(t, h.earthAt, 2*time.Second, "earth.uplink at latency 0")
 }
 
-// TestEarthUplink_LatencyDelaysOnlyEarth is the core ADR-0002 guarantee: raising
-// the latency delays the earth.uplink feed measurably while world.snapshot keeps
-// flowing immediately. It asserts lower-bounds and a flow invariant — never exact
-// timing — so it is deterministic and not flaky.
 func TestEarthUplink_LatencyDelaysOnlyEarth(t *testing.T) {
 	h := newEarthHarness(t, earthTestConfig())
 
-	// Drain initial frames so we measure steady-state.
 	_ = waitFor(t, h.earthAt, 3*time.Second, "initial earth uplink")
 
 	const latencyMs = 300
 	const latency = latencyMs * time.Millisecond
 
-	// Drain anything already queued so post-control measurement is clean.
 	drain(h.snapAt)
 	drain(h.earthAt)
 
@@ -148,25 +131,14 @@ func TestEarthUplink_LatencyDelaysOnlyEarth(t *testing.T) {
 	_ = h.conn.Flush()
 	sentAt := time.Now()
 
-	// world.snapshot MUST keep flowing immediately — it is on the tactical loop and
-	// is provably untouched by latency. A snapshot must arrive well before the
-	// Earth delay would elapse.
 	snapAt := waitFor(t, h.snapAt, latency-50*time.Millisecond, "world.snapshot stays immediate under latency")
 	if d := snapAt.Sub(sentAt); d >= latency {
 		t.Fatalf("world.snapshot was delayed %v (≥ %v) — latency leaked onto the tactical loop", d, latency)
 	}
 
-	// The NEXT earth.uplink frame produced after the control lands must be delayed
-	// by at least ~latency. Find the first earth frame whose arrival is clearly
-	// past the delay floor (allowing the control to take effect on a subsequent
-	// snapshot enqueue).
 	deadline := time.Now().Add(5 * time.Second)
 	for {
 		earthAt := waitFor(t, h.earthAt, time.Until(deadline), "delayed earth.uplink")
-		// Frames enqueued before the control took effect may still be in flight;
-		// once we see one delayed past the floor relative to its own snapshot
-		// cadence, the shim is provably delaying. We assert it landed at least
-		// (latency - slack) after the control was sent.
 		if earthAt.Sub(sentAt) >= latency-50*time.Millisecond {
 			break
 		}
@@ -176,7 +148,6 @@ func TestEarthUplink_LatencyDelaysOnlyEarth(t *testing.T) {
 	}
 }
 
-// drain empties a buffered channel without blocking.
 func drain[T any](ch <-chan T) {
 	for {
 		select {

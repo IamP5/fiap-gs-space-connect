@@ -33,7 +33,6 @@ func sampleEntry(blueprint, task string) Entry {
 func TestKeyFilename_Sanitized(t *testing.T) {
 	k := Key{BlueprintID: "dome", TaskID: "foundation-1", ContractHash: "ab/cd 12", Model: "gpt-4o:2024"}
 	got := k.Filename()
-	// No path separators or spaces survive sanitization.
 	for _, bad := range []string{"/", " ", ":"} {
 		if strings.Contains(got, bad) {
 			t.Fatalf("filename %q still contains unsafe %q", got, bad)
@@ -69,7 +68,6 @@ func TestCacheLookup_HitAndMiss(t *testing.T) {
 	if len(ops) != 1 {
 		t.Fatalf("want 1 op, got %d", len(ops))
 	}
-	// Mutating the returned slice must not corrupt the cached entry.
 	ops[0].Material.Color = "#000000"
 	again, _ := c.Lookup("dome", "foundation-1")
 	if again[0].Material.Color == "#000000" {
@@ -85,7 +83,7 @@ func TestCacheLookup_HitAndMiss(t *testing.T) {
 
 func TestCacheNew_RejectsInvalidEntry(t *testing.T) {
 	bad := sampleEntry("dome", "foundation-1")
-	bad.Ops[0].Scale = domain.Vec3{} // degenerate: validator rejects
+	bad.Ops[0].Scale = domain.Vec3{}
 	data, _ := json.Marshal(bad)
 	if _, err := New(map[string][]byte{"x.json": data}); err == nil {
 		t.Fatal("New must reject a cache file whose ops fail validation")
@@ -93,15 +91,13 @@ func TestCacheNew_RejectsInvalidEntry(t *testing.T) {
 }
 
 func TestCacheNew_DeterministicOnCollision(t *testing.T) {
-	// Two files for the SAME (blueprint, task) with different ops: the
-	// lexicographically-first filename must win, deterministically.
 	first := sampleEntry("dome", "foundation-1")
 	first.Ops[0].Material.Color = "#111111"
 	second := sampleEntry("dome", "foundation-1")
 	second.Ops[0].Material.Color = "#222222"
 	fa, _ := first.Marshal()
 	fb, _ := second.Marshal()
-	for range 5 { // repeat to catch map-iteration nondeterminism
+	for range 5 {
 		c, err := New(map[string][]byte{
 			"b_second.json": fb,
 			"a_first.json":  fa,
@@ -116,9 +112,6 @@ func TestCacheNew_DeterministicOnCollision(t *testing.T) {
 	}
 }
 
-// TestEmbeddedCache_Loads asserts the committed cache embeds and parses cleanly
-// (empty before any bake is fine). It guards against a malformed committed spec
-// reaching the headline.
 func TestEmbeddedCache_Loads(t *testing.T) {
 	c, err := Embedded()
 	if err != nil {
@@ -130,11 +123,6 @@ func TestEmbeddedCache_Loads(t *testing.T) {
 	t.Logf("embedded cache holds %d baked spec(s)", c.Len())
 }
 
-// TestEmbeddedCache_ReplaysBakedFoundationDeterministically is the headline proof:
-// the committed gpt-4o foundation-1 spec replays from the embedded cache, and two
-// lookups return byte-identical op sets (deterministic, no model call). It is
-// SKIPPED if foundation-1 hasn't been baked yet, so the suite is green both before
-// and after the live bake.
 func TestEmbeddedCache_ReplaysBakedFoundationDeterministically(t *testing.T) {
 	c, err := Embedded()
 	if err != nil {

@@ -1,7 +1,3 @@
-// Command gateway runs the SwarmBuild WS Gateway: it tails NATS world snapshots
-// and fans them out to browser WebSocket clients, and relays browser control
-// messages back onto NATS. The browser never speaks NATS — only this gateway
-// does (TECHSPEC §3/§4).
 package main
 
 import (
@@ -24,10 +20,6 @@ func main() {
 	}
 }
 
-// run connects to NATS, serves the WebSocket fan-out, and blocks until the
-// context is cancelled, then drains gracefully. It is split out from main so the
-// deferred cleanup (signal stop, connection close, fan-out stop) actually runs
-// before the process exits on error.
 func run() error {
 	natsURL := getenv("NATS_URL", "nats://127.0.0.1:4222")
 	addr := getenv("GATEWAY_ADDR", ":8080")

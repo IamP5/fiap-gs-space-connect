@@ -13,28 +13,17 @@ import (
 	"github.com/openai/openai-go/v3/shared"
 )
 
-// Provider base URLs (TECHSPEC §4). The provider swap is purely a base_url
-// change: every supported backend speaks the OpenAI chat-completions wire, so one
-// adapter drives all three.
 const (
 	BaseURLOpenAI = "https://api.openai.com/v1"
 	BaseURLGemini = "https://generativelanguage.googleapis.com/v1beta/openai/"
 	BaseURLLocal  = "http://localhost:11434/v1"
 )
 
-// openAIModel is the openai-go/v3 adapter behind the Model seam. It is the ONLY
-// type in this package that talks to a network provider; it is constructed solely
-// by the offline bake path (NewOpenAI), never reachable from the agent/coordinator
-// hot loop (enforced by internal/harness/archtest).
 type openAIModel struct {
 	client openai.Client
 	model  string
 }
 
-// NewOpenAI builds an OpenAI-compatible Model from cfg. BaseURL selects the
-// provider (empty ⇒ OpenAI); APIKey authenticates it. It returns an error if no
-// model id or API key is supplied so the bake command fails loudly rather than
-// making an unauthenticated call.
 func NewOpenAI(cfg Config) (Model, error) {
 	if cfg.Model == "" {
 		return nil, errors.New("model: Config.Model is required")
@@ -52,12 +41,6 @@ func NewOpenAI(cfg Config) (Model, error) {
 	}, nil
 }
 
-// userMessage builds a "user" turn from a Message, attaching any inline PNG
-// screenshots as base64 data-URI image parts (the vision input, bh-06). With no
-// images it is a plain text turn — byte-identical to openai.UserMessage(text) —
-// so the generation path is unchanged; only the bake-time vision pass sets
-// Images. Each image is sent at "high" detail so the vision model can read fine
-// structural geometry in the screenshot.
 func userMessage(m Message) openai.ChatCompletionMessageParamUnion {
 	if len(m.Images) == 0 {
 		return openai.UserMessage(m.Content)
@@ -79,10 +62,6 @@ func userMessage(m Message) openai.ChatCompletionMessageParamUnion {
 	return openai.UserMessage(parts)
 }
 
-// Generate sends req to the provider with strict response_format json_schema and
-// returns the raw structured-output JSON. Strict mode binds the output to the
-// caller's schema so the validate-and-repair pass in GenerateSpec only has to
-// repair the provider's best-effort lapses, not arbitrary prose.
 func (o *openAIModel) Generate(ctx context.Context, req Request) (json.RawMessage, error) {
 	msgs := make([]openai.ChatCompletionMessageParamUnion, 0, len(req.Messages))
 	for _, m := range req.Messages {
@@ -91,7 +70,7 @@ func (o *openAIModel) Generate(ctx context.Context, req Request) (json.RawMessag
 			msgs = append(msgs, openai.SystemMessage(m.Content))
 		case "assistant":
 			msgs = append(msgs, openai.AssistantMessage(m.Content))
-		default: // "user" and any unknown role default to a user turn
+		default:
 			msgs = append(msgs, userMessage(m))
 		}
 	}

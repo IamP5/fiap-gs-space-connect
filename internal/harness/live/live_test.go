@@ -12,9 +12,6 @@ import (
 	"testing"
 )
 
-// richFoundation is a multi-shape plinth spec that clears the demo foundation
-// contract's hard gate (MinOps=3, MinCoverage) AND its soft threshold. Every op
-// sits inside the foundation envelope (Size 3.0×2.4×3.0, centred on the origin).
 func richFoundation() []wire.BuildOp {
 	box := func(pos, scale domain.Vec3, color string) wire.BuildOp {
 		return wire.BuildOp{Op: wire.BuildOpPlace, Shape: wire.ShapeBox, Pos: pos, Scale: scale, Material: wire.Material{Color: color}}
@@ -30,7 +27,6 @@ func richFoundation() []wire.BuildOp {
 	}
 }
 
-// specJSON wraps ops in the strict {"ops":[...]} envelope a provider emits.
 func specJSON(t *testing.T, ops []wire.BuildOp) json.RawMessage {
 	t.Helper()
 	b, err := json.Marshal(struct {
@@ -42,15 +38,10 @@ func specJSON(t *testing.T, ops []wire.BuildOp) json.RawMessage {
 	return b
 }
 
-// fakeBuilder wires the REAL refine loop + evaluator over a FakeModel (no
-// network), so the contract test proves the whole live path end to end:
-// validate-and-repair inside the seam, the loop's hard gate, and the accepted ops.
 func fakeBuilder(fake *model.FakeModel) *Builder {
 	return NewBuilderWithGenerator(loop.ModelGenerator{M: fake}, "fake", "fake-model")
 }
 
-// collect drives BuildLive and gathers every streamed iteration batch plus the
-// flattened patch log, so a test can assert on what the live path emits (bh-08d).
 type collected struct {
 	batches [][]wire.BuildOp
 	log     []wire.BuildOp
@@ -62,8 +53,6 @@ func collect(t *testing.T, b *Builder, task domain.TaskID, taskType domain.TaskT
 	return collectResume(t, b, task, taskType, nil)
 }
 
-// collectResume drives BuildLive with a prior patch log (bh-08e resume seed) and
-// gathers the streamed iterations. nil priorOps is the fresh-start path.
 func collectResume(t *testing.T, b *Builder, task domain.TaskID, taskType domain.TaskType, priorOps []wire.BuildOp) collected {
 	t.Helper()
 	var c collected
@@ -74,10 +63,6 @@ func collectResume(t *testing.T, b *Builder, task domain.TaskID, taskType domain
 	return c
 }
 
-// TestBuildLive_GeneratesAcceptedSpec: a FakeModel returning a hard-gate-passing
-// foundation spec flows through the real harness and BuildLive streams those ops as
-// a place batch with ok=true — the Rover builds from generated ops (no network). The
-// streamed patch log folds to the generated geometry.
 func TestBuildLive_GeneratesAcceptedSpec(t *testing.T) {
 	fake := &model.FakeModel{Responses: []json.RawMessage{specJSON(t, richFoundation())}}
 	b := fakeBuilder(fake)
@@ -96,7 +81,6 @@ func TestBuildLive_GeneratesAcceptedSpec(t *testing.T) {
 	if folded[0].Shape != wire.ShapeBox {
 		t.Fatalf("expected the generated slab first, got %v", folded[0].Shape)
 	}
-	// A single accepted iteration streams as place-only ops (nothing to self-correct).
 	for i, op := range c.log {
 		if op.Op != wire.BuildOpPlace {
 			t.Fatalf("op %d: first accepted spec must stream as a place, got %q", i, op.Op)
@@ -107,14 +91,10 @@ func TestBuildLive_GeneratesAcceptedSpec(t *testing.T) {
 	}
 }
 
-// TestBuildLive_RepairsThenAccepts: the FakeModel returns an INVALID spec first
-// (zero ops), then a valid one. GenerateSpec's single validate-and-repair re-ask
-// recovers, the loop accepts, and BuildLive returns the repaired ops — proving the
-// harness validates/repairs on the live path.
 func TestBuildLive_RepairsThenAccepts(t *testing.T) {
 	fake := &model.FakeModel{Responses: []json.RawMessage{
-		json.RawMessage(`{"ops":[]}`), // invalid: zero ops ⇒ repairable
-		specJSON(t, richFoundation()), // repaired valid spec
+		json.RawMessage(`{"ops":[]}`),
+		specJSON(t, richFoundation()),
 	}}
 	b := fakeBuilder(fake)
 
@@ -130,10 +110,6 @@ func TestBuildLive_RepairsThenAccepts(t *testing.T) {
 	}
 }
 
-// TestBuildLive_ForcedErrorDegradesGracefully: a FakeModel that returns a
-// transport error on EVERY call must NEVER crash — BuildLive returns ok=false so
-// the Rover falls back to its deterministic replay/primitive stream (the swarm
-// survives a model fault; failure-heal is slice 08f).
 func TestBuildLive_ForcedErrorDegradesGracefully(t *testing.T) {
 	fake := &model.FakeModel{Err: errors.New("simulated provider timeout")}
 	b := fakeBuilder(fake)
@@ -147,8 +123,6 @@ func TestBuildLive_ForcedErrorDegradesGracefully(t *testing.T) {
 	}
 }
 
-// TestBuildLive_UnknownTaskTypeDegrades: a task type with no demo contract yields
-// ok=false (no contract to build), so the Rover falls back rather than crashing.
 func TestBuildLive_UnknownTaskTypeDegrades(t *testing.T) {
 	fake := &model.FakeModel{Responses: []json.RawMessage{specJSON(t, richFoundation())}}
 	b := fakeBuilder(fake)
@@ -161,10 +135,6 @@ func TestBuildLive_UnknownTaskTypeDegrades(t *testing.T) {
 	}
 }
 
-// TestBuildLiveResult_RetriesTransientThenAccepts: a FakeModel that fails the FIRST
-// Generate call with a transient error, then returns a valid spec, is ridden out by
-// the live path's bounded per-call retry (bh-08f) — the build ACCEPTS, makes 2 model
-// calls, and is NOT a model failure.
 func TestBuildLiveResult_RetriesTransientThenAccepts(t *testing.T) {
 	fake := &model.FakeModel{FailFirst: 1, Responses: []json.RawMessage{specJSON(t, richFoundation())}}
 	b := fakeBuilder(fake)
@@ -181,10 +151,6 @@ func TestBuildLiveResult_RetriesTransientThenAccepts(t *testing.T) {
 	}
 }
 
-// TestBuildLiveResult_ForcedErrorIsModelFailure: a FakeModel that errors on EVERY
-// call (surviving the bounded retry) yields ok=false with ModelFailed=TRUE, so the
-// Rover routes it through self-heal (counts toward its death threshold) — distinct
-// from a graceful degrade. More than one Generate call proves the retry occurred.
 func TestBuildLiveResult_ForcedErrorIsModelFailure(t *testing.T) {
 	fake := &model.FakeModel{Err: errors.New("simulated provider timeout")}
 	b := fakeBuilder(fake)
@@ -201,9 +167,6 @@ func TestBuildLiveResult_ForcedErrorIsModelFailure(t *testing.T) {
 	}
 }
 
-// TestBuildLiveResult_UnbuildableContractIsNotModelFailure: an unknown task type (no
-// contract) yields ok=false but ModelFailed=FALSE — it is a degrade, not a Rover
-// fault, so it never counts toward the death threshold and never reaches the model.
 func TestBuildLiveResult_UnbuildableContractIsNotModelFailure(t *testing.T) {
 	fake := &model.FakeModel{Responses: []json.RawMessage{specJSON(t, richFoundation())}}
 	b := fakeBuilder(fake)
@@ -217,8 +180,6 @@ func TestBuildLiveResult_UnbuildableContractIsNotModelFailure(t *testing.T) {
 	}
 }
 
-// TestBuildLiveFault_MatchesResult: the two-boolean facade the agent's optional seam
-// matches structurally returns the same (OK, ModelFailed) as BuildLiveResult.
 func TestBuildLiveFault_MatchesResult(t *testing.T) {
 	fake := &model.FakeModel{Err: errors.New("boom")}
 	b := fakeBuilder(fake)
@@ -228,21 +189,12 @@ func TestBuildLiveFault_MatchesResult(t *testing.T) {
 	}
 }
 
-// TestBuildLive_ResumeContinuesFromPriorLog (bh-08e): a replacement Rover wins a
-// Task that already has a durable patch log (its predecessor was killed mid-build).
-// BuildLive FOLDS the prior log, seeds the loop from the half-built geometry, and
-// streams only the patches that GROW it onward — it NEVER re-places the durable prior
-// ops. The prior log CONCATENATED with the streamed patches folds to the complete
-// generated structure (the renderer's pure fold across the kill→resume handoff).
 func TestBuildLive_ResumeContinuesFromPriorLog(t *testing.T) {
 	full := richFoundation()
-	// The predecessor streamed the first two pieces (with the stable slot ids the
-	// streamer assigns) before it was killed; this is the durable partial log.
 	prior := []wire.BuildOp{
 		withID(full[0], "p0"),
 		withID(full[1], "p1"),
 	}
-	// The replacement's model returns the COMPLETE intended structure.
 	fake := &model.FakeModel{Responses: []json.RawMessage{specJSON(t, full)}}
 	b := fakeBuilder(fake)
 
@@ -251,15 +203,12 @@ func TestBuildLive_ResumeContinuesFromPriorLog(t *testing.T) {
 		t.Fatalf("expected the resumed live build to grow the structure (ok=true)")
 	}
 
-	// It must NOT re-place the durable prior pieces: every streamed op targets a NEW
-	// slot (p2, p3...), never p0/p1 (those are already durable and unchanged).
 	for i, op := range c.log {
 		if op.ID == "p0" || op.ID == "p1" {
 			t.Fatalf("streamed op %d re-touched a durable prior slot %q; resume must only GROW the structure", i, op.ID)
 		}
 	}
 
-	// The prior log + the streamed patches fold to the complete generated structure.
 	combined := append(append([]wire.BuildOp(nil), prior...), c.log...)
 	folded, err := spec.Fold(combined)
 	if err != nil {
@@ -270,11 +219,8 @@ func TestBuildLive_ResumeContinuesFromPriorLog(t *testing.T) {
 	}
 }
 
-// TestBuildLive_ResumeWithMalformedPriorStartsClean (bh-08e defensive): a prior log
-// that does not fold (a move/delete of an unknown id) must not abort the build — the
-// builder logs and starts clean, still streaming the generated structure (ok=true).
 func TestBuildLive_ResumeWithMalformedPriorStartsClean(t *testing.T) {
-	bad := []wire.BuildOp{{Op: wire.BuildOpMove, ID: "ghost"}} // move of an unknown id ⇒ fold error
+	bad := []wire.BuildOp{{Op: wire.BuildOpMove, ID: "ghost"}}
 	fake := &model.FakeModel{Responses: []json.RawMessage{specJSON(t, richFoundation())}}
 	b := fakeBuilder(fake)
 
@@ -282,24 +228,16 @@ func TestBuildLive_ResumeWithMalformedPriorStartsClean(t *testing.T) {
 	if !c.ok {
 		t.Fatalf("a malformed prior log must degrade to a clean start, not abort (want ok=true)")
 	}
-	// Starting clean, the first iteration streams as place-only ops from slot p0.
 	if len(c.log) == 0 || c.log[0].ID != "p0" {
 		t.Fatalf("a clean start must stream from slot p0; got %+v", c.log)
 	}
 }
 
-// withID returns a copy of op with the given stable slot id (test helper for the
-// resume seed, which carries the predecessor's slot ids in the durable log).
 func withID(op wire.BuildOp, id string) wire.BuildOp {
 	op.ID = id
 	return op
 }
 
-// TestStreamer_DiffsIterationsIntoPatches: the per-iteration differ turns successive
-// accepted specs into place/move/delete patches on stable slot ids (bh-08d, 08a op
-// identity), so the world self-corrects IN PLACE. It drives the streamer directly:
-// iter1 places two pieces; iter2 moves slot 0, recolours slot 1, and drops slot 2's
-// absence — the streamed log must fold to iter2's geometry.
 func TestStreamer_DiffsIterationsIntoPatches(t *testing.T) {
 	box := func(pos domain.Vec3, color string) wire.BuildOp {
 		return wire.BuildOp{
@@ -315,10 +253,9 @@ func TestStreamer_DiffsIterationsIntoPatches(t *testing.T) {
 		box(domain.Vec3{X: 1, Y: 0, Z: 0}, "#222222"),
 		box(domain.Vec3{X: 2, Y: 0, Z: 0}, "#333333"),
 	}
-	// iter2: slot0 moves, slot1 recolours in place, slot2 is dropped.
 	iter2 := []wire.BuildOp{
-		box(domain.Vec3{X: 0, Y: 5, Z: 0}, "#111111"), // moved up
-		box(domain.Vec3{X: 1, Y: 0, Z: 0}, "#ff0000"), // recoloured
+		box(domain.Vec3{X: 0, Y: 5, Z: 0}, "#111111"),
+		box(domain.Vec3{X: 1, Y: 0, Z: 0}, "#ff0000"),
 	}
 
 	var log []wire.BuildOp
@@ -361,8 +298,6 @@ func TestStreamer_DiffsIterationsIntoPatches(t *testing.T) {
 	}
 }
 
-// TestStreamer_UnchangedIterationStreamsNothing: an iteration identical to the last
-// produces no patch (no churn on the bus), so a stable refine pass does not re-stream.
 func TestStreamer_UnchangedIterationStreamsNothing(t *testing.T) {
 	ops := []wire.BuildOp{
 		{
@@ -376,7 +311,7 @@ func TestStreamer_UnchangedIterationStreamsNothing(t *testing.T) {
 	var calls int
 	s := &streamer{emit: func([]wire.BuildOp) { calls++ }}
 	s.onIteration(1, ops)
-	s.onIteration(2, ops) // identical: no patch
+	s.onIteration(2, ops)
 	if calls != 1 {
 		t.Fatalf("an unchanged iteration must not re-stream; emit called %d times", calls)
 	}

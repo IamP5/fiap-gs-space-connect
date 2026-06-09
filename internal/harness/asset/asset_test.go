@@ -7,8 +7,6 @@ import (
 	"testing"
 )
 
-// Task-type literals reused across cases (kept as constants so the table-driven
-// tests don't trip goconst on repeated string literals).
 const (
 	ttWall     domain.TaskType = "wall"
 	ttDomeCap  domain.TaskType = "dome-cap"
@@ -16,11 +14,9 @@ const (
 	ttPanel    domain.TaskType = "panel"
 	ttMast     domain.TaskType = "mast"
 
-	// keyRadome is the radome habitat key, reused across the default-catalog cases.
 	keyRadome = "habitat-radome"
 )
 
-// unit is a well-formed procedural place op reused as a base across cases.
 func unit() wire.BuildOp {
 	return wire.BuildOp{
 		Op:       wire.BuildOpPlace,
@@ -33,8 +29,6 @@ func unit() wire.BuildOp {
 	}
 }
 
-// TestResolve covers key → model_ref resolution, the default/global fallback, and
-// the miss/nil cases.
 func TestResolve(t *testing.T) {
 	t.Parallel()
 
@@ -71,8 +65,6 @@ func TestResolve(t *testing.T) {
 	}
 }
 
-// TestResolveTransform proves the entry's normalization transform travels with the
-// resolved key.
 func TestResolveTransform(t *testing.T) {
 	t.Parallel()
 	want := Transform{Scale: domain.Vec3{X: 3, Y: 3, Z: 3}, Offset: domain.Vec3{Z: 5}, Rotation: domain.Vec3{X: 1}}
@@ -86,9 +78,6 @@ func TestResolveTransform(t *testing.T) {
 	}
 }
 
-// TestResolveOp is the headline server-side seam: an Asset-keyed op resolves to a
-// model op with a self-hosted URL, a CLEARED key (browser never sees a raw key),
-// and the normalization transform composed on top of the op's own transform.
 func TestResolveOp(t *testing.T) {
 	t.Parallel()
 	c := NewCatalog(NewEntry("rover", "/assets/rover.glb", nil,
@@ -109,7 +98,6 @@ func TestResolveOp(t *testing.T) {
 	if got.ModelRef != "/assets/rover.glb" {
 		t.Fatalf("ResolveOp: model_ref = %q, want /assets/rover.glb", got.ModelRef)
 	}
-	// Scale multiplies (2*2), rotation adds (0+1 on Y), offset adds to pos (1+10 X, 3-1 Z).
 	if got.Scale != (domain.Vec3{X: 4, Y: 4, Z: 4}) {
 		t.Fatalf("ResolveOp: scale = %+v, want {4 4 4}", got.Scale)
 	}
@@ -121,7 +109,6 @@ func TestResolveOp(t *testing.T) {
 	}
 }
 
-// TestResolveOpPassthrough: ops without a (resolvable) key are returned unchanged.
 func TestResolveOpPassthrough(t *testing.T) {
 	t.Parallel()
 	c := DefaultCatalog()
@@ -157,7 +144,7 @@ func TestResolveOpPassthrough(t *testing.T) {
 		for _, kind := range []string{wire.BuildOpMove, wire.BuildOpDelete} {
 			op := unit()
 			op.Op = kind
-			op.AssetKey = keyRadome // a real key, but on the wrong op kind
+			op.AssetKey = keyRadome
 			got, ok := dc.ResolveOp(op)
 			if ok {
 				t.Fatalf("%s op must not resolve an Asset key", kind)
@@ -169,9 +156,6 @@ func TestResolveOpPassthrough(t *testing.T) {
 	})
 }
 
-// TestResolveSpec confirms the whole-spec seam resolves keyed ops, passes others
-// through, never mutates the input, and clears every resolved key so the browser
-// only ever sees resolved URLs.
 func TestResolveSpec(t *testing.T) {
 	t.Parallel()
 	c := NewCatalog(NewEntry("dome", "/assets/dome.glb", nil, Identity()))
@@ -197,13 +181,11 @@ func TestResolveSpec(t *testing.T) {
 	if !reflect.DeepEqual(in, before) {
 		t.Fatalf("ResolveSpec mutated its input:\n before=%+v\n after =%+v", before, in)
 	}
-	// Identity transform leaves the op's own transform untouched.
 	if out[0].Pos != keyed.Pos || out[0].Scale != keyed.Scale || out[0].Rot != keyed.Rot {
 		t.Fatalf("ResolveSpec: identity transform altered geometry: %+v", out[0])
 	}
 }
 
-// TestResolveSpecNilEmpty: nil/empty in ⇒ nil out (no allocation surprises).
 func TestResolveSpecNilEmpty(t *testing.T) {
 	t.Parallel()
 	c := DefaultCatalog()
@@ -215,8 +197,6 @@ func TestResolveSpecNilEmpty(t *testing.T) {
 	}
 }
 
-// TestSuitsType covers the task-type suitability check, including the unrestricted
-// (no declared types) entry.
 func TestSuitsType(t *testing.T) {
 	t.Parallel()
 	restricted := NewEntry("k", "/a.glb", []domain.TaskType{ttWall, "panel"}, Identity())
@@ -232,19 +212,13 @@ func TestSuitsType(t *testing.T) {
 	}
 }
 
-// entryCase is one curated-Asset expectation: the key must resolve to wantRef,
-// suit `suits`, and NOT suit `notSuits`. Shared by the habitat (#55) and prop
-// (#57) entry tables so both assert identically with no duplicated loop body.
 type entryCase struct {
 	key      string
 	wantRef  string
-	suits    domain.TaskType // the task type the Asset must suit
-	notSuits domain.TaskType // a task type it must NOT suit
+	suits    domain.TaskType
+	notSuits domain.TaskType
 }
 
-// assertEntries runs the shared per-entry assertions over a table of cases:
-// Resolve(key) hits with the expected self-hosted model_ref, Get(key) hits, and
-// SuitsType is true for `suits` / false for `notSuits`.
 func assertEntries(t *testing.T, c *Catalog, cases []entryCase) {
 	t.Helper()
 	for _, tc := range cases {
@@ -267,7 +241,6 @@ func assertEntries(t *testing.T, c *Catalog, cases []entryCase) {
 			if e.SuitsType(tc.notSuits) {
 				t.Fatalf("%q must NOT suit %q", tc.key, tc.notSuits)
 			}
-			// A vendored, self-hosted glb under the curated /assets/ mount.
 			if e.ModelRef[:len("/assets/")] != "/assets/" {
 				t.Fatalf("%q model_ref %q is not self-hosted under /assets/", tc.key, e.ModelRef)
 			}
@@ -275,9 +248,6 @@ func assertEntries(t *testing.T, c *Catalog, cases []entryCase) {
 	}
 }
 
-// TestHabitatEntries pins the real, vendored habitat/base Assets (#55, NASA-PD):
-// each habitat key resolves to its self-hosted, vendored glb model_ref and suits
-// the intended dome/wall/foundation task type. Mirrors TestResolve/TestSuitsType.
 func TestHabitatEntries(t *testing.T) {
 	t.Parallel()
 	assertEntries(t, DefaultCatalog(), []entryCase{
@@ -287,9 +257,6 @@ func TestHabitatEntries(t *testing.T) {
 	})
 }
 
-// TestPropEntries pins the real, vendored construction-prop Assets (#57, NASA-PD):
-// each prop key resolves to its self-hosted, conditioned glb model_ref and suits
-// the intended panel/mast task type. Mirrors TestHabitatEntries.
 func TestPropEntries(t *testing.T) {
 	t.Parallel()
 	assertEntries(t, DefaultCatalog(), []entryCase{
@@ -299,8 +266,6 @@ func TestPropEntries(t *testing.T) {
 	})
 }
 
-// TestPropTaskTypeCoverage proves the panel/mast task vocabulary each maps to at
-// least one suited construction-prop Asset key (acceptance criterion #57).
 func TestPropTaskTypeCoverage(t *testing.T) {
 	t.Parallel()
 	c := DefaultCatalog()
@@ -318,8 +283,6 @@ func TestPropTaskTypeCoverage(t *testing.T) {
 	}
 }
 
-// TestHabitatTaskTypeCoverage proves the dome/wall/foundation task vocabulary each
-// maps to at least one suited habitat Asset key (acceptance criterion #55).
 func TestHabitatTaskTypeCoverage(t *testing.T) {
 	t.Parallel()
 	c := DefaultCatalog()
@@ -337,8 +300,6 @@ func TestHabitatTaskTypeCoverage(t *testing.T) {
 	}
 }
 
-// TestNewEntryDefaultsIdentity guards the footgun: a zero Transform becomes
-// Identity() (unit scale), never a collapse-to-nothing zero scale.
 func TestNewEntryDefaultsIdentity(t *testing.T) {
 	t.Parallel()
 	e := NewEntry("k", "/a.glb", nil, Transform{})
@@ -352,14 +313,12 @@ func TestNewEntryDefaultsIdentity(t *testing.T) {
 	}
 }
 
-// TestCatalogAccessors covers Get/All/Keys determinism and the duplicate-key
-// last-write-wins rule.
 func TestCatalogAccessors(t *testing.T) {
 	t.Parallel()
 	c := NewCatalog(
 		NewEntry("b", "/b.glb", nil, Identity()),
 		NewEntry("a", "/a1.glb", nil, Identity()),
-		NewEntry("a", "/a2.glb", nil, Identity()), // last write wins
+		NewEntry("a", "/a2.glb", nil, Identity()),
 	)
 	if e, ok := c.Get("a"); !ok || e.ModelRef != "/a2.glb" {
 		t.Fatalf("Get(a) = %+v ok=%v, want last-write /a2.glb", e, ok)
@@ -373,8 +332,6 @@ func TestCatalogAccessors(t *testing.T) {
 	}
 }
 
-// TestDefaultCatalogPopulated proves the global fallback ships curated entries with
-// resolvable self-hosted URLs and a non-zero (Identity-or-better) scale.
 func TestDefaultCatalogPopulated(t *testing.T) {
 	t.Parallel()
 	c := DefaultCatalog()

@@ -12,20 +12,14 @@ import (
 	"time"
 )
 
-// fakeLiveBuilder is a no-network agent.LiveBuilder for the live-mode integration
-// tests: it streams one or more scripted iteration batches (ok=true), or — when
-// Fail is set — emits nothing and returns ok=false to exercise the graceful
-// degrade-to-primitive path. It records each call so a test can assert the live
-// seam was (or was not) reached. A single ops slice is streamed as one iteration;
-// iters (when set) streams each batch as its own iteration, modelling self-correction.
 type fakeLiveBuilder struct {
-	ops   []wire.BuildOp   // single-iteration script (used when iters is nil)
-	iters [][]wire.BuildOp // multi-iteration script: one emit per batch
+	ops   []wire.BuildOp
+	iters [][]wire.BuildOp
 	fail  bool
 
 	mu        sync.Mutex
 	calls     int
-	priorSeen []wire.BuildOp // the priorOps the LAST BuildLive call received (bh-08e)
+	priorSeen []wire.BuildOp
 }
 
 func (f *fakeLiveBuilder) BuildLive(_ context.Context, _ domain.TaskID, _ domain.TaskType, priorOps []wire.BuildOp, emit func([]wire.BuildOp)) bool {
@@ -34,7 +28,7 @@ func (f *fakeLiveBuilder) BuildLive(_ context.Context, _ domain.TaskID, _ domain
 	f.priorSeen = append([]wire.BuildOp(nil), priorOps...)
 	f.mu.Unlock()
 	if f.fail {
-		return false // nothing emitted: the rover degrades to replay/primitive
+		return false
 	}
 	if f.iters != nil {
 		for _, batch := range f.iters {
@@ -46,7 +40,6 @@ func (f *fakeLiveBuilder) BuildLive(_ context.Context, _ domain.TaskID, _ domain
 	return true
 }
 
-// prior returns the priorOps the last BuildLive call received (bh-08e resume seed).
 func (f *fakeLiveBuilder) prior() []wire.BuildOp {
 	f.mu.Lock()
 	defer f.mu.Unlock()
@@ -59,9 +52,6 @@ func (f *fakeLiveBuilder) callCount() int {
 	return f.calls
 }
 
-// liveSpec is a distinctive generated op stream: a single sphere, which neither the
-// foundation primitive stream nor the cache test fixtures start with, so a test can
-// tell live-generated ops apart from the primitive fallback.
 func liveSpec() []wire.BuildOp {
 	return []wire.BuildOp{
 		{Op: wire.BuildOpPlace, Shape: wire.ShapeSphere, Pos: domain.Vec3{X: 0, Y: 1, Z: 0}, Scale: domain.Vec3{X: 0.5, Y: 0.5, Z: 0.5}, Material: wire.Material{Color: "#11ff22"}},
@@ -69,9 +59,6 @@ func liveSpec() []wire.BuildOp {
 	}
 }
 
-// liveHarness boots an embedded NATS server, runs ONE live-mode rover, and
-// collects its build ops and completion. The test drives the rover by publishing
-// an Award directly (the auction is the coordinator's job, covered elsewhere).
 type liveHarness struct {
 	conn      *bus.Conn
 	roverID   domain.RobotID
@@ -156,8 +143,6 @@ func (h *liveHarness) award(t *testing.T, task domain.TaskID) {
 	h.awardMode(t, task, "")
 }
 
-// awardMode publishes an Award carrying a per-Task build mode tag (bh-08c), so a
-// test can prove the WINNING rover honours the Task's mode (not just its Config).
 func (h *liveHarness) awardMode(t *testing.T, task domain.TaskID, mode string) {
 	t.Helper()
 	if err := h.conn.PublishJSON(wire.SubjTaskAward, wire.Award{
@@ -172,9 +157,6 @@ func (h *liveHarness) awardMode(t *testing.T, task domain.TaskID, mode string) {
 	_ = h.conn.Flush()
 }
 
-// awardWithPrior publishes an Award carrying a durable prior patch log (bh-08e), as
-// the coordinator does when re-auctioning a Task whose predecessor was killed
-// mid-live-build. nil priorOps is the fresh-start award.
 func (h *liveHarness) awardWithPrior(t *testing.T, task domain.TaskID, priorOps []wire.BuildOp) {
 	t.Helper()
 	if err := h.conn.PublishJSON(wire.SubjTaskAward, wire.Award{
@@ -201,9 +183,6 @@ func (h *liveHarness) awaitComplete(t *testing.T) {
 	t.Fatalf("rover did not complete the task")
 }
 
-// TestLiveMode_BuildsFromGeneratedOps: a live-mode rover with a LiveBuilder that
-// returns generated ops streams THOSE ops on build.op.<task> (not the primitive
-// stream) and completes the Task — the live work phase end to end.
 func TestLiveMode_BuildsFromGeneratedOps(t *testing.T) {
 	builder := &fakeLiveBuilder{ops: liveSpec()}
 	h := newLiveHarness(t, "R-live", Config{Mode: ModeLive, LiveBuilder: builder})
@@ -238,11 +217,6 @@ func TestLiveMode_BuildsFromGeneratedOps(t *testing.T) {
 	}
 }
 
-// TestLiveMode_StreamsIterationsAndSelfCorrects: a LiveBuilder that emits MULTIPLE
-// iterations streams each iteration's patch batch onto build.op.<task> as separate
-// paced ops (Seq monotonic ACROSS iterations), and a later iteration's move/delete
-// patches update the world IN PLACE — the bh-08d "grows and self-corrects" path.
-// The streamed patch log folds to the final geometry (the renderer's pure fold).
 func TestLiveMode_StreamsIterationsAndSelfCorrects(t *testing.T) {
 	sphere := func(id string, y, scale float64, color string) wire.BuildOp {
 		return wire.BuildOp{
@@ -254,12 +228,10 @@ func TestLiveMode_StreamsIterationsAndSelfCorrects(t *testing.T) {
 			Material: wire.Material{Color: color},
 		}
 	}
-	// Iteration 1: place two pieces. Iteration 2: move p0 up + recolour, delete p1 —
-	// the self-correction (a piece visibly moves/recolours, another vanishes).
 	iter1 := []wire.BuildOp{sphere("p0", 1, 0.5, "#11ff22"), sphere("p1", 2, 0.4, "#11ff22")}
 	iter2 := []wire.BuildOp{
 		{Op: wire.BuildOpMove, ID: "p0", Pos: domain.Vec3{X: 0, Y: 3, Z: 0}, Scale: domain.Vec3{X: 0.5, Y: 0.5, Z: 0.5}},
-		sphere("p0", 3, 0.5, "#ff0000"), // recolour after the move
+		sphere("p0", 3, 0.5, "#ff0000"),
 		{Op: wire.BuildOpDelete, ID: "p1"},
 	}
 	builder := &fakeLiveBuilder{iters: [][]wire.BuildOp{iter1, iter2}}
@@ -283,12 +255,9 @@ func TestLiveMode_StreamsIterationsAndSelfCorrects(t *testing.T) {
 	if len(got) != wantTotal {
 		t.Fatalf("expected %d streamed ops across two iterations, got %d", wantTotal, len(got))
 	}
-	// Seq is monotonic across iterations and the op kinds prove move/delete streamed.
 	assertMonotonicSeq(t, got)
 	assertStreamedKinds(t, got, wire.BuildOpMove, wire.BuildOpDelete)
 
-	// The whole streamed patch log folds to the final geometry: p0 moved+recoloured,
-	// p1 gone — exactly the renderer's pure fold (ADR-0004 / 08a).
 	folded := foldStreamed(t, got)
 	if len(folded) != 1 {
 		t.Fatalf("after delete of p1, fold must leave 1 piece, got %d", len(folded))
@@ -298,8 +267,6 @@ func TestLiveMode_StreamsIterationsAndSelfCorrects(t *testing.T) {
 	}
 }
 
-// foldStreamed flattens the streamed ops into a patch log and folds it, failing the
-// test if the log does not fold cleanly (the renderer's pure fold, ADR-0004 / 08a).
 func foldStreamed(t *testing.T, msgs []wire.BuildOpMsg) []wire.BuildOp {
 	t.Helper()
 	log := make([]wire.BuildOp, len(msgs))
@@ -313,7 +280,6 @@ func foldStreamed(t *testing.T, msgs []wire.BuildOpMsg) []wire.BuildOp {
 	return folded
 }
 
-// assertStreamedKinds fails unless every named op kind appears in the stream.
 func assertStreamedKinds(t *testing.T, msgs []wire.BuildOpMsg, kinds ...string) {
 	t.Helper()
 	for _, k := range kinds {
@@ -323,7 +289,6 @@ func assertStreamedKinds(t *testing.T, msgs []wire.BuildOpMsg, kinds ...string) 
 	}
 }
 
-// assertMonotonicSeq checks each streamed op's Seq is its zero-based position.
 func assertMonotonicSeq(t *testing.T, msgs []wire.BuildOpMsg) {
 	t.Helper()
 	for i, m := range msgs {
@@ -333,7 +298,6 @@ func assertMonotonicSeq(t *testing.T, msgs []wire.BuildOpMsg) {
 	}
 }
 
-// streamedKind reports whether any streamed op carries the given op kind.
 func streamedKind(msgs []wire.BuildOpMsg, kind string) bool {
 	for _, m := range msgs {
 		if m.Op.Op == kind {
@@ -343,21 +307,12 @@ func streamedKind(msgs []wire.BuildOpMsg, kind string) bool {
 	return false
 }
 
-// TestLiveMode_ResumeSeedsBuilderAndContinuesSeq (bh-08e): when a live-mode rover
-// is awarded a Task that ALREADY carries a durable prior patch log (the predecessor
-// was killed mid-build), the rover (1) hands the prior ops to the LiveBuilder as the
-// resume seed and (2) continues Seq numbering AFTER the prior ops, so the
-// coordinator's append-by-Seq stays monotonic and gap-free across the handoff. It
-// emits only the NEW ops — never re-placing the durable prior ops — and completes.
 func TestLiveMode_ResumeSeedsBuilderAndContinuesSeq(t *testing.T) {
-	// The predecessor streamed 3 ops (Seq 0..2) before it was killed; the Task came
-	// back UNCLAIMED with this patch log intact.
 	prior := []wire.BuildOp{
 		{Op: wire.BuildOpPlace, ID: "p0", Shape: wire.ShapeBox, Pos: domain.Vec3{X: 0, Y: -1, Z: 0}, Scale: domain.Vec3{X: 1.8, Y: 0.3, Z: 1.8}, Material: wire.Material{Color: "#cfcfd6"}},
 		{Op: wire.BuildOpPlace, ID: "p1", Shape: wire.ShapeCylinder, Pos: domain.Vec3{X: -0.6, Y: -0.2, Z: -0.6}, Scale: domain.Vec3{X: 0.2, Y: 0.9, Z: 0.2}, Material: wire.Material{Color: "#b8b8c2"}},
 		{Op: wire.BuildOpPlace, ID: "p2", Shape: wire.ShapeCylinder, Pos: domain.Vec3{X: 0.6, Y: -0.2, Z: 0.6}, Scale: domain.Vec3{X: 0.2, Y: 0.9, Z: 0.2}, Material: wire.Material{Color: "#b8b8c2"}},
 	}
-	// The replacement's builder continues the structure with two more pieces.
 	builder := &fakeLiveBuilder{ops: liveSpec()}
 	h := newLiveHarness(t, "R-resume", Config{Mode: ModeLive, LiveBuilder: builder})
 
@@ -374,13 +329,10 @@ func TestLiveMode_ResumeSeedsBuilderAndContinuesSeq(t *testing.T) {
 		t.Fatalf("resuming rover did not complete the task")
 	}
 
-	// (1) The prior patch log reached the builder as the resume seed.
 	if seen := builder.prior(); len(seen) != len(prior) {
 		t.Fatalf("resume must hand the prior patch log to the builder: got %d ops, want %d", len(seen), len(prior))
 	}
 
-	// (2) The rover streamed only the NEW ops, with Seq continuing AFTER the prior
-	// ops (3,4,...) — never restarting at 0, so the coordinator append stays monotonic.
 	got := h.ops()
 	if len(got) != len(liveSpec()) {
 		t.Fatalf("resume must stream only the NEW ops, got %d want %d", len(got), len(liveSpec()))
@@ -393,10 +345,6 @@ func TestLiveMode_ResumeSeedsBuilderAndContinuesSeq(t *testing.T) {
 	}
 }
 
-// TestLiveMode_ForcedErrorDegradesToPrimitive: a LiveBuilder that returns ok=false
-// (a model fault / exhaustion) must NOT crash the rover — it degrades to the
-// deterministic primitive stream and STILL completes the Task. This is the
-// graceful-fallback acceptance for bh-08 (failure-heal proper is slice 08f).
 func TestLiveMode_ForcedErrorDegradesToPrimitive(t *testing.T) {
 	builder := &fakeLiveBuilder{fail: true}
 	h := newLiveHarness(t, "R-live-fail", Config{Mode: ModeLive, LiveBuilder: builder})
@@ -417,8 +365,6 @@ func TestLiveMode_ForcedErrorDegradesToPrimitive(t *testing.T) {
 		t.Fatalf("the live seam should have been reached (and then fallen back)")
 	}
 
-	// The streamed ops must be the deterministic foundation primitive stream — a
-	// box first, NOT the live spheres — proving the graceful degrade.
 	got := h.ops()
 	want := buildOpsFor("foundation-live", typeFoundation)
 	if len(got) != len(want) {
@@ -429,13 +375,8 @@ func TestLiveMode_ForcedErrorDegradesToPrimitive(t *testing.T) {
 	}
 }
 
-// TestPerTaskLive_ReplayConfigRoverBuildsLive is the bh-08c headline: a rover whose
-// Config.Mode is the REPLAY default still builds LIVE when it wins a Task whose
-// award carries mode="live". The per-Task tag wins over the per-rover Config, so the
-// operator's per-placement choice is honoured. The rover streams the GENERATED ops.
 func TestPerTaskLive_ReplayConfigRoverBuildsLive(t *testing.T) {
 	builder := &fakeLiveBuilder{ops: liveSpec()}
-	// Config.Mode left at the replay default; the award carries the live tag.
 	h := newLiveHarness(t, "R-pertask-live", Config{LiveBuilder: builder})
 
 	h.awardMode(t, "foundation-live", string(ModeLive))
@@ -455,10 +396,6 @@ func TestPerTaskLive_ReplayConfigRoverBuildsLive(t *testing.T) {
 	}
 }
 
-// TestPerTaskReplay_LiveConfigRoverReplays is the converse: a rover whose
-// Config.Mode is LIVE still REPLAYS (never reaches the LiveBuilder) when it wins a
-// Task whose award carries mode="replay". So a replay-tagged placement always
-// replays, even on a live-configured rover.
 func TestPerTaskReplay_LiveConfigRoverReplays(t *testing.T) {
 	builder := &fakeLiveBuilder{ops: liveSpec()}
 	h := newLiveHarness(t, "R-pertask-replay", Config{Mode: ModeLive, LiveBuilder: builder})
@@ -479,23 +416,20 @@ func TestPerTaskReplay_LiveConfigRoverReplays(t *testing.T) {
 	}
 }
 
-// TestEffectiveMode is the pure routing table for the per-Task/per-rover mode
-// resolution (bh-08c): the Task tag wins; an empty tag falls back to Config.Mode;
-// any non-"live" value is replay.
 func TestEffectiveMode(t *testing.T) {
 	cases := []struct {
 		taskMode string
 		cfgMode  Mode
 		want     Mode
 	}{
-		{"live", ModeReplay, ModeLive},   // task tag wins over replay config
-		{"live", ModeLive, ModeLive},     // both live
-		{"replay", ModeLive, ModeReplay}, // explicit replay tag beats live config
+		{"live", ModeReplay, ModeLive},
+		{"live", ModeLive, ModeLive},
+		{"replay", ModeLive, ModeReplay},
 		{"replay", ModeReplay, ModeReplay},
-		{"", ModeLive, ModeLive},        // empty tag falls back to live config (cmd/agent)
-		{"", ModeReplay, ModeReplay},    // empty tag, replay config: replay default
-		{"", "", ModeReplay},            // both empty: replay default
-		{"bogus", ModeLive, ModeReplay}, // unknown tag never opts into live
+		{"", ModeLive, ModeLive},
+		{"", ModeReplay, ModeReplay},
+		{"", "", ModeReplay},
+		{"bogus", ModeLive, ModeReplay},
 	}
 	for _, c := range cases {
 		if got := effectiveMode(c.taskMode, c.cfgMode); got != c.want {
@@ -504,11 +438,6 @@ func TestEffectiveMode(t *testing.T) {
 	}
 }
 
-// TestDispositionNoOps_ModelFailureKillsPastThreshold is the bh-08f core decision,
-// white-boxed: a non-model fall-back always degrades; a model failure degrades while
-// UNDER the rover's threshold (a transient blip should not orphan the Task) but, once
-// it crosses the threshold, KILLS the rover (so the lease TTL-expires and the Task
-// re-auctions) and returns liveModelDied.
 func TestDispositionNoOps_ModelFailureKillsPastThreshold(t *testing.T) {
 	aw := wire.Award{TaskID: "t1", Type: typeFoundation}
 
@@ -537,8 +466,8 @@ func TestDispositionNoOps_ModelFailureKillsPastThreshold(t *testing.T) {
 	t.Run("model failure at threshold kills", func(t *testing.T) {
 		st := newRover(domain.Vec2{})
 		cfg := Config{LiveFailureThreshold: 2}
-		_ = dispositionNoOps(cfg, st, aw, true)                               // 1st: degrade
-		if got := dispositionNoOps(cfg, st, aw, true); got != liveModelDied { // 2nd: cross threshold
+		_ = dispositionNoOps(cfg, st, aw, true)
+		if got := dispositionNoOps(cfg, st, aw, true); got != liveModelDied {
 			t.Fatalf("the model failure that crosses the threshold must kill, got %v", got)
 		}
 		if _, _, _, alive := st.snapshot(); alive {
@@ -547,9 +476,6 @@ func TestDispositionNoOps_ModelFailureKillsPastThreshold(t *testing.T) {
 	})
 }
 
-// TestLiveFailureThreshold_DefaultsAndClamps: zero ⇒ the default; a positive value is
-// honoured; a non-positive value never silently disables the death path (clamps to
-// the default, which is ≥ 1).
 func TestLiveFailureThreshold_DefaultsAndClamps(t *testing.T) {
 	if got := (Config{}).liveFailureThreshold(); got != defaultLiveFailureThreshold {
 		t.Fatalf("zero threshold must default to %d, got %d", defaultLiveFailureThreshold, got)
@@ -562,13 +488,8 @@ func TestLiveFailureThreshold_DefaultsAndClamps(t *testing.T) {
 	}
 }
 
-// TestReplayMode_NeverReachesLiveBuilder: the default replay mode must NOT call the
-// LiveBuilder even when one is set — replay stays byte-for-byte model-free. With no
-// BlueprintID it streams the primitive foundation stream and completes.
 func TestReplayMode_NeverReachesLiveBuilder(t *testing.T) {
 	builder := &fakeLiveBuilder{ops: liveSpec()}
-	// Mode defaults to replay (empty) — explicitly leave LiveBuilder set to prove
-	// replay never reaches it.
 	h := newLiveHarness(t, "R-replay", Config{LiveBuilder: builder})
 
 	h.award(t, "foundation-live")

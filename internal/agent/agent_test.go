@@ -12,15 +12,10 @@ import (
 	"time"
 )
 
-// newRover builds a rover at pos with a full charge for the pure state-method
-// tests. These are white-box: they drive moveToward/drainOverTime directly with
-// no NATS bus and no real sleeping (ADR-0001: movement is visual interpolation).
 func newRover(pos domain.Vec2) *rover {
 	return &rover{pos: pos, battery: 1.0, alive: true, down: make(chan struct{})}
 }
 
-// isClosed reports whether ch has been closed, without blocking. Used to assert
-// that kill() closed the current outage channel.
 func isClosed(ch chan struct{}) bool {
 	select {
 	case <-ch:
@@ -30,9 +25,6 @@ func isClosed(ch chan struct{}) bool {
 	}
 }
 
-// moveAllTheWay drives the rover toward target one maxStep at a time until it
-// reports arrival, returning the number of steps taken. It bounds the loop so a
-// non-converging method fails the test instead of hanging.
 func moveAllTheWay(t *testing.T, st *rover, target domain.Vec2, maxStep float64) int {
 	t.Helper()
 	const limit = 100000
@@ -54,8 +46,6 @@ func TestMoveTowardNeverOvershoots(t *testing.T) {
 	for range 1000 {
 		arrived := st.moveToward(target, maxStep)
 		d := st.pos.Dist(target)
-		// Distance to target must be monotonically non-increasing and never
-		// negative (no overshoot past the target).
 		if d > prev+1e-9 {
 			t.Fatalf("overshoot: distance grew from %v to %v", prev, d)
 		}
@@ -118,7 +108,6 @@ func TestMoveTowardAlreadyAtTargetArrivesWithoutDraining(t *testing.T) {
 
 func TestMoveTowardWithinEpsilonArrivesWithoutDraining(t *testing.T) {
 	target := domain.Vec2{X: 0, Y: 0}
-	// Sit just inside the arrival epsilon.
 	st := newRover(domain.Vec2{X: arriveEps / 2, Y: 0})
 	maxStep := roverSpeed * moveStep.Seconds()
 
@@ -141,7 +130,7 @@ func TestFullDriveDrainsByDistanceTimesRate(t *testing.T) {
 		target domain.Vec2
 	}{
 		{"axis", domain.Vec2{X: 0, Y: 0}, domain.Vec2{X: 10, Y: 0}},
-		{"diagonal", domain.Vec2{X: 0, Y: 0}, domain.Vec2{X: 3, Y: 4}}, // dist 5
+		{"diagonal", domain.Vec2{X: 0, Y: 0}, domain.Vec2{X: 3, Y: 4}},
 		{"negative", domain.Vec2{X: 5, Y: 5}, domain.Vec2{X: -5, Y: -5}},
 	}
 	maxStep := roverSpeed * moveStep.Seconds()
@@ -164,7 +153,6 @@ func TestWorkPhaseDrainsByTime(t *testing.T) {
 	st := newRover(domain.Vec2{X: 0, Y: 0})
 	before := st.battery
 
-	// Simulate the work loop's per-tick drain over the whole work duration.
 	ticks := int(workDuration / moveStep)
 	perTick := drainPerWorkSec * moveStep.Seconds()
 	for range ticks {
@@ -178,7 +166,6 @@ func TestWorkPhaseDrainsByTime(t *testing.T) {
 }
 
 func TestBatteryFlooredAtMinOverLongDrive(t *testing.T) {
-	// A drive so long the un-floored drain would push battery far below zero.
 	target := domain.Vec2{X: 100000, Y: 0}
 	st := newRover(domain.Vec2{X: 0, Y: 0})
 	maxStep := roverSpeed * moveStep.Seconds()
@@ -198,7 +185,7 @@ func TestBatteryFlooredAtMinOverLongDrive(t *testing.T) {
 
 func TestDrainOverTimeFloorsAtMin(t *testing.T) {
 	st := newRover(domain.Vec2{X: 0, Y: 0})
-	st.drainOverTime(10.0) // way more than a full charge
+	st.drainOverTime(10.0)
 	if st.battery != minBattery {
 		t.Fatalf("drainOverTime did not floor at minBattery: got %v", st.battery)
 	}
@@ -223,8 +210,6 @@ func TestClaimDeduplicatesInFlightTasks(t *testing.T) {
 func TestKillIsRecoverableOutageInPlace(t *testing.T) {
 	const pos = 42.0
 	st := newRover(domain.Vec2{X: pos, Y: pos})
-	// A long window so the auto-revive timer never fires during the assertions;
-	// we drive revive() directly below.
 	st.recoverAfter = time.Hour
 	down := st.down
 
@@ -239,17 +224,13 @@ func TestKillIsRecoverableOutageInPlace(t *testing.T) {
 		t.Fatalf("kill should clear alive (rover out of service)")
 	}
 
-	// A second kill while already down is a harmless no-op: it must not panic by
-	// double-closing down and must not reschedule the revive timer.
 	st.kill()
 	if _, _, _, alive := st.snapshot(); alive {
 		t.Fatalf("rover should remain down after a second kill")
 	}
 	st.stopTimers()
 
-	// Revive brings the rover back IN PLACE: alive again, at the SAME position,
-	// with a FRESH (open) down channel so a future kill has its own signal.
-	st.settleAfter = time.Hour // hold the settle window open for the assertions
+	st.settleAfter = time.Hour
 	st.revive()
 	gotPos, _, _, alive := st.snapshot()
 	if !alive {
@@ -265,8 +246,6 @@ func TestKillIsRecoverableOutageInPlace(t *testing.T) {
 		t.Fatalf("the revived rover's down channel should be open (killable again)")
 	}
 
-	// A just-revived rover SETTLES: alive but holding station (not bidding) until
-	// the settle window elapses.
 	if !st.isRecovering() {
 		t.Fatalf("a just-revived rover should be in its settle window (recovering)")
 	}
@@ -275,7 +254,6 @@ func TestKillIsRecoverableOutageInPlace(t *testing.T) {
 		t.Fatalf("endSettle should clear the settle window so the rover bids again")
 	}
 
-	// And it can be killed again on the fresh channel — the outage is repeatable.
 	st.recoverAfter = time.Hour
 	fresh := st.down
 	st.kill()
@@ -305,7 +283,6 @@ func TestRefuseRecordsTaskAndPredicate(t *testing.T) {
 func TestSetFailureProbDefaultsToZeroAndClamps(t *testing.T) {
 	st := newRover(domain.Vec2{X: 0, Y: 0})
 
-	// Default (issue 08): injection off, so the roll can never fire.
 	if got := st.failureProb(); got != 0 {
 		t.Fatalf("default failureProb = %v, want 0", got)
 	}
@@ -331,14 +308,8 @@ func TestSetFailureProbDefaultsToZeroAndClamps(t *testing.T) {
 	}
 }
 
-// --- Integration tests (issue 08): the random-failure injector on the bus. ---
-
 const typeFoundation domain.TaskType = "foundation"
 
-// faultHarness boots an embedded NATS server, runs ONE rover via agent.Run, and
-// gives the test an observer connection plus collectors for the rover's Complete
-// and Telemetry streams. The test drives the rover by publishing Award directly
-// (the auction itself is the coordinator's job and is covered elsewhere).
 type faultHarness struct {
 	conn      *bus.Conn
 	roverID   domain.RobotID
@@ -393,8 +364,6 @@ func newFaultHarness(t *testing.T, id domain.RobotID) *faultHarness {
 	}
 	t.Cleanup(unsubComplete)
 
-	// Watch this rover's telemetry: note whether we ever see it alive AFTER the
-	// fault would have struck (so we can assert it survived the abandonment).
 	unsubTelemetry, err := bus.SubscribeJSON(obs, wire.SubjTelemetry(id), func(tm wire.Telemetry) {
 		mu.Lock()
 		if tm.Alive {
@@ -443,23 +412,14 @@ func (h *faultHarness) award(t *testing.T, task domain.TaskID, pos domain.Vec2) 
 	_ = h.conn.Flush()
 }
 
-// TestRandomFaultAbandonsTaskButKeepsRoverAlive: with failProb=1.0 an awarded
-// rover ABANDONS its task — it never publishes Complete — yet stays alive (keeps
-// emitting alive=true telemetry) and frees its load so it can bid again. This is
-// the silent-fault heal path of issue 08.
 func TestRandomFaultAbandonsTaskButKeepsRoverAlive(t *testing.T) {
 	h := newFaultHarness(t, "R-fault")
 
 	h.setFailureProb(t, 1.0)
-	// Give the broadcast control a beat to land before the award.
 	time.Sleep(50 * time.Millisecond)
 
-	// Award a task far enough that the fault ticker (250ms) fires during the
-	// drive, well before the rover could ever complete.
 	h.award(t, "task-fault", domain.Vec2{X: 40, Y: 0})
 
-	// Within a bounded window the rover must NOT complete the task (it abandons),
-	// and it must still report itself alive.
 	deadline := time.Now().Add(3 * time.Second)
 	for time.Now().Before(deadline) {
 		if h.completes() > 0 {
@@ -471,7 +431,6 @@ func TestRandomFaultAbandonsTaskButKeepsRoverAlive(t *testing.T) {
 		t.Fatalf("rover never reported alive telemetry: a fault must NOT kill the rover")
 	}
 
-	// It can bid again: drop the probability and re-award; it now completes.
 	h.setFailureProb(t, 0)
 	time.Sleep(50 * time.Millisecond)
 	h.award(t, "task-heal", domain.Vec2{X: 1, Y: 0})
@@ -479,19 +438,16 @@ func TestRandomFaultAbandonsTaskButKeepsRoverAlive(t *testing.T) {
 	completeDeadline := time.Now().Add(3 * time.Second)
 	for time.Now().Before(completeDeadline) {
 		if h.completes() > 0 {
-			return // healed: the same rover completed a task once injection was off
+			return
 		}
 		time.Sleep(10 * time.Millisecond)
 	}
 	t.Fatalf("rover did not complete task-heal after failProb dropped to 0")
 }
 
-// TestNoFaultCompletesNormally: with failProb=0 (the default / slider at zero)
-// injection is off, so an awarded rover completes its task normally.
 func TestNoFaultCompletesNormally(t *testing.T) {
 	h := newFaultHarness(t, "R-clean")
 
-	// Explicitly set 0 to prove the slider-at-zero path; default is already 0.
 	h.setFailureProb(t, 0)
 	time.Sleep(50 * time.Millisecond)
 
@@ -507,8 +463,6 @@ func TestNoFaultCompletesNormally(t *testing.T) {
 	t.Fatalf("rover did not complete task-clean with failProb=0")
 }
 
-// waitFor polls cond every 10ms until it returns true or the timeout elapses,
-// reporting whether the condition was met within the window.
 func waitFor(timeout time.Duration, cond func() bool) bool {
 	deadline := time.Now().Add(timeout)
 	for time.Now().Before(deadline) {
@@ -520,9 +474,6 @@ func waitFor(timeout time.Duration, cond func() bool) bool {
 	return false
 }
 
-// recoverHarness boots an embedded NATS server, runs ONE rover, and watches its
-// telemetry/complete streams to track a kill→revive-in-place cycle: where it went
-// down, whether it came back at that exact spot, and how many tasks it completed.
 type recoverHarness struct {
 	conn    *bus.Conn
 	roverID domain.RobotID
@@ -549,7 +500,7 @@ func newRecoverHarness(t *testing.T, id domain.RobotID) *recoverHarness {
 		Battery:        1.0,
 		Capabilities:   []domain.Capability{domain.Capability(typeFoundation)},
 		HeartbeatEvery: 100 * time.Millisecond,
-		RecoverAfter:   500 * time.Millisecond, // short outage so the test stays fast
+		RecoverAfter:   500 * time.Millisecond,
 	}
 
 	roverConn, err := bus.Connect(ctx, url, bus.ConnectOptions{Name: "rover", MaxWait: 5 * time.Second})
@@ -587,9 +538,8 @@ func (h *recoverHarness) onTelemetry(tm wire.Telemetry) {
 	defer h.mu.Unlock()
 	if !tm.Alive && !h.sawDead {
 		h.sawDead = true
-		h.deadPos = tm.Pos // the position it went down at
+		h.deadPos = tm.Pos
 	}
-	// A revival counts only if it comes back at the spot it died (not at start).
 	if h.sawDead && tm.Alive && tm.Pos == h.deadPos {
 		h.sawReviveInPlace = true
 	}
@@ -644,22 +594,13 @@ func (h *recoverHarness) kill(t *testing.T) {
 	_ = h.conn.Flush()
 }
 
-// TestKillRecoversInPlaceOverBus is the end-to-end proof of the recoverable
-// outage: a rover awarded a FAR task is killed mid-drive. It must (1) go
-// alive=false, (2) stay STOPPED where it failed — not snap back to its start
-// position — and (3) revive at that SAME failure position after the outage
-// window, then complete a fresh task. This is the realistic-failure behaviour:
-// the rover does not vanish and does not teleport home.
 func TestKillRecoversInPlaceOverBus(t *testing.T) {
 	h := newRecoverHarness(t, "R-recover")
 
-	// Award a FAR task so the rover is mid-drive (not at origin) when we kill it,
-	// let it drive away from the origin, then kill it mid-flight.
 	h.award(t, "task-far", domain.Vec2{X: 60, Y: 0})
 	time.Sleep(250 * time.Millisecond)
 	h.kill(t)
 
-	// It must report down, away from the origin, and never complete the abandoned task.
 	if !waitFor(2*time.Second, h.sawDown) {
 		t.Fatalf("rover never reported alive=false after kill")
 	}
@@ -670,12 +611,10 @@ func TestKillRecoversInPlaceOverBus(t *testing.T) {
 		t.Fatalf("killed rover completed its abandoned task (should self-heal via TTL, not complete)")
 	}
 
-	// After the outage window it must revive AT THE SAME failure position.
 	if !waitFor(2*time.Second, h.revivedInPlace) {
 		t.Fatalf("rover did not revive at its failure position within the outage window")
 	}
 
-	// The revived rover is fully back in service: award a nearby task; it completes.
 	h.award(t, "task-after", h.deadPosition())
 	if !waitFor(3*time.Second, func() bool { return h.completes() > 0 }) {
 		t.Fatalf("revived rover did not complete a fresh task")

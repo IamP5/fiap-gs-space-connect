@@ -1,11 +1,3 @@
-// EarthPanel — the DELAYED Earth telemetry, bottom-right (issue 09).
-//
-// Pure function of props: it renders what EARTH thinks is happening, derived
-// from the lagging earth.uplink frame. Pass the live snapshot's `at` so the
-// panel can show the lag (snapshotAt - earth.at, clamped ≥ 0). At high latency
-// this panel trails the live TaskLedger — that visible gap is the proof that
-// "Earth never knew" while the swarm already healed locally. Memoized; repaints
-// only when the earth frame or the live stamp changes.
 
 import { memo } from "react";
 import { earthLagMs, formatLag, taskProgress, LIVE_THRESHOLD_MS } from "../lib/earth";

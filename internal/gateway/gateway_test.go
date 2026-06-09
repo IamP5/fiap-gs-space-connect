@@ -17,9 +17,6 @@ import (
 	"github.com/coder/websocket"
 )
 
-// startGateway brings up an embedded NATS server, a bus connection, and a
-// running gateway HTTP server bound to an ephemeral port. It returns the bus
-// connection (for publishing/subscribing in tests) and the base http address.
 func startGateway(t *testing.T) (*bus.Conn, string) {
 	t.Helper()
 
@@ -57,8 +54,6 @@ func startGateway(t *testing.T) (*bus.Conn, string) {
 	return conn, addr
 }
 
-// statusLeased is the LEASED task status string reused across gateway test
-// fixtures (a constant keeps goconst happy).
 const statusLeased = "LEASED"
 
 func sampleSnapshot() wire.Snapshot {
@@ -75,15 +70,10 @@ func sampleSnapshot() wire.Snapshot {
 	}
 }
 
-// closeWS closes a websocket client and ignores the error: in tests the peer is
-// the gateway under test and a close-race on teardown is not a failure.
 func closeWS(ws *websocket.Conn) {
 	_ = ws.Close(websocket.StatusNormalClosure, "")
 }
 
-// dialWS opens a websocket client to the gateway's /ws endpoint. The upgrade
-// response body is drained/closed (bodyclose): on a successful 101 the body is
-// empty, but it must still be closed.
 func dialWS(ctx context.Context, t *testing.T, addr string) *websocket.Conn {
 	t.Helper()
 	ws, resp, err := websocket.Dial(ctx, fmt.Sprintf("ws://%s/ws", addr), nil)
@@ -96,7 +86,6 @@ func dialWS(ctx context.Context, t *testing.T, addr string) *websocket.Conn {
 	return ws
 }
 
-// readSnapshot reads one text frame and unmarshals it as a wire.Snapshot.
 func readSnapshot(ctx context.Context, t *testing.T, ws *websocket.Conn) wire.Snapshot {
 	t.Helper()
 	typ, data, err := ws.Read(ctx)
@@ -113,8 +102,6 @@ func readSnapshot(ctx context.Context, t *testing.T, ws *websocket.Conn) wire.Sn
 	return snap
 }
 
-// TestSnapshotRoundTrip publishes a snapshot on NATS and asserts a connected
-// websocket client receives it verbatim.
 func TestSnapshotRoundTrip(t *testing.T) {
 	conn, addr := startGateway(t)
 
@@ -125,8 +112,6 @@ func TestSnapshotRoundTrip(t *testing.T) {
 	defer closeWS(ws)
 
 	want := sampleSnapshot()
-	// Publish repeatedly until the client receives one: the client may connect
-	// a hair after the first publish, so we drive the fan-out deterministically.
 	got := publishUntilReceived(ctx, t, conn, ws, want)
 
 	if got.Type != want.Type || got.At != want.At || got.Connected != want.Connected {
@@ -140,8 +125,6 @@ func TestSnapshotRoundTrip(t *testing.T) {
 	}
 }
 
-// publishUntilReceived publishes want every 50ms until ws delivers a matching
-// snapshot or ctx expires. Deterministic: no fixed sleeps to "hope" past races.
 func publishUntilReceived(ctx context.Context, t *testing.T, conn *bus.Conn, ws *websocket.Conn, want wire.Snapshot) wire.Snapshot {
 	t.Helper()
 
@@ -187,8 +170,6 @@ func publishUntilReceived(ctx context.Context, t *testing.T, conn *bus.Conn, ws 
 	}
 }
 
-// TestControlRelay asserts a control message sent by the browser is published
-// on wire.SubjControl.
 func TestControlRelay(t *testing.T) {
 	conn, addr := startGateway(t)
 
@@ -213,8 +194,6 @@ func TestControlRelay(t *testing.T) {
 	want := wire.Control{Cmd: "kill", Robot: "R1"}
 	payload, _ := json.Marshal(want)
 
-	// Send repeatedly until the relay lands: client write may race the server's
-	// read-loop spin-up.
 	deadline := time.After(5 * time.Second)
 	send := time.NewTicker(50 * time.Millisecond)
 	defer send.Stop()
@@ -238,8 +217,6 @@ func TestControlRelay(t *testing.T) {
 	}
 }
 
-// TestMalformedControlIgnored asserts a garbage inbound frame does not kill the
-// connection: a subsequent valid snapshot still flows.
 func TestMalformedControlIgnored(t *testing.T) {
 	conn, addr := startGateway(t)
 
@@ -253,16 +230,12 @@ func TestMalformedControlIgnored(t *testing.T) {
 		t.Fatalf("ws write garbage: %v", err)
 	}
 
-	// Connection must survive: a published snapshot still arrives.
 	got := publishUntilReceived(ctx, t, conn, ws, sampleSnapshot())
 	if got.Type != "snapshot" {
 		t.Fatalf("expected snapshot after malformed frame, got %+v", got)
 	}
 }
 
-// TestSnapshotOnConnect asserts a client that connects after a snapshot was
-// published immediately receives the latest cached snapshot, with no further
-// publish.
 func TestSnapshotOnConnect(t *testing.T) {
 	conn, addr := startGateway(t)
 
@@ -271,13 +244,10 @@ func TestSnapshotOnConnect(t *testing.T) {
 
 	want := sampleSnapshot()
 
-	// First client primes the gateway's latest-snapshot cache. We wait until it
-	// actually receives one, so we know the gateway has cached it.
 	primer := dialWS(ctx, t, addr)
 	_ = publishUntilReceived(ctx, t, conn, primer, want)
 	closeWS(primer)
 
-	// Second client connects with no new publish and must get the cached state.
 	ws := dialWS(ctx, t, addr)
 	defer closeWS(ws)
 
@@ -287,7 +257,6 @@ func TestSnapshotOnConnect(t *testing.T) {
 	}
 }
 
-// TestHealthz asserts /healthz returns 200 and reflects bus connected=true.
 func TestHealthz(t *testing.T) {
 	_, addr := startGateway(t)
 
@@ -320,13 +289,6 @@ func TestHealthz(t *testing.T) {
 	}
 }
 
-// TestCrossOriginUpgradeSucceeds is the regression guard for the cross-origin
-// 403: browsers connect from the dashboard origin (e.g. :5173) to the gateway
-// (:8080), which coder/websocket's Accept rejects with HTTP 403 unless
-// OriginPatterns is set. A plain Go websocket.Dial sends no Origin header, so
-// this test forges a browser Origin to exercise the check, then asserts the
-// upgrade completes (101) and a published snapshot is received. Removing the
-// OriginPatterns fix in gateway.go makes Dial fail here with status 403.
 func TestCrossOriginUpgradeSucceeds(t *testing.T) {
 	conn, addr := startGateway(t)
 
@@ -358,26 +320,18 @@ func TestCrossOriginUpgradeSucceeds(t *testing.T) {
 	}
 }
 
-// TestSlowClientDoesNotBlock connects two clients; one never reads (a laggard).
-// A fast client must keep receiving snapshots while the laggard is dropped,
-// proving the fan-out never blocks on a slow consumer.
 func TestSlowClientDoesNotBlock(t *testing.T) {
 	conn, addr := startGateway(t)
 
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 	defer cancel()
 
-	// Laggard: connects but never reads after the initial frame.
 	laggard := dialWS(ctx, t, addr)
 	defer closeWS(laggard)
 
-	// Fast client.
 	fast := dialWS(ctx, t, addr)
 	defer closeWS(fast)
 
-	// Flood snapshots so the laggard's buffer overflows and it is dropped, while
-	// the fast client keeps draining. We assert the fast client receives an
-	// up-to-date snapshot well after the flood begins.
 	stop := make(chan struct{})
 	defer close(stop)
 	go func() {
@@ -397,8 +351,6 @@ func TestSlowClientDoesNotBlock(t *testing.T) {
 		}
 	}()
 
-	// The fast client must keep receiving frames; read several and require the
-	// stream keeps advancing.
 	var last domain.Tick = -1
 	advanced := 0
 	for advanced < 5 {

@@ -1,11 +1,3 @@
-// useSnapshot — owns the single piece of world state: the latest Snapshot.
-//
-// The dashboard is a pure re-render of that snapshot (TECHSPEC §4, ADR-0004):
-// there is no client-side simulation and no timer that mutates world state.
-// This hook only manages the transport — open the socket, keep the latest
-// frame, auto-reconnect with capped exponential backoff so the dashboard
-// survives a gateway restart — plus a `wsOpen` flag for the connected
-// indicator and a no-op-friendly `send` for the browser → server control path.
 
 import { useCallback, useEffect, useRef, useState } from "react";
 import {
@@ -24,15 +16,10 @@ const BACKOFF_MIN_MS = 500;
 const BACKOFF_MAX_MS = 10_000;
 
 export type Connection = {
-  /** Latest world snapshot, or null before the first frame arrives. */
   snapshot: Snapshot | null;
-  /** Latest DELAYED Earth-uplink view (issue 09), or null before one arrives. */
   earth: EarthUplink | null;
-  /** True while the WebSocket itself is OPEN. */
   wsOpen: boolean;
-  /** The WS URL in use (for display). */
   url: string;
-  /** Send a control message to the gateway (no-op if the socket is not open). */
   send: (c: Control) => void;
 };
 
@@ -43,7 +30,7 @@ export function useSnapshot(): Connection {
   const socketRef = useRef<WebSocket | null>(null);
 
   useEffect(() => {
-    if (MOCK) return; // mock mode: static snapshot, no socket.
+    if (MOCK) return;
 
     let attempt = 0;
     let reconnectTimer: ReturnType<typeof setTimeout> | undefined;
@@ -61,29 +48,25 @@ export function useSnapshot(): Connection {
       socketRef.current = ws;
 
       ws.onopen = () => {
-        attempt = 0; // reset backoff on a healthy connection
+        attempt = 0;
         setWsOpen(true);
       };
 
       ws.onmessage = (ev) => {
         try {
-          // Parse once, then route by `type`: a Snapshot is the live world; an
-          // EarthUplink is its DELAYED copy (issue 09). They share the socket but
-          // are tracked separately so the Earth panel can lag the live ledger.
           const parsed = JSON.parse(ev.data as string);
           if (isSnapshot(parsed)) setSnapshot(parsed);
           else if (isEarthUplink(parsed)) setEarth(parsed);
         } catch {
-          // Ignore malformed frames; never crash the pure render.
+          return;
         }
       };
 
       ws.onerror = () => {
-        // onclose handles the reconnect; closing here avoids a leaked socket.
         try {
           ws.close();
         } catch {
-          /* already closing */
+          return;
         }
       };
 
@@ -96,7 +79,6 @@ export function useSnapshot(): Connection {
 
     const scheduleReconnect = () => {
       if (disposed) return;
-      // Capped exponential backoff with a little jitter.
       const base = Math.min(BACKOFF_MAX_MS, BACKOFF_MIN_MS * 2 ** attempt);
       const delay = base / 2 + Math.random() * (base / 2);
       attempt += 1;
@@ -115,7 +97,7 @@ export function useSnapshot(): Connection {
         try {
           ws.close();
         } catch {
-          /* noop */
+          return;
         }
       }
     };

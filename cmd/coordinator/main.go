@@ -1,8 +1,3 @@
-// Command coordinator runs the SwarmBuild coordinator against the NATS bus named
-// by NATS_URL: the live brain behind the dashboard (auction, Lease/Expiry,
-// Re-auction, World Model). It boots an EMPTY map; rovers join over NATS as their
-// own pods and idle until an operator drops a Blueprint from the dashboard for
-// them to build.
 package main
 
 import (
@@ -24,9 +19,6 @@ func main() {
 	}
 }
 
-// run loads the sandbox scenario and runs the coordinator until the context is
-// cancelled. It is split out from main so the deferred signal stop runs before
-// the process exits on error.
 func run() error {
 	natsURL := os.Getenv("NATS_URL")
 	if natsURL == "" {

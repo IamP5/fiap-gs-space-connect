@@ -1,10 +1,3 @@
-# Rover R5 — its OWN Pod. This is the whole point of the pod-per-rover variant:
-# each Rover is a standalone process (--mode=container) joining the swarm over
-# NATS, so the killer can `kubectl delete pod -l rover=R5` to take exactly this
-# Rover offline. Its Lease then TTL-expires and the swarm Self-heals by
-# Re-auction onto a surviving Rover Pod. Flags mirror internal/demo DomeRovers()
-# for R5 exactly (id/x/y/battery/capabilities), so the board is identical to
-# the in-proc headline.
 apiVersion: apps/v1
 kind: Deployment
 metadata:
@@ -26,12 +19,12 @@ spec:
       labels:
         app: swarmbuild
         role: rover
-        rover: R5 # the label the killer's selector (rover=R5) deletes
+        rover: R5
     spec:
       containers:
         - name: rover
           image: swarmbuild-agent:dev
-          imagePullPolicy: IfNotPresent # use the kind-loaded local image
+          imagePullPolicy: IfNotPresent
           args:
             - --id=R5
             - --x=30
@@ -40,16 +33,10 @@ spec:
             - --capabilities=foundation,wall,dome-cap,panel,mast
             - --mode=container
             - --heartbeat-ms=700
-            - --op-every-ms=360 # slow the block-by-block habitat rise (~3x the brisk default) so the buildout reads on-camera
+            - --op-every-ms=360
           env:
             - name: NATS_URL
               value: nats://nats:4222
-          # Live Build Mode (bh-08): the OPTIONAL swarmbuild-llm Secret (synced by
-          # up.sh from the repo-root .env) gives this rover Pod the API key, making it
-          # LIVE-CAPABLE. cmd/agent injects the LiveBuilder when a key is present but
-          # keeps the rover's default Mode = replay, so only a per-Task live tag (a
-          # Blueprint dropped in "live" mode) builds inline; the headline stays
-          # deterministic. Secret absent => pure replay, Pod still starts.
           envFrom:
             - secretRef:
                 name: swarmbuild-llm

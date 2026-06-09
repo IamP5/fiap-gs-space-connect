@@ -8,13 +8,6 @@ import (
 	"testing/quick"
 )
 
-// ---------------------------------------------------------------------------
-// Equality helper
-// ---------------------------------------------------------------------------
-
-// taskEqual reports whether two task records are field-for-field identical,
-// including the Deps slice (compared element-wise; nil and empty are treated
-// as equal because they describe the same "no dependencies" record).
 func taskEqual(a, b domain.Task) bool {
 	if a.ID != b.ID ||
 		a.Type != b.Type ||
@@ -35,18 +28,8 @@ func taskEqual(a, b domain.Task) bool {
 	return true
 }
 
-// ---------------------------------------------------------------------------
-// testing/quick generator
-// ---------------------------------------------------------------------------
-
-// genTask is a domain.Task wrapper with a Generate method so testing/quick can
-// produce random records. The value space is deliberately small (a handful of
-// ids, low versions, a few assignees) so collisions and concurrent claims —
-// the interesting cases — actually occur often enough to be exercised.
 type genTask struct{ domain.Task }
 
-// domeCap is the "dome-cap" task type/id literal, reused across the sample
-// fixtures below and extracted so the fixtures share a single spelling.
 const domeCap = "dome-cap"
 
 var (
@@ -65,7 +48,7 @@ func (genTask) Generate(rnd *rand.Rand, _ int) reflect.Value {
 		Assignee:    sampleAssignees[rnd.Intn(len(sampleAssignees))],
 		LeaseExpiry: domain.Tick(rnd.Intn(5)),
 		//nolint:gosec // deterministic test fixture, not security-sensitive: rnd.Intn(4) is a small non-negative bound, no overflow possible.
-		Version: domain.Lamport(rnd.Intn(4)), // small range → frequent ties
+		Version: domain.Lamport(rnd.Intn(4)),
 	}
 	n := rnd.Intn(len(sampleDeps) + 1)
 	if n > 0 {
@@ -77,17 +60,10 @@ func (genTask) Generate(rnd *rand.Rand, _ int) reflect.Value {
 	return reflect.ValueOf(genTask{t})
 }
 
-// sameID forces b to share a's TaskID, so merge-law properties are checked on
-// records that genuinely describe the same task (Merge is only meaningful for
-// same-id records — ADR-0003).
 func sameID(a, b domain.Task) domain.Task {
 	b.ID = a.ID
 	return b
 }
-
-// ---------------------------------------------------------------------------
-// Merge property tests (testing/quick) — TECHSPEC §7, issue 10
-// ---------------------------------------------------------------------------
 
 func TestMergeCommutative(t *testing.T) {
 	f := func(ga, gb genTask) bool {
@@ -122,9 +98,6 @@ func TestMergeAssociative(t *testing.T) {
 	}
 }
 
-// TestMergeSelectsOneOperand checks the LWW invariant that Merge never
-// fabricates a record: its result is always (field-for-field) one of its
-// inputs.
 func TestMergeReturnsAnOperand(t *testing.T) {
 	f := func(ga, gb genTask) bool {
 		a, b := ga.Task, sameID(ga.Task, gb.Task)
@@ -135,10 +108,6 @@ func TestMergeReturnsAnOperand(t *testing.T) {
 		t.Fatalf("Merge fabricated a record: %v", err)
 	}
 }
-
-// ---------------------------------------------------------------------------
-// Merge tie-break table tests — TECHSPEC §4, ADR-0003
-// ---------------------------------------------------------------------------
 
 func TestMergeTieBreaks(t *testing.T) {
 	const id = domain.TaskID("wall-7")
@@ -179,7 +148,6 @@ func TestMergeTieBreaks(t *testing.T) {
 			if got := Merge(tc.a, tc.b); !taskEqual(got, tc.want) {
 				t.Errorf("Merge(a,b) = %+v, want %+v", got, tc.want)
 			}
-			// Commutativity must hold for the concrete cases too.
 			if got := Merge(tc.b, tc.a); !taskEqual(got, tc.want) {
 				t.Errorf("Merge(b,a) = %+v, want %+v", got, tc.want)
 			}
@@ -187,10 +155,6 @@ func TestMergeTieBreaks(t *testing.T) {
 	}
 }
 
-// TestConcurrentClaimLowerRoverIDWins is the property form of the headline
-// CRDT guarantee: for two concurrent claims (equal Version, both Leased,
-// different assignees) the lower rover id always wins, in either argument order
-// (issue 10 acceptance criterion).
 func TestConcurrentClaimLowerRoverIDWins(t *testing.T) {
 	f := func(ga, gb genTask) bool {
 		a := ga.Task
@@ -199,12 +163,12 @@ func TestConcurrentClaimLowerRoverIDWins(t *testing.T) {
 		b := sameID(a, gb.Task)
 		b.Status = domain.Leased
 		b.Assignee = "R6"
-		b.Version = a.Version // force concurrent (equal) versions
+		b.Version = a.Version
 		b.LeaseExpiry = a.LeaseExpiry
 		b.Type = a.Type
 		b.Deps = a.Deps
 
-		wantWinner := domain.RobotID("R3") // lower id
+		wantWinner := domain.RobotID("R3")
 		return Merge(a, b).Assignee == wantWinner &&
 			Merge(b, a).Assignee == wantWinner
 	}
@@ -213,24 +177,15 @@ func TestConcurrentClaimLowerRoverIDWins(t *testing.T) {
 	}
 }
 
-// ---------------------------------------------------------------------------
-// Model.Apply property + table tests — TECHSPEC §4, §8
-// ---------------------------------------------------------------------------
-
-// TestApplyConsistentWithMerge ties the live guard to the CRDT: after applying
-// any sequence of records, every stored record equals the Merge-fold of all
-// records seen for that id. This is the order-independence guarantee.
 func TestApplyOrderIndependent(t *testing.T) {
 	f := func(records []genTask) bool {
 		if len(records) == 0 {
 			return true
 		}
-		// Fold every record into the model via Apply.
 		m := NewModel()
 		for _, g := range records {
 			m.Apply(g.Task)
 		}
-		// Independently compute the expected winner per id by Merge-folding.
 		expected := make(map[domain.TaskID]domain.Task)
 		for _, g := range records {
 			cur, ok := expected[g.ID]
@@ -253,9 +208,6 @@ func TestApplyOrderIndependent(t *testing.T) {
 	}
 }
 
-// TestApplyPermutationInvariant checks that applying the same multiset of
-// records in two independent random orders yields identical snapshots — the
-// "any order yields identical state" criterion of issue 10.
 func TestApplyPermutationInvariant(t *testing.T) {
 	f := func(records []genTask, seed int64) bool {
 		m1 := NewModel()
@@ -347,13 +299,11 @@ func TestApplyMonotonicAndIdempotent(t *testing.T) {
 	}
 }
 
-// TestApplyDuplicateIsNoOpProperty: re-applying any already-stored record never
-// changes state and always reports false.
 func TestApplyDuplicateIsNoOpProperty(t *testing.T) {
 	f := func(g genTask) bool {
 		m := NewModel()
 		if !m.Apply(g.Task) {
-			return false // first apply of a fresh id must win
+			return false
 		}
 		before, _ := m.Get(g.ID)
 		won := m.Apply(g.Task)

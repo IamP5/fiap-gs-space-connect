@@ -20,8 +20,6 @@ func sampleOp(color string) wire.BuildOp {
 	}
 }
 
-// TestTrace_RoundTrips: a Trace marshals and unmarshals byte-stably and lists every
-// iteration's verdict + the outcome (the ADR-0008 audit invariant).
 func TestTrace_RoundTrips(t *testing.T) {
 	orig := Trace{
 		BlueprintID: "dome",
@@ -67,8 +65,6 @@ func TestTrace_RoundTrips(t *testing.T) {
 		t.Fatalf("parse: %v", err)
 	}
 
-	// The Contract is carried as raw JSON; MarshalIndent re-indents it, so compare it
-	// semantically (compacted) and the rest structurally.
 	if !jsonEqual(t, orig.Contract, got.Contract) {
 		t.Fatalf("contract did not round-trip semantically:\n orig=%s\n got =%s", orig.Contract, got.Contract)
 	}
@@ -78,7 +74,6 @@ func TestTrace_RoundTrips(t *testing.T) {
 		t.Fatalf("trace did not round-trip:\n orig=%+v\n got =%+v", origNoContract, gotNoContract)
 	}
 
-	// The trace lists every iteration's verdict and the final outcome.
 	if len(got.Iterations) != 2 {
 		t.Fatalf("want 2 iterations recorded, got %d", len(got.Iterations))
 	}
@@ -92,8 +87,6 @@ func TestTrace_RoundTrips(t *testing.T) {
 		t.Fatalf("outcome must record accepted+cached, got %+v", got.Outcome)
 	}
 
-	// Re-marshalling the parsed trace yields identical bytes (stable on disk): the
-	// parsed trace's contract is already indented, so a second round is a fixpoint.
 	got2, err := Parse(data)
 	if err != nil {
 		t.Fatalf("re-parse: %v", err)
@@ -105,8 +98,6 @@ func TestTrace_RoundTrips(t *testing.T) {
 	}
 }
 
-// jsonEqual reports whether two raw JSON values are semantically equal (key order /
-// whitespace insensitive).
 func jsonEqual(t *testing.T, a, b json.RawMessage) bool {
 	t.Helper()
 	var av, bv any
@@ -119,8 +110,6 @@ func jsonEqual(t *testing.T, a, b json.RawMessage) bool {
 	return reflect.DeepEqual(av, bv)
 }
 
-// TestTrace_FellBackAndLowQuality: the convenience predicates the operator review
-// reads off a trace.
 func TestTrace_FellBackAndLowQuality(t *testing.T) {
 	fb := Trace{Outcome: Outcome{Result: ResultFallback, QualityFlag: QualityOK}}
 	if !fb.FellBack() || fb.LowQuality() {

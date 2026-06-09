@@ -1,9 +1,3 @@
-// textureFidelity.test.ts — the texture crispness + colour-correctness sweep (#100).
-//
-// Two guarantees: (1) applyMaxAnisotropy stamps the GPU's max anisotropy onto any
-// loaded texture; (2) applyGltfTextureFidelity walks a loaded glTF tree and fixes
-// every material's maps — colour maps → sRGB, data maps → NoColorSpace +
-// LinearMipmapNearestFilter, and ALL maps get max anisotropy.
 
 import { describe, expect, it } from "vitest";
 import * as THREE from "three";
@@ -15,8 +9,6 @@ import {
 
 const MAX = 16;
 
-// A bare texture stand-in (no decode needed): three's Texture defaults to
-// anisotropy 1 and minFilter LinearMipmapLinearFilter.
 function tex(): THREE.Texture {
   return new THREE.Texture();
 }
@@ -34,8 +26,6 @@ describe("applyMaxAnisotropy", () => {
 });
 
 describe("applyGltfTextureFidelity", () => {
-  // Build a small loaded-glTF stand-in: a Group with two meshes, one carrying a
-  // full PBR map set, the other a multi-material array, all maps fresh textures.
   function fakeGltf(): {
     root: THREE.Group;
     mat: THREE.MeshStandardMaterial;
@@ -59,8 +49,6 @@ describe("applyGltfTextureFidelity", () => {
 
     const root = new THREE.Group();
     root.add(new THREE.Mesh(new THREE.BoxGeometry(), mat));
-    // A multi-material mesh shares the same material so the traversal must handle
-    // material arrays without throwing.
     const multi = new THREE.Mesh(new THREE.BoxGeometry(), [mat, mat]);
     root.add(multi);
     return { root, mat, maps };
@@ -89,7 +77,6 @@ describe("applyGltfTextureFidelity", () => {
     for (const key of ["normalMap", "roughnessMap", "metalnessMap", "aoMap"]) {
       expect(maps[key].minFilter).toBe(THREE.LinearMipmapNearestFilter);
     }
-    // Colour maps keep their (trilinear) default filter — only data maps change.
     expect(maps.map.minFilter).toBe(colourBefore);
   });
 
@@ -106,16 +93,9 @@ describe("applyGltfTextureFidelity", () => {
 describe("polishGltfMaterials", () => {
   const BLOOM = 5;
 
-  // Regression (#171): a metal material (metalness > 0.3) that is a PLAIN
-  // MeshStandardMaterial — NOT already physical — must upgrade to physical
-  // without throwing. The naive `new MeshPhysicalMaterial().copy(std)` reads
-  // physical-only Vector2 fields (clearcoatNormalScale, …) off the standard
-  // source → `Vector2.copy(undefined)` → the whole glTF parse rejects and every
-  // placement silently falls back to its primitive (the Perseverance rover hit
-  // exactly this). The upgrade must copy at the standard level instead.
   it("upgrades a non-physical metal material to physical without throwing", () => {
     const std = new THREE.MeshStandardMaterial();
-    std.metalness = 0.9; // > 0.3 → clearcoat-metal upgrade path
+    std.metalness = 0.9;
     const mesh = new THREE.Mesh(new THREE.BoxGeometry(), std);
     const root = new THREE.Group().add(mesh);
 
@@ -123,10 +103,8 @@ describe("polishGltfMaterials", () => {
 
     const out = mesh.material as THREE.MeshPhysicalMaterial;
     expect(out.isMeshPhysicalMaterial).toBe(true);
-    expect(out.metalness).toBe(0.9); // standard props carried across
-    expect(out.clearcoat).toBe(0.5); // factory-steel lacquer applied
-    // The physical material keeps its own valid default for the field that
-    // crashed when copied from a standard source.
+    expect(out.metalness).toBe(0.9);
+    expect(out.clearcoat).toBe(0.5);
     expect(out.clearcoatNormalScale.x).toBe(1);
   });
 
@@ -140,13 +118,6 @@ describe("polishGltfMaterials", () => {
     expect((mesh.material as THREE.MeshPhysicalMaterial).isMeshPhysicalMaterial).toBeFalsy();
   });
 
-  // Regression (#171, 2nd instance): the solar-glint path forces a physical
-  // upgrade by URL — bypassing the metalness check — so a solar-panel GLB whose
-  // mesh is an unlit MeshBasicMaterial (KHR_materials_unlit) would hit
-  // `MeshStandardMaterial.prototype.copy.call(phys, basic)` → `Color.copy(undefined)`
-  // reading the basic material's absent `.emissive`. That throw rejected the
-  // set-piece parse and poisoned the scenery cache forever. The standard-type
-  // guard must skip the upgrade and leave the basic material untouched.
   it("leaves a non-standard (unlit) material alone on a solar URL — no throw", () => {
     const basic = new THREE.MeshBasicMaterial();
     const mesh = new THREE.Mesh(new THREE.BoxGeometry(), basic);
@@ -158,9 +129,8 @@ describe("polishGltfMaterials", () => {
     expect((mesh.material as THREE.MeshBasicMaterial).isMeshBasicMaterial).toBe(true);
   });
 
-  // The solar URL still upgrades a genuine MeshStandardMaterial and applies glint.
   it("upgrades a standard material on a solar URL and applies anisotropic glint", () => {
-    const std = new THREE.MeshStandardMaterial(); // metalness 0 — solar path bypasses that
+    const std = new THREE.MeshStandardMaterial();
     const mesh = new THREE.Mesh(new THREE.BoxGeometry(), std);
     const root = new THREE.Group().add(mesh);
 

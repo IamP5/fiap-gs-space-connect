@@ -7,28 +7,22 @@ stop. `feature_list.json` is the per-feature source of truth; this file is the n
 
 ## Current Verified State
 
-- **Repository root:** `/Users/tuba/Dev/projects/gs-fiap-space` (branch `docs/01-build-harness`)
+- **Repository root:** `/Users/tuba/Dev/projects/gs-fiap-space` (branch `chore/prune-to-two-modes`)
 - **Standard startup path:** `./init.sh` (Go baseline; `WEB=1 ./init.sh` to include the dashboard)
-- **Standard verification path:** `make check` (vet + lint + race tests); `./deploy/smoke.sh` for end-to-end self-heal
-- **Branch:** `main` (the whole build-harness milestone is merged — PR #12 @ `25ce08a`)
-- **Backend baseline:** ✅ green @ `25ce08a` — `go vet` ok, `golangci-lint` 0 issues, `go test -race -shuffle=on ./...` all pass incl. `internal/harness/live` + the rescoped archtest (go1.25.5)
-- **Web baseline:** ✅ green @ `25ce08a` — `tsc -b && vite build` TS-clean, `vitest` 10 files / 111 tests pass (`WEB=1 ./init.sh`)
-- **End-to-end:** ✅ verified this session — live compose stack up; coordinator logs assert `msg=expiry task=wall-1 … returned to UNCLAIMED` (self-heal) then `msg=complete task=dome-cap by=R1` (dome closed). The `deploy/smoke.sh` *wrapper* can't pass its host `/healthz` gate on this laptop: a stale `kubectl port-forward` (kind cluster, `swarmbuild-control-plane`) is holding `127.0.0.1:8080` and shadows the compose gateway — environment collision, not a regression. Kill that port-forward (or run smoke on a clean host) to get a green wrapper.
-- **MVP (issues 01–11):** all `passing` in `feature_list.json`; GitHub issues #13–#23 closed; milestone "SwarmBuild MVP" closed.
-- **Build-harness (bh-01..bh-08):** all `passing` in `feature_list.json` with evidence; GitHub issues #24–#38 closed; milestone "Build Harness" closed. **All 19 features now `passing` — no open work in the tracker.**
-- **Realistic-3d-world (epic #46): ✅ COMPLETE — all 59 features `passing`.** Wave 3 cinematic polish (#99,#101–109) + Wave 4 living orbit (#112) + r3d-100 (Texture fidelity) all on `main`; **r3d-110 (Sun GodRays + anamorphic streak) + r3d-111 (Material tier polish) merged to `main` 2026-06-07** (operator signed off) via branch `wave3/godrays-material-polish` (feat `96221e0` + perf `737a6cd`). `feature_list.json`: **59/59 `passing`**. Epic #46 can close (its three remaining children — #100/#110/#111 — are all done). Build-harness + MVP milestones remain closed; backend baseline unchanged.
+- **Standard verification path:** `make check` (vet + lint + race tests); `./deploy/k8s/up.sh` for end-to-end self-heal
+- **Two supported run modes (everything else removed):**
+  1. Full stack on kind: `./deploy/k8s/up.sh` (NATS + coordinator + gateway + web + six Rover Pods; dashboard at http://localhost:5173)
+  2. Dashboard with no backend: `cd web && VITE_MOCK=1 npm run dev`
+- **Removed this session (Session 014):** the cinematic mode end-to-end (cueKill / HeldTask / ScriptedKill machinery, demo rosters, k8s overlay, web reel layer), the docker-compose headline + `smoke.sh`, the killer sidecar, the gateway `/lab` SSE path + LabPanel, `cmd/bake` + the vision pass + the silhouette rubric, dead web panels (Encore/Lab/Partition, DecorRocks, launch/earthrise beats), bake artifacts, dev screenshots, raw asset sources, and ALL code comments (Go, TS/TSX, CSS, HTML, shell, YAML, Makefile — compiler/linter directives kept; revive's comment-requiring rules disabled in `.golangci.yml`).
+- **Backend baseline:** ✅ green post-prune — `go vet` ok, `golangci-lint` 0 issues, `go test -race -shuffle=on ./...` all pass (archtest rescoped to model/live seams).
+- **Web baseline:** ✅ green post-prune — `tsc -b && vite build` TS-clean, `vitest` 15 files / 188 tests pass, eslint 0 errors.
+- **Earlier milestones (MVP, build-harness, realistic-3d-world, HUD redesign, surface immersion):** shipped; their history lives in `feature_list.json` + `docs/`.
 
 ## Next Steps
 
-1. **Close epic #46** on GitHub (all 59 children `passing`/merged) and close issues
-   #110/#111 if the merge auto-close didn't fire (the merge commit carries `Closes
-   #110`/`Closes #111`). Realism milestone is feature-complete.
-2. **Push `main`** when ready — the r3d-110/111 merge is local only (commits
-   `96221e0`, `737a6cd`, and the merge commit). Nothing has been pushed to the remote.
-3. **Branch hygiene:** `wave3/godrays-material-polish` (now merged) plus the older
-   `wave4/living-orbit` + `wave3/integration` + merged `worktree-agent-*` heads can be
-   deleted. Keep the invariant sacred on the backend self-heal core (ADR-0009); re-run
-   `./deploy/smoke.sh` before any demo.
+1. Merge `chore/prune-to-two-modes` to `main`.
+2. Re-run `./deploy/k8s/up.sh` end-to-end (place a blueprint, KILL a rover, watch the
+   self-heal) before any demo.
 
 ## Session Log
 

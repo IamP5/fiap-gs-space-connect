@@ -6,16 +6,11 @@ import (
 	"testing"
 )
 
-// testBlueprint is the blueprint id the replay tests bake/replay under;
-// taskFoundation1 is the local task id they look up under it.
 const (
 	testBlueprint   = "dome"
 	taskFoundation1 = domain.TaskID("foundation-1")
 )
 
-// cachedOps is a distinctive baked spec a forced cache HIT replays: a single
-// cylinder, which neither the foundation nor wall primitive streams start with, so
-// a test can tell replay apart from the primitive fallback.
 func cachedOps() []wire.BuildOp {
 	return []wire.BuildOp{{
 		Op:       wire.BuildOpPlace,
@@ -27,8 +22,6 @@ func cachedOps() []wire.BuildOp {
 	}}
 }
 
-// TestOpsFor_CacheHitReplays: with a ReplaySpec resolver that HITS, opsFor returns
-// the cached spec verbatim instead of the primitive stream (the headline replay).
 func TestOpsFor_CacheHitReplays(t *testing.T) {
 	cfg := Config{
 		BlueprintID: testBlueprint,
@@ -45,13 +38,11 @@ func TestOpsFor_CacheHitReplays(t *testing.T) {
 	}
 }
 
-// TestOpsFor_CacheMissFallsBackToPrimitive: a forced MISS yields the deterministic
-// primitive stream (buildOpsFor), so the Task still builds and completes.
 func TestOpsFor_CacheMissFallsBackToPrimitive(t *testing.T) {
 	cfg := Config{
 		BlueprintID: testBlueprint,
 		ReplaySpec: func(_, _ domain.TaskID) ([]wire.BuildOp, bool) {
-			return nil, false // forced miss
+			return nil, false
 		},
 	}
 	ops := cfg.opsFor(taskFoundation1, "foundation")
@@ -64,9 +55,6 @@ func TestOpsFor_CacheMissFallsBackToPrimitive(t *testing.T) {
 	}
 }
 
-// TestOpsFor_NoBlueprintNeverConsultsCache: with no BlueprintID the rover never
-// consults the cache (even if a resolver is set) and uses the primitive stream —
-// the cache path is strictly opt-in.
 func TestOpsFor_NoBlueprintNeverConsultsCache(t *testing.T) {
 	called := false
 	cfg := Config{
@@ -84,13 +72,10 @@ func TestOpsFor_NoBlueprintNeverConsultsCache(t *testing.T) {
 	}
 }
 
-// TestOpsFor_ConfigOverrideBeatsCache: an explicit Config.BuildOps override wins
-// over both the cache and the primitive (tests/invariant path), and a forced-empty
-// override still forces zero ops.
 func TestOpsFor_ConfigOverrideBeatsCache(t *testing.T) {
 	cfg := Config{
 		BlueprintID: testBlueprint,
-		BuildOps:    map[domain.TaskType][]wire.BuildOp{"foundation": {}}, // forced empty
+		BuildOps:    map[domain.TaskType][]wire.BuildOp{"foundation": {}},
 		ReplaySpec: func(_, _ domain.TaskID) ([]wire.BuildOp, bool) {
 			return cachedOps(), true
 		},
@@ -100,16 +85,13 @@ func TestOpsFor_ConfigOverrideBeatsCache(t *testing.T) {
 	}
 }
 
-// TestLocalTaskID strips the instance/site prefix blueprint.Place adds (two-site
-// lunar surface, epic 04) so the baked cache — keyed by the bare local id — still
-// resolves a prefixed task id. An unprefixed id passes through unchanged.
 func TestLocalTaskID(t *testing.T) {
 	cases := map[domain.TaskID]string{
-		"foundation-1":           "foundation-1", // single-site: unchanged
-		"lunar/foundation-1":     "foundation-1", // two-site prefix stripped
+		"foundation-1":           "foundation-1",
+		"lunar/foundation-1":     "foundation-1",
 		"shackleton/wall-3":      "wall-3",
-		"bp1/dome-cap":           "dome-cap", // drag-placed instance prefix
-		"lunar/foundation-1/odd": "odd",      // only the last segment is the local id
+		"bp1/dome-cap":           "dome-cap",
+		"lunar/foundation-1/odd": "odd",
 		"":                       "",
 	}
 	for in, want := range cases {
@@ -119,14 +101,8 @@ func TestLocalTaskID(t *testing.T) {
 	}
 }
 
-// TestReplayOps_TwoSitePrefixedIDHitsEmbeddedCache is the regression guard for the
-// epic-04 site prefixing: a demo rover (BlueprintID="dome") building a SITE-PREFIXED
-// task id ("lunar/foundation-1") must still replay the SAME committed baked spec the
-// bare local id resolves — otherwise the two-site board silently loses the
-// deterministic no-model-call replay headline and falls back to the primitive
-// stream. SKIPPED if the dome has not been baked, so the suite stays green either way.
 func TestReplayOps_TwoSitePrefixedIDHitsEmbeddedCache(t *testing.T) {
-	cfg := Config{BlueprintID: testBlueprint} // embedded cache, no resolver
+	cfg := Config{BlueprintID: testBlueprint}
 
 	local, localHit := cfg.replayOps(taskFoundation1)
 	if !localHit {

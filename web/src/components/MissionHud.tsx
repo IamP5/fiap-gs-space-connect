@@ -1,19 +1,3 @@
-// MissionHud — the compact, game-like mission readout (Epic 06 P2), top-left,
-// surface-only. It replaces the verbose TaskLedger: instead of enumerating every
-// task id/assignee by default, it tells the self-heal story at a glance —
-//   · a build-progress bar `done / total`
-//   · a `rovers N / M alive` readout
-// BOTH scoped to the active worksite, BOTH pure snapshot derivations (App passes
-// them in via lib/missionStats), so they visibly DIP when a Failure spike kills
-// rovers / re-opens tasks and RECOVER as the swarm re-auctions and heals — no
-// extra wiring (ADR-0004).
-//
-// Click the widget to EXPAND the full per-task list (the old ledger rows: badge +
-// id + type + assignee), collapsed by default. The static LEGEND is demoted from
-// an always-visible block to a hover tooltip on a small `?`.
-//
-// Memoized on `tasks` + the two rover counts + the local `expanded` flag; App's
-// `selected` changes never repaint it.
 
 import { memo, useState } from "react";
 import type { TaskStatus, TaskView } from "../types/wire";
@@ -24,8 +8,6 @@ const STATUS_CLASS: Record<TaskStatus, string> = {
   DONE: "st-done",
 };
 
-// Static legend content — created once (rendering-hoist-jsx). Lives inside the
-// `?` hover tooltip now rather than as an always-visible block.
 const LEGEND = (
   <ul className="legend">
     <li>
@@ -48,27 +30,20 @@ export const MissionHud = memo(function MissionHud({
   roversTotal,
   hasSnapshot,
 }: {
-  // The active-site task list (App filters to activeSite before passing it down),
-  // used for the expandable detail rows.
   tasks: TaskView[];
-  // Site-scoped build progress + rover health (derived in App via missionStats).
   done: number;
   total: number;
   roversAlive: number;
   roversTotal: number;
   hasSnapshot: boolean;
 }) {
-  // Local UI flag only — never global client state (ADR-0004). Collapsed default.
   const [expanded, setExpanded] = useState(false);
 
-  // 0..1 build fraction; an empty worksite reads as 0 (nothing to build yet).
   const fraction = total > 0 ? done / total : 0;
   const allRoversDown = roversTotal > 0 && roversAlive === 0;
 
   return (
     <aside className="mission-hud hud-surface-panel">
-      {/* The whole compact summary is the expand toggle (a button for keyboard +
-          a11y); the detail list reveals below it. */}
       <button
         type="button"
         className="mission-hud-summary"
@@ -111,7 +86,6 @@ export const MissionHud = memo(function MissionHud({
         </div>
       </button>
 
-      {/* Legend demoted to a hover/focus tooltip on a small `?` (Epic 06 P2). */}
       <div className="mission-hud-legend">
         <span className="mission-hud-help" tabIndex={0} aria-label="Status legend">
           ?
@@ -121,7 +95,6 @@ export const MissionHud = memo(function MissionHud({
         </div>
       </div>
 
-      {/* Expanded detail: the full per-task list (the old ledger row markup). */}
       {expanded ? (
         tasks.length === 0 ? (
           <p className="ledger-empty">no tasks yet</p>

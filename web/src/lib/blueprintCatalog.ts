@@ -1,15 +1,6 @@
-// blueprintCatalog — the web mirror of the Go blueprint catalog
-// (internal/blueprint), used ONLY to drive the palette list and the drag-to-place
-// ghost preview (bh-05). It is presentation data: the authoritative DAG, contracts
-// and placement validation live server-side; this mirror just lets the dashboard
-// show what is available and preview each Task's Build envelope as a ground
-// footprint before the user confirms a `placeBlueprint` control. The task ids /
-// relative positions / envelope sizes match the Go catalog so the ghost matches
-// the structure the coordinator injects.
 
 import type { CatalogTask } from "./placement";
 
-// A palette entry: a Blueprint id + label + its tasks (for the ghost preview).
 export type CatalogBlueprint = {
   id: string;
   name: string;
@@ -17,9 +8,6 @@ export type CatalogBlueprint = {
   tasks: CatalogTask[];
 };
 
-// ring mirrors Go's blueprint.ring: n points on a circle, 12 o'clock start,
-// clockwise, rounded to 0.01 — so the dome ghost reads as the same footprint the
-// coordinator injects.
 function ring(n: number, radius: number, startDeg: number): { X: number; Y: number }[] {
   const pts: { X: number; Y: number }[] = [];
   for (let i = 0; i < n; i++) {
@@ -33,9 +21,6 @@ function ring(n: number, radius: number, startDeg: number): { X: number; Y: numb
 }
 
 function domeBlueprint(): CatalogBlueprint {
-  // Compact ring radii (worksite units; 1 unit ≈ 0.3 scene units) so the walls and
-  // foundations ring the dome skirt snugly instead of scattering across the plain —
-  // kept in sync with Go's blueprint.domeBlueprint.
   const wallPos = ring(8, 12, 90);
   const foundationPos = ring(4, 11, 68);
   const footEnv = { center: { X: 0, Y: 0, Z: 0 }, size: { X: 14, Y: 14, Z: 4 } };
@@ -66,8 +51,6 @@ function solarArrayBlueprint(): CatalogBlueprint {
     name: "Solar array",
     description: "Two pads, then sun-tracking panels.",
     tasks: [
-      // ±5 worksite units (≈3 scene units apart) so the two panels stand
-      // shoulder-to-shoulder as one array — kept in sync with Go's solarArrayBlueprint.
       { id: "pad-1", type: "foundation", rel: { X: -5, Y: 0 }, envelope: footEnv },
       { id: "pad-2", type: "foundation", rel: { X: 5, Y: 0 }, envelope: footEnv },
       { id: "panel-1", type: "panel", rel: { X: -5, Y: 0 }, envelope: panelEnv },
@@ -92,7 +75,6 @@ function commsMastBlueprint(): CatalogBlueprint {
   };
 }
 
-// CATALOG is the id-sorted palette, mirroring Go's blueprint.DefaultCatalog().All().
 export const CATALOG: CatalogBlueprint[] = [
   commsMastBlueprint(),
   domeBlueprint(),
