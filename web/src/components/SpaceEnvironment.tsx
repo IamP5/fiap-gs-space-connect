@@ -96,13 +96,19 @@ const STAR_BG_YAW_DEG = 180; // orbit: swing galactic centre into the Moon vista
 // (roll/pitch could be added too if the band wants lifting above the horizon).
 const STAR_BG_YAW_SURFACE_DEG = 106;
 const STAR_BG_ROLL_DEG = 28; // diagonal tilt of the band (shared by both views)
+// Surface-only PITCH (X): the orbit view frames the band fine with X=0, but the
+// surface camera looks DOWN toward the horizon, so the same band grazes low along
+// the lunar skyline. A positive pitch lifts the galactic centre into a dramatic
+// ARC well above the horizon (the airless-Moon "the whole galaxy hangs overhead"
+// look) instead of hugging the ground. Eye-tunable; orbit keeps 0.
+const STAR_BG_PITCH_SURFACE_DEG = 8;
 
-// The equirect background Euler for a given view. yaw (Y) swings the bright bulge
-// into frame per-view; roll (Z) holds the shared diagonal tilt. Order matches the
-// original single-Euler assignment (THREE.Euler default 'XYZ', X = 0).
+// The equirect background Euler for a given view. pitch (X, surface only) lifts the
+// band above the horizon; yaw (Y) swings the bright bulge into frame per-view; roll
+// (Z) holds the shared diagonal tilt. Order is THREE.Euler default 'XYZ'.
 function backgroundEulerFor(onSurface: boolean): THREE.Euler {
   return new THREE.Euler(
-    0,
+    THREE.MathUtils.degToRad(onSurface ? STAR_BG_PITCH_SURFACE_DEG : 0),
     THREE.MathUtils.degToRad(onSurface ? STAR_BG_YAW_SURFACE_DEG : STAR_BG_YAW_DEG),
     THREE.MathUtils.degToRad(STAR_BG_ROLL_DEG),
   );
@@ -111,7 +117,11 @@ function backgroundEulerFor(onSurface: boolean): THREE.Euler {
 // Kept below 1 so the galaxy reads as a faint deep-space backdrop, not a bright
 // wash — the Moon/Earth stay the focus. Wave 4: nudged 0.8→0.9 so the warm galactic
 // dust band reads a touch richer behind the dark-side crescent Moon (SVS #14992).
-const STAR_BG_INTENSITY = 0.9;
+// Per-view: the surface sky is pure black void (no Moon globe filling the frame),
+// so the band can carry a touch more brightness there to read as the hero backdrop;
+// orbit stays lower so the galaxy never out-shines the crescent Moon.
+const STAR_BG_INTENSITY_ORBIT = 0.9;
+const STAR_BG_INTENSITY_SURFACE = 1.08;
 
 // scene.environmentIntensity scales the IBL (scene.environment = the HDR set by
 // drei's <Environment> below) contribution to PBR materials — and that diffuse
@@ -129,7 +139,10 @@ const ENV_INTENSITY_ORBIT = 0.05;
 // The Milky-Way band carries most of the sky detail, so the hand-rolled points
 // shell is a sparse near-field of foreground stars layered ON TOP of the band
 // for extra crisp, brighter accents (issue #91).
-const STAR_COUNT = 1400;
+// Doubled (1400→2800) for a denser, more immersive surface sky. These are static
+// points generated once with no per-star CPU cost after build — 2.8k draws as a
+// single Points call, so the field reads richer at effectively zero frame cost.
+const STAR_COUNT = 2800;
 const STAR_SHELL_RADIUS = 4000; // well inside the camera far plane (~8000, issue #49).
 
 // Base screen-pixel size; each star scales this by a power-law factor so a few
@@ -257,7 +270,7 @@ function HdrBackdrop({ onSurface }: { onSurface: boolean }) {
   return (
     <Environment
       files={HDR_FILE}
-      backgroundIntensity={STAR_BG_INTENSITY}
+      backgroundIntensity={onSurface ? STAR_BG_INTENSITY_SURFACE : STAR_BG_INTENSITY_ORBIT}
       backgroundRotation={backgroundRotation}
       environmentIntensity={onSurface ? ENV_INTENSITY_SURFACE : ENV_INTENSITY_ORBIT}
     />
