@@ -60,6 +60,7 @@ import {
 import * as THREE from "three";
 import type { RoverView, Snapshot, TaskView, Vec2 } from "../types/wire";
 import { batteryPercent } from "../lib/format";
+import { roverStandoffPos } from "../lib/roverStandoff";
 import { suppressRaycast } from "../lib/suppressRaycast";
 import { applyGltfTextureFidelity, polishGltfMaterials } from "../lib/textureFidelity";
 import { loadTexture, preloadTexture } from "../lib/textureCache";
@@ -2953,6 +2954,19 @@ function SceneContents({
     [snapshot, siteTasks],
   );
 
+  // Render-only build standoff: a rover's real position is the block CENTRE it drives
+  // to and rests on, so the hero-scaled body would otherwise be drawn embedded in the
+  // block (stuck inside it at the end of a build). Nudge each rover's DRAWN position
+  // out in front of its nearest block — a pure derivation of the snapshot that leaves
+  // the rover's real position (and the auction/lease/choreography) untouched (ADR-0004).
+  // Keyed on the same site-filtered slices the lease-beam and rover loops render from.
+  const roverDisplayPos = useMemo(() => {
+    const blocks = siteTasks.map((t) => t.pos);
+    const m = new Map<string, Vec2>();
+    for (const r of siteRovers) m.set(r.id, roverStandoffPos(r.pos, blocks));
+    return m;
+  }, [siteRovers, siteTasks]);
+
   // `viewMode` here is the RENDERED mode (Scene3D's `shown`, which flips at the
   // glare peak). In orbit the worksite is hidden — you see only the Moon globe,
   // distant Earth, and stars — so it never floats as a square in space.
@@ -3070,26 +3084,34 @@ function SceneContents({
             <TaskBlock key={t.id} task={t} map={map} geo={geo} beats={beats} />
           ))}
 
-          {/* Lease beams (rover → held task), under the rovers — active site only. */}
+          {/* Lease beams (rover → held task), under the rovers — active site only.
+              The beam starts from the rover's DISPLAYED (standoff) position so it
+              stays attached to the rendered body, then runs to the block it builds. */}
           {siteRovers.map((r) => {
             if (!r.alive || !r.task) return null;
             const held = taskById.get(r.task);
             if (!held) return null;
-            return <LeaseBeam key={`beam-${r.id}`} from={r} to={held} map={map} />;
+            const pos = roverDisplayPos.get(r.id) ?? r.pos;
+            const from = pos === r.pos ? r : { ...r, pos };
+            return <LeaseBeam key={`beam-${r.id}`} from={from} to={held} map={map} />;
           })}
 
-          {/* Rovers — active site only. */}
-          {siteRovers.map((r) => (
-            <Rover3D
-              key={r.id}
-              rover={r}
-              map={map}
-              geo={geo}
-              selected={selected === r.id}
-              beats={beats}
-              onPick={onPick}
-            />
-          ))}
+          {/* Rovers — active site only. Drawn at the standoff position so the body
+              parks IN FRONT of the block it builds instead of embedding in it. */}
+          {siteRovers.map((r) => {
+            const pos = roverDisplayPos.get(r.id) ?? r.pos;
+            return (
+              <Rover3D
+                key={r.id}
+                rover={pos === r.pos ? r : { ...r, pos }}
+                map={map}
+                geo={geo}
+                selected={selected === r.id}
+                beats={beats}
+                onPick={onPick}
+              />
+            );
+          })}
 
           {/* Launch infrastructure set-pieces (#56) — static NASA-PD Scenery at the
               worksite edge. Snapshot-INDEPENDENT decoration, raycast-suppressed.
