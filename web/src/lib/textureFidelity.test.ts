@@ -7,7 +7,11 @@
 
 import { describe, expect, it } from "vitest";
 import * as THREE from "three";
-import { applyGltfTextureFidelity, applyMaxAnisotropy } from "./textureFidelity";
+import {
+  applyGltfTextureFidelity,
+  applyMaxAnisotropy,
+  polishGltfMaterials,
+} from "./textureFidelity";
 
 const MAX = 16;
 
@@ -96,5 +100,43 @@ describe("applyGltfTextureFidelity", () => {
     m.material = undefined;
     root.add(m);
     expect(applyGltfTextureFidelity(root, MAX)).toBe(root);
+  });
+});
+
+describe("polishGltfMaterials", () => {
+  const BLOOM = 5;
+
+  // Regression (#171): a metal material (metalness > 0.3) that is a PLAIN
+  // MeshStandardMaterial — NOT already physical — must upgrade to physical
+  // without throwing. The naive `new MeshPhysicalMaterial().copy(std)` reads
+  // physical-only Vector2 fields (clearcoatNormalScale, …) off the standard
+  // source → `Vector2.copy(undefined)` → the whole glTF parse rejects and every
+  // placement silently falls back to its primitive (the Perseverance rover hit
+  // exactly this). The upgrade must copy at the standard level instead.
+  it("upgrades a non-physical metal material to physical without throwing", () => {
+    const std = new THREE.MeshStandardMaterial();
+    std.metalness = 0.9; // > 0.3 → clearcoat-metal upgrade path
+    const mesh = new THREE.Mesh(new THREE.BoxGeometry(), std);
+    const root = new THREE.Group().add(mesh);
+
+    expect(() => polishGltfMaterials(root, { bloomLayer: BLOOM })).not.toThrow();
+
+    const out = mesh.material as THREE.MeshPhysicalMaterial;
+    expect(out.isMeshPhysicalMaterial).toBe(true);
+    expect(out.metalness).toBe(0.9); // standard props carried across
+    expect(out.clearcoat).toBe(0.5); // factory-steel lacquer applied
+    // The physical material keeps its own valid default for the field that
+    // crashed when copied from a standard source.
+    expect(out.clearcoatNormalScale.x).toBe(1);
+  });
+
+  it("leaves a low-metalness standard material as standard (no upgrade)", () => {
+    const std = new THREE.MeshStandardMaterial();
+    std.metalness = 0.1;
+    const mesh = new THREE.Mesh(new THREE.BoxGeometry(), std);
+    const root = new THREE.Group().add(mesh);
+
+    polishGltfMaterials(root, { bloomLayer: BLOOM });
+    expect((mesh.material as THREE.MeshPhysicalMaterial).isMeshPhysicalMaterial).toBeFalsy();
   });
 });

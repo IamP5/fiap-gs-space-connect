@@ -352,7 +352,7 @@ function roverHaloColor(r: RoverView): string {
 // keeps the primitive fallback below.
 // WS-3 (#171): the active rover is NASA's iconic Mars 2020 Perseverance — a real
 // NASA-PD asset (detailed chassis + rocker-bogie 6-wheel suspension + Mastcam-Z/NavCam
-// mast + robotic arm), 17 meshes / ~120k verts, insignia-clean, 604 KB Draco. Replaces
+// mast + robotic arm), 116 meshes / ~126k verts, insignia-clean, 1.47 MB Draco+webp. Replaces
 // the earlier featureless `rassor_rover.glb` shrinkwrap (read as a pod) and a stop-gap
 // CC0 low-poly rover (read as a toy). Source + provenance in CREDITS.md.
 // Exported so the preload manifest (lib/assets.ts) references the SAME URL the

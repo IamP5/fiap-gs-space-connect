@@ -156,7 +156,15 @@ export function polishGltfMaterials<T extends THREE.Object3D>(
     let out: THREE.MeshStandardMaterial = std;
     if (needsPhysical && !(mat as THREE.MeshPhysicalMaterial).isMeshPhysicalMaterial) {
       const phys = new THREE.MeshPhysicalMaterial();
-      phys.copy(std); // copies all standard props + MAP REFERENCES (not clones)
+      // Copy via the STANDARD-material copy, not MeshPhysicalMaterial.copy: the
+      // latter reads physical-only Vector2 fields (clearcoatNormalScale,
+      // iridescenceThicknessRange, …) off the source, which a plain
+      // MeshStandardMaterial lacks → `Vector2.copy(undefined)` throws and the
+      // whole glTF parse rejects (a non-physical metal material like the
+      // Perseverance rover's tripped this → silent primitive fallback). Copying
+      // at the standard level brings every standard prop + map reference across
+      // while leaving the new physical material's own defaults intact.
+      THREE.MeshStandardMaterial.prototype.copy.call(phys, std);
       toDispose.add(std);
       out = phys;
     }
