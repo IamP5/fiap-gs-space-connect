@@ -22,7 +22,10 @@ It is the counterpart to the fast in-proc demo, not a replacement (ADR-0001). Th
 headline money shot stays `docker compose -f deploy/docker-compose.yml up` — six
 Rovers in-process inside the coordinator, paced for the ~30s wow. This variant
 shows the same swarm with each rover as a distinct Pod, plus a cluster-aware
-killer (retained for encore parity) with least-privilege RBAC.
+killer (retained for encore parity) with least-privilege RBAC. Unlike the in-proc
+headline, the default board boots **empty**: it is a sandbox you drop Blueprints
+onto and watch the Pods build (the scripted two-dome demo with the auto kill→heal
+beat is the `--cinematic` overlay below).
 
 ## What's in here
 
@@ -30,7 +33,7 @@ killer (retained for encore parity) with least-privilege RBAC.
 | --- | --- |
 | `base/00-namespace.yaml` | Namespace `swarmbuild` (scopes the killer's RBAC). |
 | `base/10-nats.yaml` | NATS (JetStream, `-m 8222`) Deployment + Service — the swarm bus. |
-| `base/20-coordinator.yaml` | Coordinator with `COORDINATOR_ROVERS=external` (zero in-process Rovers). |
+| `base/20-coordinator.yaml` | Coordinator with `COORDINATOR_ROVERS=external` (zero in-process Rovers; boots an **empty** board you place Blueprints onto). |
 | `base/30-gateway.yaml` | WS Gateway Deployment + Service (`:8080`). |
 | `base/40-web.yaml` | Dashboard (nginx) Deployment + Service (`:80`). |
 | `base/50-rover-r1.yaml` … `55-rover-r6.yaml` | One Deployment per Rover, R1..R6. |
@@ -91,10 +94,27 @@ The forwards run detached (via `nohup`); their PIDs are recorded in
 `${TMPDIR:-/tmp}/swarmbuild-pf-{web,gateway}.log`. If a forward never comes up,
 `up.sh` warns with the log path but leaves the cluster running.
 
-Once you're in the dashboard, the in-app **"Reload demo"** button restarts the
-demo workflow — it rebuilds the dome from scratch with **no pod restart** (the
-Coordinator resets its board over the bus), so you can re-run the heal beat
-without re-running `up.sh`.
+### Place a Blueprint and watch the Pods build it
+
+The default board starts **empty** — no dome, no structures, nothing mid-build. The
+six Rover Pods join the swarm and idle on the regolith until you give them work:
+
+1. Pick a Blueprint from the dashboard **hotbar** (dome, solar-array, or comms-mast).
+2. Drop it on the surface. The placement is validated server-side (world bounds,
+   no-overlap with anything already there) and its task DAG is injected into the live
+   World Model.
+3. The auction announces the new tasks; the Rover Pods bid, drive over, and build the
+   structure op-by-op — the same real auction / Lease / Re-auction engine as the
+   headline, just fed by your placement instead of a seeded board.
+
+Mid-build you can hit **KILL Rx** to watch the swarm self-heal (below). The in-app
+**"Reload demo"** button **clears the board** over the bus with **no pod restart** —
+it forgets every placed Blueprint and returns to the empty map, so you can start a
+fresh placement without re-running `up.sh`.
+
+> The dragged placement is untagged (no SiteID), so it clears the per-site auction
+> gate and the siteless Rover Pods bid on it. The scripted, site-tagged two-dome
+> board lives in the `--cinematic` overlay, whose in-process swarm builds it.
 
 Tear down (this also stops the auto port-forwards):
 

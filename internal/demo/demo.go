@@ -83,6 +83,16 @@ type Config struct {
 	// in-process swarm that the docker-compose demo runs, byte-for-byte unchanged.
 	NoInProcRovers bool
 
+	// EmptyBoard starts the world with NO seeded structures: DomeScenario produces an
+	// empty Blueprint instead of the two pre-built domes. The coordinator still runs
+	// the auction, the Lease Manager, the World Model, and snapshots — there is simply
+	// nothing to build until an operator drops a Blueprint from the dashboard hotbar
+	// (placeBlueprint), at which point the swarm builds it live. It is the pod-per-rover
+	// k8s "sandbox" default (set by External): a fresh map you place onto and watch the
+	// Rover Pods build, rather than a board that arrives mid-build. The default (false)
+	// keeps the scripted two-dome board the headline/cinematic demos rely on.
+	EmptyBoard bool
+
 	// HeldTask is the Epic 07 hero wall held un-leasable until an operator cueKill
 	// control arrives (ADR-0011): the dome builds everything it can EXCEPT this wall
 	// (and its dependents) so the climax target is always available when the operator
@@ -113,16 +123,21 @@ func Rehearsal() Config {
 }
 
 // External is the pod-per-rover pacing: the same legible auction/lease windows as
-// Rehearsal, but with NO in-process rovers and NO scripted kill. The coordinator
-// still loads the blueprint and runs the auction, the Lease Manager, the World
-// Model, and snapshots; the rovers join over NATS from outside (each its own
-// container/pod), and the dashboard's KILL is a real pod delete that the swarm
-// Self-heals over the real bus. KillTarget is empty so DomeScenario produces no
-// ScriptedKills (a scripted in-proc kill has nothing to kill here).
+// Rehearsal, but with NO in-process rovers, NO scripted kill, and — the headline of
+// this mode — an EMPTY starting board. The coordinator runs the auction, the Lease
+// Manager, the World Model, and snapshots over a fresh map with nothing seeded on it;
+// the rovers join over NATS from outside (each its own container/pod) and idle until
+// an operator drops a Blueprint from the dashboard hotbar (placeBlueprint), then build
+// it live and Self-heal a real pod-delete KILL over the real bus. EmptyBoard is what
+// makes the k8s default deploy a place-it-yourself sandbox rather than a board that
+// arrives mid-build; the dragged placement is untagged, so the site gate falls through
+// and the siteless Rover Pods bid on it. KillTarget is empty so DomeScenario produces
+// no ScriptedKills (a scripted in-proc kill has nothing to kill here).
 func External() Config {
 	cfg := Rehearsal()
 	cfg.NoInProcRovers = true
-	cfg.KillTarget = "" // no scripted kill: kills are real pod deletes from outside
+	cfg.EmptyBoard = true // fresh map: place a Blueprint and watch the Pods build it
+	cfg.KillTarget = ""   // no scripted kill: kills are real pod deletes from outside
 	return cfg
 }
 
@@ -179,9 +194,14 @@ func DomeScenario(natsURL string, cfg Config) coordinator.Config {
 	// Two domes: lunar at the origin, Shackleton offset far in world coords. Each
 	// task is tagged with its SiteID so the auction is site-gated. Place id-prefixes
 	// every task with its site ("lunar/wall-1", "shackleton/wall-1"), so the two
-	// boards never share ids.
-	bp := siteDome(SiteLunar, domain.Vec2{X: 0, Y: 0})
-	bp = append(bp, siteDome(SiteShackleton, shackletonOrigin)...)
+	// boards never share ids. When EmptyBoard is set (the External pod-per-rover
+	// sandbox) NOTHING is seeded: the coordinator boots a fresh map and the operator
+	// drops a Blueprint from the dashboard hotbar for the Pods to build.
+	var bp []coordinator.BlueprintTask
+	if !cfg.EmptyBoard {
+		bp = siteDome(SiteLunar, domain.Vec2{X: 0, Y: 0})
+		bp = append(bp, siteDome(SiteShackleton, shackletonOrigin)...)
+	}
 
 	// In pod-per-rover mode the coordinator runs ZERO in-process rovers (they join
 	// over NATS from outside) and arms NO scripted kill (kills are real pod deletes

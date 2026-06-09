@@ -217,10 +217,14 @@ if [[ ${CINEMATIC} -eq 1 ]]; then
   echo "Tail every service during a take with:  ./deploy/k8s/logs.sh --cinematic"
   echo "Chrome-MCP capture recipe:              docs/07-demo-cinematic/CAPTURE-RECIPE.md"
 else
-  echo "Hit KILL Rx on the dashboard — the rover suffers a recoverable OUTAGE: it"
-  echo "goes dark at its current position (the Pod keeps running), its Lease expires,"
-  echo "the swarm self-heals onto a neighbour, then the SAME rover revives in place"
-  echo "after ~6s. The in-app \"Reload demo\" button rebuilds the dome with no restart."
+  echo "The board starts EMPTY — this is your sandbox. Pick a Blueprint from the"
+  echo "dashboard hotbar (dome / solar-array / comms-mast) and drop it on the regolith;"
+  echo "the Rover Pods drive over and build it live."
+  echo
+  echo "Mid-build, hit KILL Rx — the rover suffers a recoverable OUTAGE: it goes dark"
+  echo "at its current position (the Pod keeps running), its Lease expires, the swarm"
+  echo "self-heals onto a neighbour, then the SAME rover revives in place after ~6s."
+  echo "The in-app \"Reload demo\" button clears the board so you can place another."
   echo
   echo "Tail every service with: ./deploy/k8s/logs.sh"
 fi

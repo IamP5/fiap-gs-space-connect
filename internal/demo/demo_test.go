@@ -158,30 +158,34 @@ func TestDomeScenario_IsDeterministic(t *testing.T) {
 	}
 }
 
-// TestExternal_YieldsNoRoversAndNoScriptedKills proves the pod-per-rover mode:
-// demo.External() (and any Config with NoInProcRovers) makes DomeScenario produce a
-// coordinator.Config with NO Rovers and NO ScriptedKills, so the coordinator spawns
-// nothing in-process and arms no scripted kill (rovers join over NATS and kills are
-// real pod deletes). The same dome blueprint is still built. The inproc default is
-// cross-checked alongside so the backward-compatible path is pinned: it DOES carry
-// the six-rover swarm and the single rehearsal kill.
-func TestExternal_YieldsNoRoversAndNoScriptedKills(t *testing.T) {
+// TestExternal_YieldsEmptyBoardNoRoversNoScriptedKills proves the pod-per-rover
+// sandbox: demo.External() makes DomeScenario produce a coordinator.Config with an
+// EMPTY Blueprint, NO Rovers, and NO ScriptedKills. The coordinator boots a fresh map
+// (nothing seeded), spawns nothing in-process, and arms no scripted kill; rovers join
+// over NATS and the operator drops a Blueprint from the dashboard for them to build,
+// and kills are real pod deletes. The inproc default is cross-checked alongside so the
+// backward-compatible path is pinned: it DOES seed both domes (26 tasks), carries the
+// twelve-rover swarm, and the single rehearsal kill.
+func TestExternal_YieldsEmptyBoardNoRoversNoScriptedKills(t *testing.T) {
 	ext := DomeScenario("nats://x", External())
 
+	if len(ext.Blueprint) != 0 {
+		t.Fatalf("External scenario seeds %d tasks, want 0 (the sandbox starts empty — the operator places a Blueprint)", len(ext.Blueprint))
+	}
 	if ext.Rovers != nil {
 		t.Fatalf("External scenario has %d in-process rovers, want none (pod-per-rover: rovers join over NATS)", len(ext.Rovers))
 	}
 	if ext.ScriptedKills != nil {
 		t.Fatalf("External scenario has %d scripted kills, want none (kills are real pod deletes)", len(ext.ScriptedKills))
 	}
-	// The dome is still built; only the hosting of rovers and kills changes.
-	if !reflect.DeepEqual(ext.Blueprint, DomeScenario("nats://x", Rehearsal()).Blueprint) {
-		t.Fatal("External scenario builds a different blueprint than the rehearsal; only rover hosting and kills should change")
-	}
 
-	// Cross-check: the inproc default carries BOTH site swarms (6 lunar + 6
-	// shackleton = 12, epic 04) and exactly one scripted kill (on the lunar site).
+	// Cross-check: the inproc default seeds BOTH domes (13 tasks each = 26), carries
+	// BOTH site swarms (6 lunar + 6 shackleton = 12, epic 04), and exactly one scripted
+	// kill (on the lunar site) — so EmptyBoard is what changed, not the rover hosting.
 	inproc := DomeScenario("nats://x", Rehearsal())
+	if len(inproc.Blueprint) != 26 {
+		t.Fatalf("inproc scenario seeds %d tasks, want 26 (two domes of 13)", len(inproc.Blueprint))
+	}
 	if len(inproc.Rovers) != 12 {
 		t.Fatalf("inproc scenario has %d rovers, want 12 (two six-rover swarms, one per site)", len(inproc.Rovers))
 	}
