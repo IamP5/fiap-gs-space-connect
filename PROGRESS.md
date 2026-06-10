@@ -26,6 +26,35 @@ stop. `feature_list.json` is the per-feature source of truth; this file is the n
 
 ## Session Log
 
+### Session 014 — 2026-06-09 — Prune to two run modes + strip all comments
+- **Goal (operator):** remove everything unused; keep exactly two run states —
+  `./deploy/k8s/up.sh` (web + backends on kind) and `VITE_MOCK=1 npm run dev`
+  (web, no backend); kill every other scenario (cinematic etc.); erase all code comments.
+- **Removed:** cinematic mode end-to-end (Go cueKill/HeldTask/ScriptedKill + demo
+  rosters + k8s overlay + web reel/CinematicCopy/cinematicArm/marker cues/orbit-open
+  rig/H-key HUD-hide), docker-compose + `smoke.sh` + `make demo/smoke`, the killer
+  sidecar (cmd+internal+Dockerfiles+manifests+RBAC; its only live trigger was the dead
+  encore), the gateway `/lab` SSE path + LabPanel/useLab/lib/lab, `cmd/bake` +
+  `internal/harness/vision` + the silhouette rubric + `cache.Store` + trace sidecars,
+  dead web modules (EncorePanel, PartitionPanel + crdt, DecorRocks, launch/earthrise
+  beats, bake-harness entry), `.screenshots/`, `sources/`, `scripts/`,
+  `docs/07-demo-cinematic/`, `docs/00-mvp/encore.md`. `cmd/coordinator` now boots the
+  external sandbox unconditionally; `internal/demo` is just pacing + empty-board scenario.
+- **Comments:** every line/block comment stripped across Go/TS/TSX/CSS/HTML/shell/
+  YAML/Makefile/Dockerfiles (directives kept: `//go:*`, `//nolint`, `///`,
+  `@ts-expect-error`, `eslint-disable`, shebangs, Makefile `##` help). revive's
+  `exported`/`package-comments` rules disabled in `.golangci.yml`.
+- **Verification:** `go build`/`go vet` clean; `golangci-lint` 0 issues;
+  `go test -race -shuffle=on ./...` all pass; web `tsc -b && vite build` clean,
+  `vitest` 15 files / 188 tests pass, eslint 0 errors; `kubectl kustomize` renders;
+  **end-to-end on kind**: `./deploy/k8s/up.sh` green (all 10 rollouts), dashboard
+  `ALL SYSTEMS CONNECTED`, 6/6 rover pods alive, dome blueprint placed from the
+  hotbar → auction → pods build → coordinator log `complete task=bp1/dome-cap by=R1`
+  (11/11, dome closed); `VITE_MOCK=1 npm run dev` verified in-browser (orbit + surface
+  render from the mock snapshot, no backend).
+- **Commits:** `96a3310` refactor: keep only the k8s and VITE_MOCK run modes ·
+  `395eee5` style: strip all comments from the codebase (branch `chore/prune-to-two-modes`).
+
 ### Session 013 — 2026-06-09 — Milestone 08: galaxy dust/nebula/meteors restored via sky sphere
 - **Goal:** Bring back the galaxy dust band, nebulosity and meteors that vanished
   with the 16k KTX2 starmap upgrade, at high quality and good performance.
