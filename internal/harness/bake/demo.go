@@ -3,10 +3,9 @@ package bake
 import (
 	"fmt"
 	"swarmbuild/internal/core/domain"
-	"swarmbuild/internal/harness/cache"
 )
 
-const DemoBlueprintID = cache.DemoBlueprintID
+const DemoBlueprintID = "dome"
 
 const (
 	typeFoundation domain.TaskType = "foundation"

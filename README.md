@@ -56,7 +56,8 @@ dashboard hotbar and the Rover Pods drive over and build it. Mid-build, KILL a r
 it goes dark in place, its Lease expires, the swarm self-heals onto a neighbour, and
 the same rover revives after ~6s. With an API key in `.env` (see `.env.example`),
 placements dropped in "LLM Generated" mode are generated live by the rovers'
-Generator↔Evaluator loop; without one, every placement replays the committed baked specs.
+Generator↔Evaluator loop; without one, every placement builds from the built-in
+deterministic specs.
 
 See [deploy/k8s/README.md](./deploy/k8s/README.md) for the pod-per-rover details.
 

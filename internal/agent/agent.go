@@ -4,11 +4,9 @@ import (
 	"context"
 	"log/slog"
 	"math/rand/v2"
-	"strings"
 	"swarmbuild/internal/bus"
 	"swarmbuild/internal/core/allocation"
 	"swarmbuild/internal/core/domain"
-	"swarmbuild/internal/harness/cache"
 	"swarmbuild/internal/wire"
 	"sync"
 	"time"
@@ -63,10 +61,6 @@ type Config struct {
 	SettleAfterRevive time.Duration
 
 	BuildOps map[domain.TaskType][]wire.BuildOp
-
-	BlueprintID string
-
-	ReplaySpec func(blueprintID, taskID domain.TaskID) ([]wire.BuildOp, bool)
 }
 
 func (c Config) liveEnabled(mode Mode) bool {
@@ -91,32 +85,7 @@ func (c Config) opsFor(task domain.TaskID, t domain.TaskType) []wire.BuildOp {
 	if c.BuildOps != nil {
 		return c.BuildOps[t]
 	}
-	if ops, ok := c.replayOps(task); ok {
-		return ops
-	}
 	return buildOpsFor(task, t)
-}
-
-func (c Config) replayOps(task domain.TaskID) ([]wire.BuildOp, bool) {
-	if c.BlueprintID == "" {
-		return nil, false
-	}
-	if c.ReplaySpec != nil {
-		return c.ReplaySpec(domain.TaskID(c.BlueprintID), task)
-	}
-	ec, err := cache.Embedded()
-	if err != nil || ec == nil {
-		return nil, false
-	}
-	return ec.Lookup(c.BlueprintID, localTaskID(task))
-}
-
-func localTaskID(task domain.TaskID) string {
-	s := string(task)
-	if i := strings.LastIndexByte(s, '/'); i >= 0 {
-		return s[i+1:]
-	}
-	return s
 }
 
 const (

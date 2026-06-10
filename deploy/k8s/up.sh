@@ -56,7 +56,7 @@ if [[ -f "${REPO_ROOT}/.env" ]]; then
     --dry-run=client -o yaml | kubectl apply -f - >/dev/null
   echo "  ✓ secret 'swarmbuild-llm' synced from .env → live build mode ENABLED on the rovers"
 else
-  echo "  ⚠ no ${REPO_ROOT}/.env → live build mode OFF (placements replay baked specs)."
+  echo "  ⚠ no ${REPO_ROOT}/.env → live build mode OFF (placements build from the built-in deterministic specs)."
 fi
 
 echo "▶ applying manifests (kubectl apply -k ${K8S_DIR})…"
