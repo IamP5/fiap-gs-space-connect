@@ -62,6 +62,14 @@ fi
 echo "▶ applying manifests (kubectl apply -k ${K8S_DIR})…"
 kubectl apply -k "${K8S_DIR}"
 
+echo "▶ pruning resources removed from the manifests (killer sidecar)…"
+kubectl -n "${NS}" delete \
+  deployment/killer \
+  serviceaccount/killer \
+  role/killer-pod-deleter \
+  rolebinding/killer-pod-deleter \
+  --ignore-not-found
+
 if [[ ${CLUSTER_PREEXISTED} -eq 1 ]]; then
   echo "▶ cluster pre-existed → restarting deployments to pick up rebuilt images…"
   kubectl -n "${NS}" rollout restart deployment "${WORKLOADS[@]}"
