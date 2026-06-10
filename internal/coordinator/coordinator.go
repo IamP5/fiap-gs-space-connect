@@ -12,8 +12,6 @@ import (
 	"swarmbuild/internal/core/lease"
 	"swarmbuild/internal/core/planner"
 	"swarmbuild/internal/core/world"
-	"swarmbuild/internal/harness/asset"
-	"swarmbuild/internal/harness/spec"
 	"swarmbuild/internal/wire"
 	"time"
 )
@@ -25,18 +23,16 @@ type BlueprintTask struct {
 }
 
 type Config struct {
-	NATSURL             string
-	Blueprint           []BlueprintTask
-	Rovers              []agent.Config
-	AuctionWindow       time.Duration
-	HeartbeatEvery      time.Duration
-	TTLFactor           int
-	SnapshotHz          int
-	Catalog             *blueprint.Catalog
-	AssetCatalog        *asset.Catalog
-	WorldBounds         float64
-	BuilderDeathBreaker int
-	BuildSpecs          map[domain.TaskID][]wire.BuildOp
+	NATSURL        string
+	Blueprint      []BlueprintTask
+	Rovers         []agent.Config
+	AuctionWindow  time.Duration
+	HeartbeatEvery time.Duration
+	TTLFactor      int
+	SnapshotHz     int
+	Catalog        *blueprint.Catalog
+	WorldBounds    float64
+	BuildSpecs     map[domain.TaskID][]wire.BuildOp
 }
 
 func (cfg Config) withDefaults() Config {
@@ -55,14 +51,8 @@ func (cfg Config) withDefaults() Config {
 	if cfg.Catalog == nil {
 		cfg.Catalog = blueprint.DefaultCatalog()
 	}
-	if cfg.AssetCatalog == nil {
-		cfg.AssetCatalog = asset.DefaultCatalog()
-	}
 	if cfg.WorldBounds <= 0 {
 		cfg.WorldBounds = defaultWorldBounds
-	}
-	if cfg.BuilderDeathBreaker < 1 {
-		cfg.BuilderDeathBreaker = defaultBuilderDeathBreaker
 	}
 	return cfg
 }
@@ -70,8 +60,6 @@ func (cfg Config) withDefaults() Config {
 const tickEvery = 50 * time.Millisecond
 
 const defaultWorldBounds = 150.0
-
-const defaultBuilderDeathBreaker = 3
 
 type (
 	evBid            struct{ bid wire.Bid }
@@ -103,17 +91,13 @@ type state struct {
 
 	blueprint []domain.Task
 
-	catalog      *blueprint.Catalog
-	worldBounds  float64
-	placedTasks  []blueprint.PlacedTask
-	placeSeq     int
-	assetCatalog *asset.Catalog
-	seedSpecs    map[domain.TaskID][]wire.BuildOp
+	catalog     *blueprint.Catalog
+	worldBounds float64
+	placedTasks []blueprint.PlacedTask
+	placeSeq    int
+	seedSpecs   map[domain.TaskID][]wire.BuildOp
 
 	buildSpecs map[domain.TaskID][]wire.BuildOp
-
-	builderDeaths    map[domain.TaskID]int
-	breakerThreshold int
 
 	conn   *bus.Conn
 	kv     *bus.KV
@@ -161,27 +145,24 @@ func Run(ctx context.Context, cfg Config) error {
 	}
 
 	st := &state{
-		plan:             plan,
-		model:            model,
-		leases:           lease.NewManager(clk, ttl),
-		pos:              posByTask,
-		taskSite:         siteByTask,
-		auctions:         make(map[domain.TaskID]*auction),
-		rovers:           make(map[domain.RobotID]wire.Telemetry),
-		conn:             conn,
-		kv:               kv,
-		clk:              clk,
-		ttl:              ttl,
-		window:           cfg.AuctionWindow,
-		blueprint:        append([]domain.Task(nil), tasks...),
-		catalog:          cfg.Catalog,
-		worldBounds:      cfg.WorldBounds,
-		assetCatalog:     cfg.AssetCatalog,
-		earthCh:          make(chan wire.EarthUplink, 64),
-		buildSpecs:       buildSpecs,
-		seedSpecs:        cloneSpecs(buildSpecs),
-		builderDeaths:    make(map[domain.TaskID]int),
-		breakerThreshold: cfg.BuilderDeathBreaker,
+		plan:        plan,
+		model:       model,
+		leases:      lease.NewManager(clk, ttl),
+		pos:         posByTask,
+		taskSite:    siteByTask,
+		auctions:    make(map[domain.TaskID]*auction),
+		rovers:      make(map[domain.RobotID]wire.Telemetry),
+		conn:        conn,
+		kv:          kv,
+		clk:         clk,
+		ttl:         ttl,
+		window:      cfg.AuctionWindow,
+		blueprint:   append([]domain.Task(nil), tasks...),
+		catalog:     cfg.Catalog,
+		worldBounds: cfg.WorldBounds,
+		earthCh:     make(chan wire.EarthUplink, 64),
+		buildSpecs:  buildSpecs,
+		seedSpecs:   cloneSpecs(buildSpecs),
 	}
 
 	st.mirrorAllSpecs(ctx)
@@ -425,15 +406,7 @@ func (st *state) onBuildOp(ctx context.Context, m wire.BuildOpMsg) {
 		return
 	}
 	candidate := append(append(make([]wire.BuildOp, 0, len(existing)+1), existing...), m.Op)
-	if m.Op.AssetKey != "" {
-		entry, ok := st.assetCatalog.Get(m.Op.AssetKey)
-		if !ok || !entry.SuitsType(cur.Type) {
-			slog.Warn("rejected build op: asset key not in catalog",
-				"task", m.TaskID, "seq", m.Seq, "asset_key", m.Op.AssetKey, "task_type", cur.Type)
-			return
-		}
-	}
-	if err := spec.Validate(candidate); err != nil {
+	if err := wire.Validate(candidate); err != nil {
 		slog.Warn("rejected build op", "task", m.TaskID, "seq", m.Seq, "error", err)
 		return
 	}
@@ -481,18 +454,6 @@ func (st *state) onFailed(ctx context.Context, c wire.Failed) {
 	next.Assignee = ""
 	next.LeaseExpiry = 0
 	next.Version = cur.Version + 1
-
-	if c.Reason == wire.ReasonBuilderDied && cur.Mode == string(agent.ModeLive) {
-		st.builderDeaths[c.TaskID]++
-		deaths := st.builderDeaths[c.TaskID]
-		if deaths >= st.breakerThreshold {
-			next.Mode = ""
-			slog.Warn("live circuit breaker tripped: downgrading task to primitive op-source",
-				"task", c.TaskID, "builder_deaths", deaths, "threshold", st.breakerThreshold)
-		} else {
-			slog.Info("builder death recorded", "task", c.TaskID, "by", c.Robot, "builder_deaths", deaths, "threshold", st.breakerThreshold)
-		}
-	}
 
 	if st.model.Apply(next) {
 		st.mirror(ctx, next)
@@ -554,7 +515,7 @@ func (st *state) openAuction(t domain.Task) {
 		bids:     make(map[domain.RobotID]float64),
 		closesAt: time.Now().Add(st.window),
 	}
-	ann := wire.Announce{TaskID: t.ID, Type: t.Type, Pos: pos, Mode: t.Mode, SiteID: st.taskSite[t.ID], Version: t.Version}
+	ann := wire.Announce{TaskID: t.ID, Type: t.Type, Pos: pos, SiteID: st.taskSite[t.ID], Version: t.Version}
 	_ = st.conn.PublishJSON(wire.SubjTaskAnnounce, ann)
 	slog.Info("announce", "task", ann.TaskID, "type", ann.Type, "version", ann.Version)
 }
@@ -615,11 +576,9 @@ func (st *state) award(ctx context.Context, t domain.Task, winner domain.RobotID
 		TaskID:   t.ID,
 		Robot:    winner,
 		Type:     t.Type,
-		Mode:     t.Mode,
 		Pos:      st.pos[t.ID],
 		LeaseTTL: st.ttl,
 		Version:  next.Version,
-		PriorOps: append([]wire.BuildOp(nil), st.buildSpecs[t.ID]...),
 	})
 	st.emit(wire.Event{Kind: wire.EventWon, TaskID: t.ID, Robot: winner})
 	slog.Info("award", "task", t.ID, "to", winner, "cost", cost, "version", next.Version)
@@ -655,7 +614,6 @@ func (st *state) onReload(ctx context.Context) {
 
 	st.auctions = make(map[domain.TaskID]*auction)
 	st.pendingEvents = nil
-	st.builderDeaths = make(map[domain.TaskID]int)
 
 	for _, p := range st.placedTasks {
 		done := p.Task
@@ -703,7 +661,7 @@ func maxVersion(tasks []domain.Task) domain.Lamport {
 func validatedBuildSpecs(in map[domain.TaskID][]wire.BuildOp) (map[domain.TaskID][]wire.BuildOp, error) {
 	out := make(map[domain.TaskID][]wire.BuildOp, len(in))
 	for id, ops := range in {
-		if err := spec.Validate(ops); err != nil {
+		if err := wire.Validate(ops); err != nil {
 			return nil, fmt.Errorf("task %s: %w", id, err)
 		}
 		out[id] = append([]wire.BuildOp(nil), ops...)
@@ -751,7 +709,7 @@ func (st *state) publishSnapshot() {
 			Version:     t.Version,
 			Deps:        t.Deps,
 			Site:        st.taskSite[t.ID],
-			BuildSpec:   st.assetCatalog.ResolveSpec(st.buildSpecs[t.ID]),
+			BuildSpec:   st.buildSpecs[t.ID],
 		})
 	}
 

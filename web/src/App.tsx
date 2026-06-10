@@ -25,7 +25,7 @@ import {
   type Ghost,
 } from "./lib/placement";
 import { missionStats, tasksForSite } from "./lib/missionStats";
-import type { BuildMode, Vec2 } from "./types/wire";
+import type { Vec2 } from "./types/wire";
 import "./styles/dashboard.css";
 
 const Scene3D = lazy(() =>
@@ -43,7 +43,6 @@ export default function App() {
 
   const [activeSite, setActiveSite] = useState<SiteId>("lunar");
 
-  const [liveMode, setLiveMode] = useState(false);
 
   const [progress, setProgress] = useState(0);
   const [ready, setReady] = useState(false);
@@ -85,20 +84,14 @@ export default function App() {
     blueprintId: string;
     origin: Vec2 | null;
     rotation: number;
-    mode: BuildMode;
   } | null>(null);
 
-  const startPlacement = useCallback(
-    (blueprintId: string) => {
-      setSelected(null);
-      setPlacement((prev) =>
-        prev?.blueprintId === blueprintId
-          ? null
-          : { blueprintId, origin: null, rotation: 0, mode: liveMode ? "live" : "replay" },
-      );
-    },
-    [liveMode],
-  );
+  const startPlacement = useCallback((blueprintId: string) => {
+    setSelected(null);
+    setPlacement((prev) =>
+      prev?.blueprintId === blueprintId ? null : { blueprintId, origin: null, rotation: 0 },
+    );
+  }, []);
 
   const movePlacement = useCallback((origin: Vec2) => {
     setPlacement((p) => (p ? { ...p, origin } : p));
@@ -146,12 +139,7 @@ export default function App() {
   const confirmPlacement = useCallback(() => {
     if (!placement || !placement.origin || placementInvalidReason) return;
     send(
-      placeBlueprintControl(
-        placement.blueprintId,
-        placement.origin,
-        placement.rotation,
-        placement.mode,
-      ),
+      placeBlueprintControl(placement.blueprintId, placement.origin, placement.rotation),
     );
     setPlacement(null);
   }, [placement, placementInvalidReason, send]);
@@ -204,8 +192,6 @@ export default function App() {
           <Hotbar
             activeBlueprintId={placement?.blueprintId ?? null}
             onPickBlueprint={startPlacement}
-            liveMode={liveMode}
-            onLiveModeChange={setLiveMode}
             activeSite={activeSite}
             onCycleSite={cycleSite}
             send={send}

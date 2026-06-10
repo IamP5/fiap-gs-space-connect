@@ -84,10 +84,7 @@ export type Control = {
   blueprint_id?: string;
   origin?: Vec2;
   rotation?: number;
-  mode?: BuildMode;
 };
-
-export type BuildMode = "replay" | "live";
 
 export function isSnapshot(v: unknown): v is Snapshot {
   if (typeof v !== "object" || v === null) return false;

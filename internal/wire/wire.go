@@ -40,7 +40,6 @@ type Announce struct {
 	TaskID  domain.TaskID   `json:"task_id"`
 	Type    domain.TaskType `json:"type"`
 	Pos     domain.Vec2     `json:"pos"`
-	Mode    string          `json:"mode,omitempty"`
 	SiteID  string          `json:"site,omitempty"`
 	Version domain.Lamport  `json:"version"`
 }
@@ -55,12 +54,9 @@ type Award struct {
 	TaskID   domain.TaskID   `json:"task_id"`
 	Robot    domain.RobotID  `json:"robot_id"`
 	Type     domain.TaskType `json:"type,omitempty"`
-	Mode     string          `json:"mode,omitempty"`
 	Pos      domain.Vec2     `json:"pos"`
 	LeaseTTL domain.Tick     `json:"lease_ttl"`
 	Version  domain.Lamport  `json:"version"`
-
-	PriorOps []BuildOp `json:"prior_ops,omitempty"`
 }
 
 type Complete struct {
@@ -73,8 +69,6 @@ type Failed struct {
 	Robot  domain.RobotID `json:"robot_id"`
 	Reason string         `json:"reason,omitempty"`
 }
-
-const ReasonBuilderDied = "builder-died"
 
 type Heartbeat struct {
 	Robot  domain.RobotID `json:"robot_id"`
@@ -200,7 +194,6 @@ type Control struct {
 	BlueprintID string      `json:"blueprint_id,omitempty"`
 	Origin      domain.Vec2 `json:"origin,omitzero"`
 	Rotation    float64     `json:"rotation,omitempty"`
-	Mode        string      `json:"mode,omitempty"`
 }
 
 const SubjControl = "control.command"

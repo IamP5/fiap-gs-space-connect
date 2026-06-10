@@ -48,26 +48,19 @@ for img in \
   kind load docker-image "${img}" --name "${CLUSTER}"
 done
 
-echo "▶ ensuring namespace + LLM secret (for live build mode) before apply…"
+echo "▶ ensuring namespace before apply…"
 kubectl create namespace "${NS}" --dry-run=client -o yaml | kubectl apply -f - >/dev/null
-if [[ -f "${REPO_ROOT}/.env" ]]; then
-  kubectl -n "${NS}" create secret generic swarmbuild-llm \
-    --from-env-file="${REPO_ROOT}/.env" \
-    --dry-run=client -o yaml | kubectl apply -f - >/dev/null
-  echo "  ✓ secret 'swarmbuild-llm' synced from .env → live build mode ENABLED on the rovers"
-else
-  echo "  ⚠ no ${REPO_ROOT}/.env → live build mode OFF (placements build from the built-in deterministic specs)."
-fi
 
 echo "▶ applying manifests (kubectl apply -k ${K8S_DIR})…"
 kubectl apply -k "${K8S_DIR}"
 
-echo "▶ pruning resources removed from the manifests (killer sidecar)…"
+echo "▶ pruning resources removed from the manifests (killer sidecar, LLM secret)…"
 kubectl -n "${NS}" delete \
   deployment/killer \
   serviceaccount/killer \
   role/killer-pod-deleter \
   rolebinding/killer-pod-deleter \
+  secret/swarmbuild-llm \
   --ignore-not-found
 
 if [[ ${CLUSTER_PREEXISTED} -eq 1 ]]; then

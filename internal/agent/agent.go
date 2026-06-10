@@ -12,31 +12,6 @@ import (
 	"time"
 )
 
-type Mode string
-
-const (
-	ModeReplay Mode = "replay"
-	ModeLive   Mode = "live"
-)
-
-func effectiveMode(taskMode string, cfgMode Mode) Mode {
-	if taskMode == string(ModeLive) {
-		return ModeLive
-	}
-	if taskMode == "" && cfgMode == ModeLive {
-		return ModeLive
-	}
-	return ModeReplay
-}
-
-type LiveBuilder interface {
-	BuildLive(ctx context.Context, task domain.TaskID, taskType domain.TaskType, priorOps []wire.BuildOp, emit func(iterationOps []wire.BuildOp)) (ok bool)
-}
-
-type liveFaultReporter interface {
-	BuildLiveFault(ctx context.Context, task domain.TaskID, taskType domain.TaskType, priorOps []wire.BuildOp, emit func(iterationOps []wire.BuildOp)) (ok, modelFailed bool)
-}
-
 type Config struct {
 	ID             domain.RobotID
 	Pos            domain.Vec2
@@ -48,12 +23,6 @@ type Config struct {
 
 	SiteID string
 
-	Mode Mode
-
-	LiveBuilder LiveBuilder
-
-	LiveFailureThreshold int
-
 	FailTask domain.TaskID
 
 	RecoverAfter time.Duration
@@ -61,17 +30,6 @@ type Config struct {
 	SettleAfterRevive time.Duration
 
 	BuildOps map[domain.TaskType][]wire.BuildOp
-}
-
-func (c Config) liveEnabled(mode Mode) bool {
-	return mode == ModeLive && c.LiveBuilder != nil && c.BuildOps == nil
-}
-
-func (c Config) liveFailureThreshold() int {
-	if c.LiveFailureThreshold > 0 {
-		return c.LiveFailureThreshold
-	}
-	return defaultLiveFailureThreshold
 }
 
 func (c Config) opEvery() time.Duration {
@@ -108,8 +66,6 @@ const (
 
 const telemetryEvery = 200 * time.Millisecond
 
-const defaultLiveFailureThreshold = 3
-
 const defaultRecoverAfter = 6 * time.Second
 
 const defaultSettleAfterRevive = 2500 * time.Millisecond
@@ -128,8 +84,6 @@ type rover struct {
 	inFlight map[domain.TaskID]struct{}
 
 	refused map[domain.TaskID]struct{}
-
-	liveFailures int
 
 	down chan struct{}
 
@@ -272,13 +226,6 @@ func (r *rover) refuses(task domain.TaskID) bool {
 	defer r.mu.Unlock()
 	_, ok := r.refused[task]
 	return ok
-}
-
-func (r *rover) recordLiveFailure() int {
-	r.mu.Lock()
-	defer r.mu.Unlock()
-	r.liveFailures++
-	return r.liveFailures
 }
 
 func (r *rover) moveToward(target domain.Vec2, maxStep float64) (arrived bool) {
@@ -532,158 +479,11 @@ func drive(ctx context.Context, cfg Config, conn *bus.Conn, st *rover, heart, fa
 }
 
 func workPhase(ctx context.Context, cfg Config, conn *bus.Conn, st *rover, heart, fault *time.Ticker, down <-chan struct{}, aw wire.Award) phaseResult {
-	mode := effectiveMode(aw.Mode, cfg.Mode)
-	if cfg.liveEnabled(mode) {
-		res, outcome := streamLiveOps(ctx, cfg, conn, st, heart, fault, down, aw)
-		if res != phaseDone {
-			return res
-		}
-		switch outcome {
-		case liveEmitted:
-			return phaseDone
-		case liveModelDied:
-			_ = conn.PublishJSON(wire.SubjTaskFailed, wire.Failed{
-				TaskID: aw.TaskID,
-				Robot:  cfg.ID,
-				Reason: wire.ReasonBuilderDied,
-			})
-			_ = conn.Flush()
-			slog.Warn("live build: rover died past model-failure threshold; abandoning task for re-auction",
-				"rover", cfg.ID, "task", aw.TaskID, "reason", wire.ReasonBuilderDied)
-			return phaseAbort
-		case liveDegrade:
-		}
-	}
-
 	ops := cfg.opsFor(aw.TaskID, aw.Type)
 	if len(ops) == 0 {
 		return workTimer(ctx, cfg, conn, st, heart, fault, down, aw)
 	}
 	return streamOps(ctx, cfg, conn, st, heart, fault, down, aw, ops)
-}
-
-type liveOutcome int
-
-const (
-	liveEmitted liveOutcome = iota
-	liveDegrade
-	liveModelDied
-)
-
-func streamLiveOps(ctx context.Context, cfg Config, conn *bus.Conn, st *rover, heart, fault *time.Ticker, down <-chan struct{}, aw wire.Award) (phaseResult, liveOutcome) {
-	genCtx, cancel := context.WithCancel(ctx)
-	defer cancel()
-	build := startLiveBuilder(genCtx, cfg, aw)
-
-	op := time.NewTicker(cfg.opEvery())
-	defer op.Stop()
-	tick := time.NewTicker(moveStep)
-	defer tick.Stop()
-
-	startSeq := len(aw.PriorOps)
-	var (
-		pending []wire.BuildOp
-		next    = startSeq
-		genDone bool
-	)
-	for {
-		if genDone && len(pending) == 0 {
-			return finishLiveBuild(ctx, cfg, st, down, aw, build, next, startSeq)
-		}
-		select {
-		case <-ctx.Done():
-			cancel()
-			return phaseAbort, liveEmitted
-		case <-down:
-			cancel()
-			return phaseAbort, liveEmitted
-		case <-fault.C:
-			if rollFault(st) {
-				cancel()
-				return phaseFault, liveEmitted
-			}
-		case <-heart.C:
-			sendHeartbeat(conn, cfg.ID, aw.TaskID)
-		case <-tick.C:
-			st.drainOverTime(drainPerWorkSec * moveStep.Seconds())
-		case b, ok := <-build.batches:
-			genDone = genDone || !ok
-			pending = append(pending, b...)
-		case <-op.C:
-			pending, next = paceOp(conn, aw.TaskID, pending, next)
-		}
-	}
-}
-
-func finishLiveBuild(ctx context.Context, cfg Config, st *rover, down <-chan struct{}, aw wire.Award, build liveBuild, next, startSeq int) (phaseResult, liveOutcome) {
-	if next > startSeq {
-		return phaseDone, liveEmitted
-	}
-	if isDone(ctx, down) {
-		return phaseAbort, liveEmitted
-	}
-	return phaseDone, dispositionNoOps(cfg, st, aw, build.modelFailed())
-}
-
-func isDone(ctx context.Context, down <-chan struct{}) bool {
-	select {
-	case <-ctx.Done():
-		return true
-	case <-down:
-		return true
-	default:
-		return false
-	}
-}
-
-func dispositionNoOps(cfg Config, st *rover, aw wire.Award, modelFailed bool) liveOutcome {
-	if !modelFailed {
-		return liveDegrade
-	}
-	failures := st.recordLiveFailure()
-	if failures < cfg.liveFailureThreshold() {
-		slog.Warn("live build: model failure under threshold; degrading to replay/primitive",
-			"rover", cfg.ID, "task", aw.TaskID, "failures", failures, "threshold", cfg.liveFailureThreshold())
-		return liveDegrade
-	}
-	st.kill()
-	return liveModelDied
-}
-
-func paceOp(conn *bus.Conn, task domain.TaskID, pending []wire.BuildOp, next int) ([]wire.BuildOp, int) {
-	if len(pending) == 0 {
-		return pending, next
-	}
-	sendBuildOp(conn, task, next, pending[0])
-	return pending[1:], next + 1
-}
-
-type liveBuild struct {
-	batches      <-chan []wire.BuildOp
-	modelFailedP *bool
-}
-
-func (b liveBuild) modelFailed() bool { return *b.modelFailedP }
-
-func startLiveBuilder(genCtx context.Context, cfg Config, aw wire.Award) liveBuild {
-	batches := make(chan []wire.BuildOp, 8)
-	modelFailed := new(bool)
-	emit := func(iterationOps []wire.BuildOp) {
-		select {
-		case batches <- iterationOps:
-		case <-genCtx.Done():
-		}
-	}
-	go func() {
-		defer close(batches)
-		if fr, ok := cfg.LiveBuilder.(liveFaultReporter); ok {
-			_, mf := fr.BuildLiveFault(genCtx, aw.TaskID, aw.Type, aw.PriorOps, emit)
-			*modelFailed = mf
-			return
-		}
-		cfg.LiveBuilder.BuildLive(genCtx, aw.TaskID, aw.Type, aw.PriorOps, emit)
-	}()
-	return liveBuild{batches: batches, modelFailedP: modelFailed}
 }
 
 func workTimer(ctx context.Context, cfg Config, conn *bus.Conn, st *rover, heart, fault *time.Ticker, down <-chan struct{}, aw wire.Award) phaseResult {

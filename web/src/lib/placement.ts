@@ -1,5 +1,5 @@
 
-import type { BuildMode, Control, Vec2, Vec3 } from "../types/wire";
+import type { Control, Vec2, Vec3 } from "../types/wire";
 
 export type Envelope = { center: Vec3; size: Vec3 };
 
@@ -105,17 +105,11 @@ export function dragDeltaToRadians(dxPixels: number): number {
   return dxPixels * ROTATE_RADIANS_PER_PIXEL;
 }
 
-export function placeBlueprintControl(
-  blueprintId: string,
-  origin: Vec2,
-  rotation: number,
-  mode: BuildMode,
-): Control {
+export function placeBlueprintControl(blueprintId: string, origin: Vec2, rotation: number): Control {
   return {
     cmd: "placeBlueprint",
     blueprint_id: blueprintId,
     origin,
     rotation,
-    mode,
   };
 }

@@ -37,7 +37,3 @@ spec:
           env:
             - name: NATS_URL
               value: nats://nats:4222
-          envFrom:
-            - secretRef:
-                name: swarmbuild-llm
-                optional: true

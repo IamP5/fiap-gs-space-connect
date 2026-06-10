@@ -36,7 +36,7 @@ func TestCatalog_EveryBlueprintHasContractsAndLoads(t *testing.T) {
 				t.Errorf("blueprint %q task %q contract has empty done criterion", bp.ID, task.ID)
 			}
 		}
-		placed := bp.Place("t", domain.Vec2{}, 0, "")
+		placed := bp.Place("t", domain.Vec2{}, 0)
 		tasks := make([]domain.Task, len(placed))
 		for i, p := range placed {
 			tasks[i] = p.Task
@@ -82,7 +82,7 @@ func TestPlace_TranslatesAndRotates(t *testing.T) {
 	mast, _ := cat.Get("comms-mast")
 
 	origin := domain.Vec2{X: 30, Y: -10}
-	placed := mast.Place("inst1", origin, math.Pi/2, "")
+	placed := mast.Place("inst1", origin, math.Pi/2)
 
 	byID := make(map[domain.TaskID]blueprint.PlacedTask)
 	for _, p := range placed {
@@ -105,7 +105,7 @@ func TestPlace_RotationMovesOffsetTasks(t *testing.T) {
 	cat := blueprint.DefaultCatalog()
 	solar, _ := cat.Get("solar-array")
 	origin := domain.Vec2{X: 0, Y: 0}
-	placed := solar.Place("s", origin, math.Pi/2, "")
+	placed := solar.Place("s", origin, math.Pi/2)
 
 	var pad2 blueprint.PlacedTask
 	for _, p := range placed {
@@ -115,25 +115,6 @@ func TestPlace_RotationMovesOffsetTasks(t *testing.T) {
 	}
 	if math.Abs(pad2.Pos.X-0) > 1e-6 || math.Abs(pad2.Pos.Y-5) > 1e-6 {
 		t.Fatalf("pad-2 after 90° rotation = %v, want ~(0,5)", pad2.Pos)
-	}
-}
-
-func TestPlace_StampsModeTag(t *testing.T) {
-	cat := blueprint.DefaultCatalog()
-	dome, _ := cat.Get("dome")
-
-	live := dome.Place("L", domain.Vec2{}, 0, "live")
-	for _, p := range live {
-		if p.Task.Mode != "live" {
-			t.Fatalf("live placement: task %s mode = %q, want \"live\"", p.Task.ID, p.Task.Mode)
-		}
-	}
-
-	replay := dome.Place("R", domain.Vec2{}, 0, "")
-	for _, p := range replay {
-		if p.Task.Mode != "" {
-			t.Fatalf("default placement: task %s mode = %q, want \"\" (replay)", p.Task.ID, p.Task.Mode)
-		}
 	}
 }
 

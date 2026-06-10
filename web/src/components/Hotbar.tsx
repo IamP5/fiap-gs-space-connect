@@ -49,16 +49,12 @@ const FootprintIcon = memo(function FootprintIcon({ blueprintId }: { blueprintId
 export const Hotbar = memo(function Hotbar({
   activeBlueprintId,
   onPickBlueprint,
-  liveMode,
-  onLiveModeChange,
   activeSite,
   onCycleSite,
   send,
 }: {
   activeBlueprintId: string | null;
   onPickBlueprint: (blueprintId: string) => void;
-  liveMode: boolean;
-  onLiveModeChange: (live: boolean) => void;
   activeSite: SiteId;
   onCycleSite: () => void;
   send: (c: Control) => void;
@@ -68,11 +64,6 @@ export const Hotbar = memo(function Hotbar({
   const togglePopover = useCallback(
     (dial: StressDial) => setOpenPopover((cur) => (cur === dial ? null : dial)),
     [],
-  );
-
-  const onLiveToggle = useCallback(
-    (e: React.ChangeEvent<HTMLInputElement>) => onLiveModeChange(e.target.checked),
-    [onLiveModeChange],
   );
 
   return (
@@ -95,16 +86,6 @@ export const Hotbar = memo(function Hotbar({
           );
         })}
       </div>
-
-      <div className="hotbar-sep" aria-hidden="true" />
-
-      <label
-        className="hotbar-toggle"
-        title="Generate the next structure live via the Build harness (default: deterministic replay)"
-      >
-        <input type="checkbox" checked={liveMode} onChange={onLiveToggle} />
-        <span>LLM Generated</span>
-      </label>
 
       <div className="hotbar-sep" aria-hidden="true" />
 

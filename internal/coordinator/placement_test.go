@@ -67,12 +67,9 @@ func waitCoordinatorReady(t *testing.T, h *selfHealHarness) {
 	}
 }
 
-func place(t *testing.T, h *selfHealHarness, id string, origin domain.Vec2, rotation float64, mode ...string) {
+func place(t *testing.T, h *selfHealHarness, id string, origin domain.Vec2, rotation float64) {
 	t.Helper()
 	ctl := wire.Control{Cmd: "placeBlueprint", BlueprintID: id, Origin: origin, Rotation: rotation}
-	if len(mode) > 0 {
-		ctl.Mode = mode[0]
-	}
 	if err := h.conn.PublishJSON(wire.SubjControl, ctl); err != nil {
 		t.Fatalf("publish placeBlueprint %s: %v", id, err)
 	}
@@ -129,38 +126,6 @@ func TestPlaceBlueprint_MultipleConcurrent(t *testing.T) {
 			tk, ok := h.getTask(id)
 			return ok && tk.Status == domain.Done
 		})
-	}
-}
-
-func TestPlaceBlueprint_ModeTagsTasksAndCoexist(t *testing.T) {
-	replayIDs := instanceIDs("bp1", "pad-1", "pad-2", "panel-1", "panel-2")
-	liveIDs := instanceIDs("bp2", "base", "mast", "antenna")
-	all := append(append([]domain.TaskID{}, replayIDs...), liveIDs...)
-
-	h := newSelfHealHarness(t, placementConfig(), all...)
-	waitCoordinatorReady(t, h)
-
-	place(t, h, "solar-array", domain.Vec2{X: -100, Y: 0}, 0)
-	place(t, h, "comms-mast", domain.Vec2{X: 100, Y: 0}, 0, "live")
-
-	for _, id := range all {
-		h.poll(fmt.Sprintf("%s DONE", id), func() bool {
-			tk, ok := h.getTask(id)
-			return ok && tk.Status == domain.Done
-		})
-	}
-
-	for _, id := range replayIDs {
-		tk, _ := h.getTask(id)
-		if tk.Mode != string(agent.ModeReplay) {
-			t.Fatalf("default-placement task %s mode = %q, want %q (replay)", id, tk.Mode, agent.ModeReplay)
-		}
-	}
-	for _, id := range liveIDs {
-		tk, _ := h.getTask(id)
-		if tk.Mode != string(agent.ModeLive) {
-			t.Fatalf("live task %s mode = %q, want %q", id, tk.Mode, agent.ModeLive)
-		}
 	}
 }
 

@@ -4,7 +4,6 @@ import (
 	"context"
 	"fmt"
 	"log/slog"
-	"swarmbuild/internal/agent"
 	"swarmbuild/internal/blueprint"
 	"swarmbuild/internal/core/domain"
 	"swarmbuild/internal/core/planner"
@@ -22,7 +21,7 @@ func (st *state) onPlaceBlueprint(ctx context.Context, ctl wire.Control) {
 
 	st.placeSeq++
 	instance := fmt.Sprintf("bp%d", st.placeSeq)
-	placed := bp.Place(instance, ctl.Origin, ctl.Rotation, normalizeMode(ctl.Mode))
+	placed := bp.Place(instance, ctl.Origin, ctl.Rotation)
 
 	if reason, ok := st.validatePlacement(placed); !ok {
 		st.placeSeq--
@@ -118,13 +117,6 @@ func (st *state) allTasks() []domain.Task {
 		}
 	}
 	return out
-}
-
-func normalizeMode(mode string) string {
-	if mode == string(agent.ModeLive) {
-		return string(agent.ModeLive)
-	}
-	return string(agent.ModeReplay)
 }
 
 func onValidTerrain(_ domain.Vec2) bool { return true }

@@ -57,12 +57,6 @@ The forwards run detached (via `nohup`); their PIDs are recorded in
 `${TMPDIR:-/tmp}/swarmbuild-pf-{web,gateway}.log`. If a forward never comes up,
 `up.sh` warns with the log path but leaves the cluster running.
 
-With an API key in the repo-root `.env` (see `.env.example`), `up.sh` syncs it
-into the optional `swarmbuild-llm` Secret, which the Rover Pods mount — a
-Blueprint dropped in "LLM Generated" mode is then generated live by the rover's
-Generator↔Evaluator loop. Without a key, every placement builds from the
-built-in deterministic specs.
-
 ### Place a Blueprint and watch the Pods build it
 
 The board starts **empty** — no dome, no structures, nothing mid-build. The

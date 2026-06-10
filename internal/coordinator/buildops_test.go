@@ -6,7 +6,6 @@ import (
 	"swarmbuild/internal/agent"
 	"swarmbuild/internal/coordinator"
 	"swarmbuild/internal/core/domain"
-	"swarmbuild/internal/harness/asset"
 	"swarmbuild/internal/wire"
 	"testing"
 	"time"
@@ -152,77 +151,5 @@ func TestBuildOps_EmptyOpsByteForBytePreHarness(t *testing.T) {
 
 	if got := h.getSpec(id); len(got) != 0 {
 		t.Fatalf("forced-empty ops still accumulated %d ops; pre-harness invariant violated", len(got))
-	}
-}
-
-func assetKeyOp(key string) wire.BuildOp {
-	rough, metal := 0.85, 0.1
-	return wire.BuildOp{
-		Op:       wire.BuildOpPlace,
-		Shape:    wire.ShapeBox,
-		AssetKey: key,
-		Pos:      domain.Vec3{X: 0, Y: 0.25, Z: 0},
-		Scale:    domain.Vec3{X: 1.6, Y: 0.5, Z: 0.6},
-		Material: wire.Material{Color: "#9aa0aa", Roughness: &rough, Metalness: &metal},
-	}
-}
-
-func assetKeyConfig(id domain.TaskID, ops map[domain.TaskType][]wire.BuildOp, cat *asset.Catalog) coordinator.Config {
-	cfg := oneTaskConfig(id, ops)
-	cfg.AssetCatalog = cat
-	return cfg
-}
-
-func TestBuildOps_InCatalogAssetKeyAccepted(t *testing.T) {
-	const id domain.TaskID = "build-x"
-	cat := asset.NewCatalog(
-		asset.NewEntry("test-key", "/assets/test.glb", []domain.TaskType{typeFoundation}, asset.Identity()),
-	)
-	want := []wire.BuildOp{assetKeyOp("test-key")}
-	h := newSelfHealHarness(t, assetKeyConfig(id, map[domain.TaskType][]wire.BuildOp{typeFoundation: want}, cat), id)
-
-	h.poll("build-x in-catalog op accepted and durable", func() bool {
-		return specEqual(h.getSpec(id), want)
-	})
-
-	h.poll("build-x DONE", func() bool {
-		tk, ok := h.getTask(id)
-		return ok && tk.Status == domain.Done
-	})
-}
-
-func TestBuildOps_OutOfCatalogAssetKeyRejected(t *testing.T) {
-	const id domain.TaskID = "build-x"
-	cat := asset.NewCatalog(
-		asset.NewEntry("test-key", "/assets/test.glb", []domain.TaskType{typeFoundation}, asset.Identity()),
-	)
-	ops := []wire.BuildOp{assetKeyOp("hallucinated-key")}
-	h := newSelfHealHarness(t, assetKeyConfig(id, map[domain.TaskType][]wire.BuildOp{typeFoundation: ops}, cat), id)
-
-	h.poll("build-x DONE despite rejected op", func() bool {
-		tk, ok := h.getTask(id)
-		return ok && tk.Status == domain.Done
-	})
-
-	if got := h.getSpec(id); len(got) != 0 {
-		t.Fatalf("out-of-catalog AssetKey leaked into the spec: %d ops accumulated, want 0", len(got))
-	}
-}
-
-func TestBuildOps_TypeUnsuitedAssetKeyRejected(t *testing.T) {
-	const id domain.TaskID = "build-x"
-	cat := asset.NewCatalog(
-		asset.NewEntry("test-key", "/assets/test.glb", []domain.TaskType{"wall"}, asset.Identity()),
-	)
-	ops := []wire.BuildOp{assetKeyOp("test-key")}
-	h := newSelfHealHarness(t, assetKeyConfig(id, map[domain.TaskType][]wire.BuildOp{typeFoundation: ops}, cat), id)
-
-	h.poll("build-x DONE despite type-unsuited op", func() bool {
-		tk, ok := h.getTask(id)
-		return ok && tk.Status == domain.Done
-	})
-
-	if got := h.getSpec(id); len(got) != 0 {
-		t.Fatalf("type-unsuited AssetKey leaked into the spec: %d ops accumulated, want 0", len(got))
 	}
 }

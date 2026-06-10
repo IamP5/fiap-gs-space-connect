@@ -2,7 +2,6 @@ package agent
 
 import (
 	"swarmbuild/internal/core/domain"
-	"swarmbuild/internal/harness/spec"
 	"swarmbuild/internal/wire"
 	"testing"
 )
@@ -69,7 +68,7 @@ func TestBuildOpsForModuleStream(t *testing.T) {
 				t.Errorf("op %d for %q: part %q, want %q", i, c.kind, op.Part, c.kind)
 			}
 		}
-		if err := spec.Validate(ops); err != nil {
+		if err := wire.Validate(ops); err != nil {
 			t.Errorf("buildOpsFor(%q,%q) must produce a spec-valid stream: %v", c.id, c.typ, err)
 		}
 	}

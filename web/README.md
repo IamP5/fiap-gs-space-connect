@@ -55,8 +55,8 @@ Copy `.env.example` to `.env` (or `.env.local`) to override:
 - **Mission HUD** (top-left): site-scoped build progress + rovers-alive count;
   click to expand the per-task list.
 - **Hotbar** (bottom): blueprint placement glyphs (dome / solar-array /
-  comms-mast), the LLM-Generated build-mode toggle, stress popovers
-  (latency / failure probability), and the site chip (Lunar ↔ Shackleton).
+  comms-mast), stress popovers (latency / failure probability), and the site
+  chip (Lunar ↔ Shackleton).
 - **Kill panel**: click a rover, then KILL — the rover goes dark in place, its
   lease expires, the swarm self-heals, and it revives after its outage window.
 - **Earth panel** (bottom-right): the delayed Earth view that lags the live HUD

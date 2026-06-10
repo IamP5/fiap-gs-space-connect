@@ -44,7 +44,6 @@ The full harness (state, verification, scope, lifecycle, quality) is documented 
 cmd/                                                 Go — thin main packages (binaries)
 internal/core/  internal/wire/  internal/bus/        Go — deep modules + bus contract
 internal/agent/  internal/coordinator/  internal/gateway/  internal/demo/   orchestration
-internal/harness/                                    Go — Build harness (contracts, loop, cache)
 web/                                                 React + Vite dashboard
 deploy/                                              k8s manifests + kind bring-up
 ```

@@ -3,7 +3,7 @@
 The continuity record for agent sessions. Read this first at startup; update it before you
 stop. `feature_list.json` is the per-feature source of truth; this file is the narrative of
 *where we are now* and *what to do next*. Architectural decisions live in the ADRs
-(`docs/00-mvp/adr/`, `docs/01-build-harness/adr/`) — record new decisions there, not here.
+(`docs/00-mvp/adr/`) — record new decisions there, not here.
 
 ## Current Verified State
 
@@ -13,9 +13,10 @@ stop. `feature_list.json` is the per-feature source of truth; this file is the n
 - **Two supported run modes (everything else removed):**
   1. Full stack on kind: `./deploy/k8s/up.sh` (NATS + coordinator + gateway + web + six Rover Pods; dashboard at http://localhost:5173)
   2. Dashboard with no backend: `cd web && VITE_MOCK=1 npm run dev`
-- **Removed this session (Session 014):** the cinematic mode end-to-end (cueKill / HeldTask / ScriptedKill machinery, demo rosters, k8s overlay, web reel layer), the docker-compose headline + `smoke.sh`, the killer sidecar, the gateway `/lab` SSE path + LabPanel, `cmd/bake` + the vision pass + the silhouette rubric, dead web panels (Encore/Lab/Partition, DecorRocks, launch/earthrise beats), bake artifacts, dev screenshots, raw asset sources, and ALL code comments (Go, TS/TSX, CSS, HTML, shell, YAML, Makefile — compiler/linter directives kept; revive's comment-requiring rules disabled in `.golangci.yml`).
-- **Backend baseline:** ✅ green post-prune — `go vet` ok, `golangci-lint` 0 issues, `go test -race -shuffle=on ./...` all pass (archtest rescoped to model/live seams).
-- **Web baseline:** ✅ green post-prune — `tsc -b && vite build` TS-clean, `vitest` 15 files / 188 tests pass, eslint 0 errors.
+- **Removed in Session 014:** the cinematic mode end-to-end (cueKill / HeldTask / ScriptedKill machinery, demo rosters, k8s overlay, web reel layer), the docker-compose headline + `smoke.sh`, the killer sidecar, the gateway `/lab` SSE path + LabPanel, `cmd/bake` + the vision pass + the silhouette rubric, dead web panels (Encore/Lab/Partition, DecorRocks, launch/earthrise beats), bake artifacts, dev screenshots, raw asset sources, and ALL code comments (Go, TS/TSX, CSS, HTML, shell, YAML, Makefile — compiler/linter directives kept; revive's comment-requiring rules disabled in `.golangci.yml`).
+- **Removed in Session 015:** `internal/harness/` and the whole LLM live-generation feature (live build mode, per-Task `Mode` tag, `PriorOps` resume, builder-died circuit breaker, asset catalog, web "LLM Generated" toggle, `swarmbuild-llm` Secret + `.env.example`, `docs/01-build-harness/`). Rovers always build from `buildOpsFor` module specs; `wire.Validate` (moved from `harness/spec`) still guards the coordinator's single-writer.
+- **Backend baseline:** ✅ green post-removal — `go vet` ok, `golangci-lint` 0 issues, `go test ./...` all pass.
+- **Web baseline:** ✅ green post-removal — `tsc -b && vite build` TS-clean, `vitest` 15 files / 187 tests pass, eslint 0 errors.
 - **Earlier milestones (MVP, build-harness, realistic-3d-world, HUD redesign, surface immersion):** shipped; their history lives in `feature_list.json` + `docs/`.
 
 ## Next Steps
@@ -25,6 +26,32 @@ stop. `feature_list.json` is the per-feature source of truth; this file is the n
    self-heal) before any demo.
 
 ## Session Log
+
+### Session 015 — 2026-06-09 — Remove internal/harness + LLM generation end-to-end
+- **Goal (operator):** delete `internal/harness/` and the LLM live-generation feature it
+  powered, guaranteeing the two run modes keep working unchanged.
+- **Analysis:** the harness fed exactly one production feature — live build mode on the
+  rovers. The deterministic path never touched it: `cmd/agent` builds via `buildOpsFor`
+  module specs, and the embedded replay cache was already dead (removed earlier this
+  branch). The only harness code on the deterministic path was `spec.Validate`
+  (coordinator trust boundary) and `asset.ResolveSpec` (identity without LLM ops).
+- **Removed:** `internal/harness/` (model/live/loop/evaluator/trace/spec/asset/bake/
+  archtest), agent live machinery (`Mode`/`LiveBuilder`/failure threshold/`streamLiveOps`),
+  `cmd/agent` `--build-mode` + `LAB_*`/API-key env wiring, coordinator builder-died
+  circuit breaker + asset catalog, wire `Announce.Mode`/`Award.Mode`/`Award.PriorOps`/
+  `Control.Mode`/`ReasonBuilderDied`, `domain.Task.Mode`, `blueprint.Place` mode param,
+  web `liveMode`/`BuildMode`/"LLM Generated" hotbar toggle + CSS, rover-manifest
+  `swarmbuild-llm` secret mounts, the up.sh `.env`→Secret sync, root `.env.example`,
+  `docs/01-build-harness/`, and the live/replay/asset test files. `go mod tidy` dropped
+  openai-go + chromedp.
+- **Kept:** `wire.Fold`/`wire.Validate` (moved from `harness/spec` into `internal/wire`) —
+  the coordinator still rejects malformed build ops at the single-writer.
+- **Verification:** `go vet` + `golangci-lint` 0 issues; `go test ./...` green
+  (coordinator suite 136s); web `tsc -b && vite build` clean, `vitest` 187 tests pass,
+  eslint 0 errors; **end-to-end on kind**: `./deploy/k8s/up.sh` green (all 10 rollouts,
+  stale `swarmbuild-llm` secret pruned), `placeBlueprint dome` over NATS → 11/11 tasks
+  `complete` incl. `bp1/dome-cap`; `VITE_MOCK=1 npm run dev` verified in-browser via
+  chrome-devtools (orbit renders, hotbar shows blueprints/stress/site only).
 
 ### Session 014 — 2026-06-09 — Prune to two run modes + strip all comments
 - **Goal (operator):** remove everything unused; keep exactly two run states —

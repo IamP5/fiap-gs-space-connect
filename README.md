@@ -24,11 +24,10 @@ wrapped in a thin simulation + NATS bus + 3D dashboard that exist to make those 
 /internal/core        Go — deep modules (allocation, lease, world, planner)
 /internal/wire        Go — NATS subjects + JSON message/snapshot contract
 /internal/bus         Go — NATS wrapper (connect/retry, pub/sub, KV) + server
-/internal/agent       Go — robot agent (bid/execute/heartbeat, replay/live build)
+/internal/agent       Go — robot agent (bid/execute/heartbeat, deterministic build)
 /internal/coordinator Go — single-writer tick, auction, lease, world, KV
 /internal/gateway     Go — NATS→WebSocket fan-out + /healthz
 /internal/demo        Go — pacing + scenario assembly for the sandbox
-/internal/harness     Go — Build harness (contracts, refine loop, replay cache)
 /web                  React + Vite — 3D dashboard (react-three-fiber)
 /deploy               k8s manifests + kind bring-up (pod-per-rover swarm)
 ```
@@ -54,9 +53,7 @@ cd web && VITE_MOCK=1 npm run dev
 The board starts empty: drop a Blueprint (dome / solar-array / comms-mast) from the
 dashboard hotbar and the Rover Pods drive over and build it. Mid-build, KILL a rover —
 it goes dark in place, its Lease expires, the swarm self-heals onto a neighbour, and
-the same rover revives after ~6s. With an API key in `.env` (see `.env.example`),
-placements dropped in "LLM Generated" mode are generated live by the rovers'
-Generator↔Evaluator loop; without one, every placement builds from the built-in
+the same rover revives after ~6s. Every placement builds from the built-in
 deterministic specs.
 
 See [deploy/k8s/README.md](./deploy/k8s/README.md) for the pod-per-rover details.

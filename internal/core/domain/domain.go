@@ -66,8 +66,6 @@ type Task struct {
 	LeaseExpiry Tick
 	Version     Lamport
 
-	Mode string
-
 	SiteID string
 }
 

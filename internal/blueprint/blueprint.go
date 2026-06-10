@@ -50,7 +50,7 @@ type PlacedTask struct {
 	Envelope Envelope
 }
 
-func (b Blueprint) Place(instance string, origin domain.Vec2, rotation float64, mode string) []PlacedTask {
+func (b Blueprint) Place(instance string, origin domain.Vec2, rotation float64) []PlacedTask {
 	sin, cos := math.Sin(rotation), math.Cos(rotation)
 	prefix := func(id domain.TaskID) domain.TaskID {
 		return domain.TaskID(instance + "/" + string(id))
@@ -76,7 +76,6 @@ func (b Blueprint) Place(instance string, origin domain.Vec2, rotation float64, 
 				Type:   t.Type,
 				Deps:   deps,
 				Status: domain.Unclaimed,
-				Mode:   mode,
 			},
 			Pos:      abs,
 			Envelope: t.Envelope,
