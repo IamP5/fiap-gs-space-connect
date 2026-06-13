@@ -22,7 +22,7 @@ Pick exactly one **type** + one **area** (see docs/harness/issue-tracking.md):
 
 ## Checklist
 
-- [ ] Definition of Done met (build + lint + tests; `./deploy/smoke.sh` if the change crosses components)
+- [ ] Definition of Done met (build + lint + tests; `./deploy/k8s/up.sh` if the change crosses components)
 - [ ] `feature_list.json` / `PROGRESS.md` updated
 - [ ] If this closes an epic child, ticked its box in `docs/<epic>/issues/<NN>-*.md` **and** the epic's child checklist
 - [ ] New textured/glTF assets have a primitive fallback + `CREDITS.md` entry (renderer work)

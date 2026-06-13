@@ -66,8 +66,6 @@ describe("missionStats", () => {
     const healthy = missionStats(tasks, [rover("r1", true), rover("r2", true)], "lunar");
     expect(healthy.roversAlive).toBe(2);
 
-    // A Failure spike flips a rover dead AND re-opens its task (LEASED→...): the
-    // alive count dips immediately.
     const spiked = missionStats(
       [task("a", "DONE"), task("b", "UNCLAIMED")],
       [rover("r1", true), rover("r2", false)],
@@ -76,7 +74,6 @@ describe("missionStats", () => {
     expect(spiked.roversAlive).toBe(1);
     expect(spiked.done).toBe(1);
 
-    // Heal: rover revives, task re-auctioned and finished → counts recover.
     const healed = missionStats(
       [task("a", "DONE"), task("b", "DONE")],
       [rover("r1", true), rover("r2", true)],

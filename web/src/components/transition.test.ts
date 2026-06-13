@@ -1,9 +1,3 @@
-// transition.test.ts — pure camera-transition math for the unified driver. The
-// driver itself owns the live camera (untestable in node), but its SHAPE is pure:
-// poseFor picks the canonical settled pose for a (view, site), and traverseEnvelope
-// describes the surface→surface ground drive. Both are load-bearing — a wrong dest
-// pose snaps the camera, a wrong envelope reveals the site swap — so we pin their
-// contracts here.
 
 import { describe, expect, it } from "vitest";
 import { poseFor, traverseEnvelope } from "./Scene3D";
@@ -25,8 +19,6 @@ describe("poseFor", () => {
   it("frames the Shackleton crater: a distinct above-ground pose aimed into the bowl", () => {
     const lunar = poseFor("surface", "lunar");
     const shk = poseFor("surface", "shackleton");
-    // A distinct framing from lunar, camera above the floor, aimed DOWN and IN onto
-    // the crater floor / outpost (target.z < 0, into the bowl).
     expect(shk.position.equals(lunar.position)).toBe(false);
     expect(shk.position.y).toBeGreaterThan(0);
     expect(shk.target.z).toBeLessThan(0);
@@ -44,7 +36,6 @@ describe("traverseEnvelope", () => {
     const mid = traverseEnvelope(0.5).veil;
     expect(mid).toBeGreaterThan(traverseEnvelope(0.35).veil);
     expect(mid).toBeGreaterThan(traverseEnvelope(0.65).veil);
-    // Must FULLY cover the single swap frame (stronger than the old glare spike).
     expect(mid).toBeGreaterThanOrEqual(0.99);
   });
 

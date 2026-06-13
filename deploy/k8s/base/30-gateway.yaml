@@ -1,6 +1,3 @@
-# WS Gateway — tails NATS world snapshots and fans them out to browser WebSocket
-# clients, relaying browser control frames (e.g. KILL Rx) back onto NATS. The
-# browser never speaks NATS — only this gateway does.
 apiVersion: apps/v1
 kind: Deployment
 metadata:
@@ -24,22 +21,12 @@ spec:
       containers:
         - name: gateway
           image: swarmbuild-gateway:dev
-          imagePullPolicy: IfNotPresent # use the kind-loaded local image
+          imagePullPolicy: IfNotPresent
           env:
             - name: NATS_URL
               value: nats://nats:4222
             - name: GATEWAY_ADDR
               value: ":8080"
-          # Live lab mode (bh-07): the gateway mounts the /lab/* endpoints only
-          # when it sees an API key at startup. The key comes from the OPTIONAL
-          # 'swarmbuild-llm' Secret (synced by up.sh from the repo-root .env, never
-          # committed). Secret absent ⇒ gateway still starts, live lab is simply
-          # off and the headline replays baked specs. Override LAB_PROVIDER /
-          # LAB_MODEL here to swap vendor (defaults: openai / gpt-4o-2024-08-06).
-          envFrom:
-            - secretRef:
-                name: swarmbuild-llm
-                optional: true
           ports:
             - name: http
               containerPort: 8080

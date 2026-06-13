@@ -3,34 +3,84 @@
 The continuity record for agent sessions. Read this first at startup; update it before you
 stop. `feature_list.json` is the per-feature source of truth; this file is the narrative of
 *where we are now* and *what to do next*. Architectural decisions live in the ADRs
-(`docs/00-mvp/adr/`, `docs/01-build-harness/adr/`) — record new decisions there, not here.
+(`docs/00-mvp/adr/`) — record new decisions there, not here.
 
 ## Current Verified State
 
-- **Repository root:** `/Users/tuba/Dev/projects/gs-fiap-space` (branch `docs/01-build-harness`)
+- **Repository root:** `/Users/tuba/Dev/projects/gs-fiap-space` (branch `chore/prune-to-two-modes`)
 - **Standard startup path:** `./init.sh` (Go baseline; `WEB=1 ./init.sh` to include the dashboard)
-- **Standard verification path:** `make check` (vet + lint + race tests); `./deploy/smoke.sh` for end-to-end self-heal
-- **Branch:** `main` (the whole build-harness milestone is merged — PR #12 @ `25ce08a`)
-- **Backend baseline:** ✅ green @ `25ce08a` — `go vet` ok, `golangci-lint` 0 issues, `go test -race -shuffle=on ./...` all pass incl. `internal/harness/live` + the rescoped archtest (go1.25.5)
-- **Web baseline:** ✅ green @ `25ce08a` — `tsc -b && vite build` TS-clean, `vitest` 10 files / 111 tests pass (`WEB=1 ./init.sh`)
-- **End-to-end:** ✅ verified this session — live compose stack up; coordinator logs assert `msg=expiry task=wall-1 … returned to UNCLAIMED` (self-heal) then `msg=complete task=dome-cap by=R1` (dome closed). The `deploy/smoke.sh` *wrapper* can't pass its host `/healthz` gate on this laptop: a stale `kubectl port-forward` (kind cluster, `swarmbuild-control-plane`) is holding `127.0.0.1:8080` and shadows the compose gateway — environment collision, not a regression. Kill that port-forward (or run smoke on a clean host) to get a green wrapper.
-- **MVP (issues 01–11):** all `passing` in `feature_list.json`; GitHub issues #13–#23 closed; milestone "SwarmBuild MVP" closed.
-- **Build-harness (bh-01..bh-08):** all `passing` in `feature_list.json` with evidence; GitHub issues #24–#38 closed; milestone "Build Harness" closed. **All 19 features now `passing` — no open work in the tracker.**
-- **Realistic-3d-world (epic #46): ✅ COMPLETE — all 59 features `passing`.** Wave 3 cinematic polish (#99,#101–109) + Wave 4 living orbit (#112) + r3d-100 (Texture fidelity) all on `main`; **r3d-110 (Sun GodRays + anamorphic streak) + r3d-111 (Material tier polish) merged to `main` 2026-06-07** (operator signed off) via branch `wave3/godrays-material-polish` (feat `96221e0` + perf `737a6cd`). `feature_list.json`: **59/59 `passing`**. Epic #46 can close (its three remaining children — #100/#110/#111 — are all done). Build-harness + MVP milestones remain closed; backend baseline unchanged.
+- **Standard verification path:** `make check` (vet + lint + race tests); `./deploy/k8s/up.sh` for end-to-end self-heal
+- **Two supported run modes (everything else removed):**
+  1. Full stack on kind: `./deploy/k8s/up.sh` (NATS + coordinator + gateway + web + six Rover Pods; dashboard at http://localhost:5173)
+  2. Dashboard with no backend: `cd web && VITE_MOCK=1 npm run dev`
+- **Removed in Session 014:** the cinematic mode end-to-end (cueKill / HeldTask / ScriptedKill machinery, demo rosters, k8s overlay, web reel layer), the docker-compose headline + `smoke.sh`, the killer sidecar, the gateway `/lab` SSE path + LabPanel, `cmd/bake` + the vision pass + the silhouette rubric, dead web panels (Encore/Lab/Partition, DecorRocks, launch/earthrise beats), bake artifacts, dev screenshots, raw asset sources, and ALL code comments (Go, TS/TSX, CSS, HTML, shell, YAML, Makefile — compiler/linter directives kept; revive's comment-requiring rules disabled in `.golangci.yml`).
+- **Removed in Session 015:** `internal/harness/` and the whole LLM live-generation feature (live build mode, per-Task `Mode` tag, `PriorOps` resume, builder-died circuit breaker, asset catalog, web "LLM Generated" toggle, `swarmbuild-llm` Secret + `.env.example`, `docs/01-build-harness/`). Rovers always build from `buildOpsFor` module specs; `wire.Validate` (moved from `harness/spec`) still guards the coordinator's single-writer.
+- **Backend baseline:** ✅ green post-removal — `go vet` ok, `golangci-lint` 0 issues, `go test ./...` all pass.
+- **Web baseline:** ✅ green post-removal — `tsc -b && vite build` TS-clean, `vitest` 15 files / 187 tests pass, eslint 0 errors.
+- **Earlier milestones (MVP, build-harness, realistic-3d-world, HUD redesign, surface immersion):** shipped; their history lives in `feature_list.json` + `docs/`.
 
 ## Next Steps
 
-1. **Close epic #46** on GitHub (all 59 children `passing`/merged) and close issues
-   #110/#111 if the merge auto-close didn't fire (the merge commit carries `Closes
-   #110`/`Closes #111`). Realism milestone is feature-complete.
-2. **Push `main`** when ready — the r3d-110/111 merge is local only (commits
-   `96221e0`, `737a6cd`, and the merge commit). Nothing has been pushed to the remote.
-3. **Branch hygiene:** `wave3/godrays-material-polish` (now merged) plus the older
-   `wave4/living-orbit` + `wave3/integration` + merged `worktree-agent-*` heads can be
-   deleted. Keep the invariant sacred on the backend self-heal core (ADR-0009); re-run
-   `./deploy/smoke.sh` before any demo.
+1. Merge `chore/prune-to-two-modes` to `main`.
+2. Re-run `./deploy/k8s/up.sh` end-to-end (place a blueprint, KILL a rover, watch the
+   self-heal) before any demo.
 
 ## Session Log
+
+### Session 015 — 2026-06-09 — Remove internal/harness + LLM generation end-to-end
+- **Goal (operator):** delete `internal/harness/` and the LLM live-generation feature it
+  powered, guaranteeing the two run modes keep working unchanged.
+- **Analysis:** the harness fed exactly one production feature — live build mode on the
+  rovers. The deterministic path never touched it: `cmd/agent` builds via `buildOpsFor`
+  module specs, and the embedded replay cache was already dead (removed earlier this
+  branch). The only harness code on the deterministic path was `spec.Validate`
+  (coordinator trust boundary) and `asset.ResolveSpec` (identity without LLM ops).
+- **Removed:** `internal/harness/` (model/live/loop/evaluator/trace/spec/asset/bake/
+  archtest), agent live machinery (`Mode`/`LiveBuilder`/failure threshold/`streamLiveOps`),
+  `cmd/agent` `--build-mode` + `LAB_*`/API-key env wiring, coordinator builder-died
+  circuit breaker + asset catalog, wire `Announce.Mode`/`Award.Mode`/`Award.PriorOps`/
+  `Control.Mode`/`ReasonBuilderDied`, `domain.Task.Mode`, `blueprint.Place` mode param,
+  web `liveMode`/`BuildMode`/"LLM Generated" hotbar toggle + CSS, rover-manifest
+  `swarmbuild-llm` secret mounts, the up.sh `.env`→Secret sync, root `.env.example`,
+  `docs/01-build-harness/`, and the live/replay/asset test files. `go mod tidy` dropped
+  openai-go + chromedp.
+- **Kept:** `wire.Fold`/`wire.Validate` (moved from `harness/spec` into `internal/wire`) —
+  the coordinator still rejects malformed build ops at the single-writer.
+- **Verification:** `go vet` + `golangci-lint` 0 issues; `go test ./...` green
+  (coordinator suite 136s); web `tsc -b && vite build` clean, `vitest` 187 tests pass,
+  eslint 0 errors; **end-to-end on kind**: `./deploy/k8s/up.sh` green (all 10 rollouts,
+  stale `swarmbuild-llm` secret pruned), `placeBlueprint dome` over NATS → 11/11 tasks
+  `complete` incl. `bp1/dome-cap`; `VITE_MOCK=1 npm run dev` verified in-browser via
+  chrome-devtools (orbit renders, hotbar shows blueprints/stress/site only).
+
+### Session 014 — 2026-06-09 — Prune to two run modes + strip all comments
+- **Goal (operator):** remove everything unused; keep exactly two run states —
+  `./deploy/k8s/up.sh` (web + backends on kind) and `VITE_MOCK=1 npm run dev`
+  (web, no backend); kill every other scenario (cinematic etc.); erase all code comments.
+- **Removed:** cinematic mode end-to-end (Go cueKill/HeldTask/ScriptedKill + demo
+  rosters + k8s overlay + web reel/CinematicCopy/cinematicArm/marker cues/orbit-open
+  rig/H-key HUD-hide), docker-compose + `smoke.sh` + `make demo/smoke`, the killer
+  sidecar (cmd+internal+Dockerfiles+manifests+RBAC; its only live trigger was the dead
+  encore), the gateway `/lab` SSE path + LabPanel/useLab/lib/lab, `cmd/bake` +
+  `internal/harness/vision` + the silhouette rubric + `cache.Store` + trace sidecars,
+  dead web modules (EncorePanel, PartitionPanel + crdt, DecorRocks, launch/earthrise
+  beats, bake-harness entry), `.screenshots/`, `sources/`, `scripts/`,
+  `docs/07-demo-cinematic/`, `docs/00-mvp/encore.md`. `cmd/coordinator` now boots the
+  external sandbox unconditionally; `internal/demo` is just pacing + empty-board scenario.
+- **Comments:** every line/block comment stripped across Go/TS/TSX/CSS/HTML/shell/
+  YAML/Makefile/Dockerfiles (directives kept: `//go:*`, `//nolint`, `///`,
+  `@ts-expect-error`, `eslint-disable`, shebangs, Makefile `##` help). revive's
+  `exported`/`package-comments` rules disabled in `.golangci.yml`.
+- **Verification:** `go build`/`go vet` clean; `golangci-lint` 0 issues;
+  `go test -race -shuffle=on ./...` all pass; web `tsc -b && vite build` clean,
+  `vitest` 15 files / 188 tests pass, eslint 0 errors; `kubectl kustomize` renders;
+  **end-to-end on kind**: `./deploy/k8s/up.sh` green (all 10 rollouts), dashboard
+  `ALL SYSTEMS CONNECTED`, 6/6 rover pods alive, dome blueprint placed from the
+  hotbar → auction → pods build → coordinator log `complete task=bp1/dome-cap by=R1`
+  (11/11, dome closed); `VITE_MOCK=1 npm run dev` verified in-browser (orbit + surface
+  render from the mock snapshot, no backend).
+- **Commits:** `96a3310` refactor: keep only the k8s and VITE_MOCK run modes ·
+  `395eee5` style: strip all comments from the codebase (branch `chore/prune-to-two-modes`).
 
 ### Session 013 — 2026-06-09 — Milestone 08: galaxy dust/nebula/meteors restored via sky sphere
 - **Goal:** Bring back the galaxy dust band, nebulosity and meteors that vanished

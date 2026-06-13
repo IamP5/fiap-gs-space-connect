@@ -2,13 +2,10 @@ package agent
 
 import (
 	"swarmbuild/internal/core/domain"
-	"swarmbuild/internal/harness/spec"
 	"swarmbuild/internal/wire"
 	"testing"
 )
 
-// Kind names, kept as consts so the test tables don't repeat string literals (and
-// stay in lockstep with web/src/components/Structures.tsx StructureKind).
 const (
 	kFoundation = "foundation"
 	kWall       = "wall"
@@ -19,9 +16,6 @@ const (
 	kDomeCap    = "dome-cap"
 )
 
-// TestStructureKind mirrors web/src/components/Structures.tsx kindOf: the type picks
-// the family and the id only refines the ambiguous dome-cap (comms antenna → dish,
-// else habitat dome).
 func TestStructureKind(t *testing.T) {
 	cases := []struct {
 		typ  domain.TaskType
@@ -33,9 +27,9 @@ func TestStructureKind(t *testing.T) {
 		{kPanel, "solar-array/panel-2", kPanel},
 		{kMast, "comms/mast", kMast},
 		{kDomeCap, "lunar/dome-cap", kDome},
-		{kDomeCap, "comms/antenna", kDish}, // the id disambiguates the shared type
+		{kDomeCap, "comms/antenna", kDish},
 		{kDomeCap, "comms/dish-1", kDish},
-		{"sometypewedontknow", "x", kDome}, // unknown type → habitat dome
+		{"sometypewedontknow", "x", kDome},
 	}
 	for _, c := range cases {
 		if got := structureKind(c.typ, c.id); got != c.want {
@@ -44,10 +38,6 @@ func TestStructureKind(t *testing.T) {
 	}
 }
 
-// TestBuildOpsForModuleStream asserts every Task yields partSteps[kind] well-formed
-// "module" ops, all carrying the resolved kind as Part — the contract the renderer's
-// reveal-by-count path (Structures.tsx) depends on. The per-kind COUNT must stay in
-// sync with the `steps` arrays in Structures.tsx.
 func TestBuildOpsForModuleStream(t *testing.T) {
 	cases := []struct {
 		typ  domain.TaskType
@@ -78,8 +68,7 @@ func TestBuildOpsForModuleStream(t *testing.T) {
 				t.Errorf("op %d for %q: part %q, want %q", i, c.kind, op.Part, c.kind)
 			}
 		}
-		// The whole stream must pass the server-side gate the coordinator re-applies.
-		if err := spec.Validate(ops); err != nil {
+		if err := wire.Validate(ops); err != nil {
 			t.Errorf("buildOpsFor(%q,%q) must produce a spec-valid stream: %v", c.id, c.typ, err)
 		}
 	}

@@ -1,17 +1,4 @@
 #!/usr/bin/env bash
-# SwarmBuild — standard startup + verification path (harness entry point).
-#
-# This is the single command a coding-agent session runs at startup (AGENTS.md
-# "Startup Workflow", step 5) and the baseline gate before any new work. It is
-# idempotent and safe to re-run: it never launches a long-running server unless
-# you explicitly ask it to.
-#
-#   ./init.sh                 # sync deps + run the baseline verification gate
-#   FAST=1 ./init.sh          # Go only (skip the web build/test) — quick loop
-#   WEB=1 ./init.sh           # also build + test the web dashboard
-#   RUN_START_COMMAND=1 ./init.sh   # after verifying, bring up the full demo stack
-#
-# See docs/harness/README.md for how this fits the rest of the harness.
 set -euo pipefail
 
 ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
@@ -19,7 +6,6 @@ cd "$ROOT_DIR"
 
 echo "==> Working directory: $PWD"
 
-# --- Go backend: deep modules + orchestration (the substance) ----------------
 echo "==> Syncing Go dependencies"
 go mod download
 
@@ -40,7 +26,6 @@ fi
 echo "==> go test -race -shuffle=on ./... (all backend tests)"
 go test -race -shuffle=on ./...
 
-# --- Web dashboard: opt-in (heavier; needs npm) ------------------------------
 if [ "${WEB:-0}" = "1" ] && [ "${FAST:-0}" != "1" ]; then
   if command -v npm >/dev/null 2>&1; then
     echo "==> web: npm install"
@@ -58,10 +43,10 @@ fi
 
 echo ""
 echo "✅ Baseline verification passed. The repo is in a known-good state."
-echo "   Full demo stack:  make demo            (dashboard at http://localhost:5173)"
-echo "   Pre-demo smoke:   ./deploy/smoke.sh    (end-to-end self-heal assertion)"
+echo "   Full stack on k8s:  ./deploy/k8s/up.sh   (dashboard at http://localhost:5173)"
+echo "   UI with no backend: (cd web && VITE_MOCK=1 npm run dev)"
 
 if [ "${RUN_START_COMMAND:-0}" = "1" ]; then
-  echo "==> Starting the full demo stack (docker compose up --build)…"
-  exec docker compose -f deploy/docker-compose.yml up --build
+  echo "==> Starting the full stack on kind…"
+  exec ./deploy/k8s/up.sh
 fi

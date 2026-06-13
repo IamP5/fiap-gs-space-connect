@@ -19,8 +19,7 @@ Engineering substance = four pure, unit-tested Go **deep modules** (`allocation`
 
 **Read these first:** [CONTEXT.md](./CONTEXT.md) (domain language — load-bearing),
 [PRD-SwarmBuild-MVP.md](./docs/00-mvp/PRD-SwarmBuild-MVP.md), [docs/TECHSPEC.md](./docs/00-mvp/TECHSPEC.md),
-[docs/adr/](./docs/00-mvp/adr/). The optional container encore (`docker kill` a real Rover that
-heals over the bus) is documented in [docs/encore.md](./docs/00-mvp/encore.md).
+[docs/adr/](./docs/00-mvp/adr/).
 
 ## Session lifecycle (start here)
 
@@ -46,7 +45,7 @@ cmd/                                                 Go — thin main packages (
 internal/core/  internal/wire/  internal/bus/        Go — deep modules + bus contract
 internal/agent/  internal/coordinator/  internal/gateway/  internal/demo/   orchestration
 web/                                                 React + Vite dashboard
-deploy/                                              docker-compose + smoke.sh
+deploy/                                              k8s manifests + kind bring-up
 ```
 
 Application code is private under `internal/` (standard Go layout); `main` packages stay
@@ -66,9 +65,9 @@ npm test                       # vitest
 npm run build                  # tsc -b && vite build — must be TS-clean
 VITE_MOCK=1 npm run dev        # UI with no backend
 
-# Full demo / pre-demo smoke
-docker compose -f deploy/docker-compose.yml up --build   # dashboard at :5173
-./deploy/smoke.sh                                         # build, assert healthy, tear down
+# Full stack (kind cluster: NATS + coordinator + gateway + web + rover pods)
+./deploy/k8s/up.sh             # dashboard at http://localhost:5173
+./deploy/k8s/down.sh           # tear down
 ```
 
 ## Conventions
@@ -98,7 +97,7 @@ go build ./...                 # 1. compiles clean
 make lint                      # 1. golangci-lint — 0 issues
 go test -race ./...            # 2. unit + integration tests pass
 # web changes also: (cd web && npm run build && npm test)
-./deploy/smoke.sh              # 3. end-to-end — REQUIRED when the change crosses components
+./deploy/k8s/up.sh             # 3. end-to-end — REQUIRED when the change crosses components
 ```
 
 …and then: the behavior is implemented, the verification **actually ran**, and the evidence

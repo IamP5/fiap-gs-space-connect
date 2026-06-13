@@ -8,14 +8,6 @@ import (
 	"testing"
 )
 
-// domeBlueprint is the lunar habitat dome fixture from TECHSPEC §5:
-//
-//	foundation-1..4   (no deps)
-//	   └─► wall-1..8   (each wall needs its foundation)
-//	          └─► dome-cap  (needs ALL walls)
-//
-// Eight walls over four foundations: walls 1,2 sit on foundation-1; 3,4 on
-// foundation-2; 5,6 on foundation-3; 7,8 on foundation-4.
 func domeBlueprint() []domain.Task {
 	tasks := []domain.Task{}
 
@@ -59,7 +51,6 @@ func mustLoad(t *testing.T, tasks []domain.Task) *Plan {
 	return p
 }
 
-// asSet turns an id slice into a set for order-independent membership checks.
 func asSet(ids []domain.TaskID) map[domain.TaskID]bool {
 	s := make(map[domain.TaskID]bool, len(ids))
 	for _, id := range ids {
@@ -145,7 +136,6 @@ func TestReady_InitiallyOnlyNoDepTasks(t *testing.T) {
 func TestReady_CompletingDependencyUnblocksDependent(t *testing.T) {
 	p := mustLoad(t, domeBlueprint())
 
-	// Before: wall-1 and wall-2 (both on foundation-1) are not ready.
 	before := asSet(p.Ready())
 	if before["wall-1"] || before["wall-2"] {
 		t.Fatalf("wall on foundation-1 ready before foundation-1 done: %v", p.Ready())
@@ -155,8 +145,6 @@ func TestReady_CompletingDependencyUnblocksDependent(t *testing.T) {
 		t.Fatalf("MarkDone(foundation-1) = false, want true")
 	}
 
-	// After: wall-1 and wall-2 become ready; foundation-1 drops out (it's DONE);
-	// walls on other foundations remain blocked.
 	after := asSet(p.Ready())
 	if !after["wall-1"] || !after["wall-2"] {
 		t.Fatalf("walls on foundation-1 not ready after it completed: %v", p.Ready())
@@ -172,7 +160,6 @@ func TestReady_CompletingDependencyUnblocksDependent(t *testing.T) {
 func TestReady_DomeCapNeedsAllWalls(t *testing.T) {
 	p := mustLoad(t, domeBlueprint())
 
-	// Complete every foundation, then every wall but the last.
 	for i := 1; i <= 4; i++ {
 		p.MarkDone(domain.TaskID(fmt.Sprintf("foundation-%d", i)))
 	}
@@ -180,7 +167,6 @@ func TestReady_DomeCapNeedsAllWalls(t *testing.T) {
 		p.MarkDone(domain.TaskID(fmt.Sprintf("wall-%d", i)))
 	}
 
-	// With one wall outstanding, dome-cap must NOT be ready; wall-8 must be.
 	mid := asSet(p.Ready())
 	if mid["dome-cap"] {
 		t.Fatalf("dome-cap ready before all walls done: %v", p.Ready())
@@ -189,14 +175,12 @@ func TestReady_DomeCapNeedsAllWalls(t *testing.T) {
 		t.Fatalf("wall-8 not ready though foundation-4 done: %v", p.Ready())
 	}
 
-	// Completing the last wall makes dome-cap the sole ready task.
 	p.MarkDone("wall-8")
 	final := p.Ready()
 	if !reflect.DeepEqual(final, []domain.TaskID{"dome-cap"}) {
 		t.Fatalf("after last wall, Ready() = %v, want [dome-cap]", final)
 	}
 
-	// Completing dome-cap empties the ready set entirely.
 	p.MarkDone("dome-cap")
 	if got := p.Ready(); len(got) != 0 {
 		t.Fatalf("Ready() = %v, want empty after everything done", got)
@@ -231,7 +215,6 @@ func TestTopoOrder_RespectsDependencies(t *testing.T) {
 		t.Fatalf("TopoOrder() length = %d, want %d", len(order), p.Len())
 	}
 
-	// Every id appears exactly once.
 	seen := map[domain.TaskID]int{}
 	pos := map[domain.TaskID]int{}
 	for i, id := range order {
@@ -244,7 +227,6 @@ func TestTopoOrder_RespectsDependencies(t *testing.T) {
 		}
 	}
 
-	// Programmatic check: every dependency precedes its dependent.
 	for _, task := range domeBlueprint() {
 		for _, dep := range task.Deps {
 			if pos[dep] >= pos[task.ID] {
@@ -258,7 +240,6 @@ func TestTopoOrder_RespectsDependencies(t *testing.T) {
 func TestDeterminism_StableAcrossRunsAndInputOrder(t *testing.T) {
 	base := domeBlueprint()
 
-	// Reversed input must produce identical TopoOrder and Ready output.
 	reversed := make([]domain.Task, len(base))
 	for i, t := range base {
 		reversed[len(base)-1-i] = t
@@ -274,7 +255,6 @@ func TestDeterminism_StableAcrossRunsAndInputOrder(t *testing.T) {
 		t.Fatalf("Ready differs by input order:\n %v\n %v", p1.Ready(), p2.Ready())
 	}
 
-	// Repeated calls on the same Plan are identical.
 	for i := range 5 {
 		if !reflect.DeepEqual(p1.TopoOrder(), p2.TopoOrder()) {
 			t.Fatalf("TopoOrder() not stable on call %d", i)
@@ -284,8 +264,6 @@ func TestDeterminism_StableAcrossRunsAndInputOrder(t *testing.T) {
 		}
 	}
 
-	// Ready output is itself sorted (it follows the topo order, and the four
-	// foundations sort lexicographically there).
 	r := p1.Ready()
 	if !sort.SliceIsSorted(r, func(i, j int) bool { return r[i] < r[j] }) {
 		t.Fatalf("initial Ready() not in deterministic sorted order: %v", r)

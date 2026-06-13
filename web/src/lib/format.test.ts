@@ -1,4 +1,3 @@
-// format.test.ts — pure clamp/percentage helpers (vitest node env).
 
 import { describe, expect, it } from "vitest";
 import { batteryPercent, clamp01 } from "./format";

@@ -8,7 +8,7 @@ of a substantial session, in addition to updating `PROGRESS.md` and `feature_lis
 
 ## Verified Now
 - **What is currently working:** _e.g. backend baseline green @ <commit>; MVP demo closes the dome._
-- **What verification actually ran:** _e.g. `make check` exit 0; `./deploy/smoke.sh` pass._
+- **What verification actually ran:** _e.g. `make check` exit 0; `./deploy/k8s/up.sh` pass._
 
 ## Changed This Session
 - **Code or behavior added:** _…_
@@ -16,7 +16,7 @@ of a substantial session, in addition to updating `PROGRESS.md` and `feature_lis
 
 ## Broken Or Unverified
 - **Known defect:** _… or "none"._
-- **Unverified path:** _e.g. web baseline not re-run; smoke not re-run._
+- **Unverified path:** _e.g. web baseline not re-run; k8s e2e not re-run._
 - **Risk for the next session:** _…_
 
 ## Next Best Step
@@ -27,5 +27,5 @@ of a substantial session, in addition to updating `PROGRESS.md` and `feature_lis
 
 ## Commands
 - **Startup:** `./init.sh`
-- **Verification:** `make check` (backend) · `WEB=1 ./init.sh` (web) · `./deploy/smoke.sh` (e2e)
+- **Verification:** `make check` (backend) · `WEB=1 ./init.sh` (web) · `./deploy/k8s/up.sh` (e2e)
 - **Focused debug:** _e.g. `go test -race ./internal/coordinator/ -run TestExpiry`_

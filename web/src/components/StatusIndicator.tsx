@@ -1,9 +1,3 @@
-// StatusIndicator — the header "all systems connected" dot + label.
-//
-// A thin presentational shell over the pure connectionStatus() derivation.
-// Memoized so the 10 Hz snapshot re-render of App only repaints it when the
-// derived status actually changes (the dot is otherwise stable for long
-// stretches).
 
 import { memo } from "react";
 import type { ConnectionStatus } from "../lib/connection";

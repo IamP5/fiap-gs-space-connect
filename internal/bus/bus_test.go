@@ -49,7 +49,6 @@ func TestPublishSubscribeJSON_RoundTrip(t *testing.T) {
 }
 
 func TestConnect_RetriesUntilDeadline(t *testing.T) {
-	// Nothing is listening on this port; Connect must give up via MaxWait, not hang.
 	ctx := context.Background()
 	start := time.Now()
 	_, err := bus.Connect(ctx, "nats://127.0.0.1:5", bus.ConnectOptions{
@@ -64,8 +63,6 @@ func TestConnect_RetriesUntilDeadline(t *testing.T) {
 	}
 }
 
-// sameTaskView compares the fields the mirror round-trip cares about, keeping
-// the multi-field equality check out of the test's cyclomatic budget.
 func sameTaskView(a, b wire.TaskView) bool {
 	return a.ID == b.ID && a.Status == b.Status && a.Assignee == b.Assignee && a.Version == b.Version
 }
@@ -101,7 +98,6 @@ func TestKV_MirrorRoundTrip(t *testing.T) {
 		t.Fatalf("keys: got %v want [%s]", keys, rec.ID)
 	}
 
-	// Absent key → (zero, false, nil).
 	_, ok, err = bus.GetJSON[wire.TaskView](ctx, kv, "nope")
 	if err != nil {
 		t.Fatalf("absent key: %v", err)

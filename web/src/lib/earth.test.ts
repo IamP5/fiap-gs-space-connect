@@ -1,4 +1,3 @@
-// earth.test.ts — pure Earth-uplink derivations (vitest node env).
 
 import { describe, expect, it } from "vitest";
 import { earthLagMs, formatLag, taskProgress, LIVE_THRESHOLD_MS } from "./earth";

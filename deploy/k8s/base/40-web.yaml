@@ -1,7 +1,3 @@
-# Web dashboard — the Vite bundle served by nginx. VITE_WS_URL is baked at build
-# time to ws://localhost:8080/ws, so the browser reaches the gateway through the
-# `kubectl port-forward svc/gateway 8080:8080` from up.sh (the browser runs on the
-# host, not in the cluster).
 apiVersion: apps/v1
 kind: Deployment
 metadata:
@@ -25,7 +21,7 @@ spec:
       containers:
         - name: web
           image: swarmbuild-web:dev
-          imagePullPolicy: IfNotPresent # use the kind-loaded local image
+          imagePullPolicy: IfNotPresent
           ports:
             - name: http
               containerPort: 80

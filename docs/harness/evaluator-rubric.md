@@ -11,7 +11,7 @@ without evidence is itself a finding.
 | Category | Question | Score (0-2) | Notes / evidence |
 |---|---|---|---|
 | **Correctness** | Does the implemented behavior match the feature's `user_visible_behavior` in `feature_list.json`? | | |
-| **Verification** | Did the required checks actually run (not just "code looks right"), with recorded evidence — `make check`, web build/test, and `./deploy/smoke.sh` where the change crosses components? | | |
+| **Verification** | Did the required checks actually run (not just "code looks right"), with recorded evidence — `make check`, web build/test, and `./deploy/k8s/up.sh` where the change crosses components? | | |
 | **Scope discipline** | Did the session stay inside the one active feature (WIP=1)? No opportunistic "while I'm here" refactors or parallel features? | | |
 | **Domain fidelity** | Does the code/commit use `CONTEXT.md` vocabulary exactly and respect the relevant ADRs (esp. the invariant: no harness call on the award/lease/expiry path)? | | |
 | **Reliability** | Does the result survive a restart/rerun without manual repair (`./init.sh` green from a clean checkout)? | | |
@@ -34,4 +34,4 @@ without evidence is itself a finding.
 > **End-to-end is non-negotiable for cross-component work.** Unit tests passing ≠ feature
 > complete: isolated tests are designed in a way that structurally cannot catch interface,
 > state-propagation, or error-propagation defects across the core → bus → gateway → screen
-> seam. When a change crosses components, `./deploy/smoke.sh` must be part of the evidence.
+> seam. When a change crosses components, `./deploy/k8s/up.sh` must be part of the evidence.

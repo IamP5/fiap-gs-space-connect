@@ -1,5 +1,3 @@
-/* SwarmBuild dashboard chrome, styled per DESIGN.md (Spasex).
-   Black canvas, hairline separators, uppercase caps chrome, no shadows/glows. */
 
 .app {
   display: flex;
@@ -8,15 +6,6 @@
   background: var(--canvas-night);
 }
 
-/* ---- game-UI HUD foundation (Epic 06 P0) ---- */
-
-/* The HUD stage: a full-bleed overlay holding every floating panel, layered over
-   the Canvas inside .stage. It never intercepts pointer events itself (so the
-   scene stays draggable through the gaps); the solid panels inside it opt back
-   into pointer-events. The `H` cinematic key toggles `hud--hidden`, which fades
-   the whole layer out and (belt-and-braces) drops pointer-events on the panels
-   too, so a hidden HUD can never eat a click. The Canvas sits OUTSIDE this
-   wrapper, so the scene is unaffected. */
 .hud-stage {
   position: absolute;
   inset: 0;
@@ -30,38 +19,7 @@
   pointer-events: auto;
 }
 
-.hud-stage.hud--hidden {
-  opacity: 0;
-}
-
-.hud-stage.hud--hidden > * {
-  pointer-events: none;
-}
-
-/* ---- animated view transitions (Epic 06 P4) ----
-   The surface-only panels are kept mounted across BOTH views (see App.tsx) so they
-   can animate IN on the descent and OUT on the ascent. Visibility is driven PURELY
-   by a `hud--surface`/`hud--orbit` class on this wrapper, keyed on `viewMode` — the
-   SAME flip the Scene3D glare-masked descent driver consumes — so there is NO second
-   imperative animation clock (Risk #5). It's a plain CSS opacity+transform transition.
-
-   The two CSS effects compose cleanly and never fight:
-     • `hud--hidden` lives on THIS wrapper and zeroes its opacity; child opacity
-       multiplies the parent's, so a hidden HUD always wins regardless of the
-       surface/orbit state — even mid-transition — and pointer-events drop too.
-     • the surface/orbit fade lives on the CHILD panels (below), so it composes
-       under the parent fade.
-
-   Surface panels carry `.hud-surface-panel`; they start hidden + nudged down and
-   slide up into place when the wrapper is `hud--surface`. The IN transition is
-   DELAYED so the panels appear just AFTER the descent's glare peak (orbit→surface
-   ≈ 1500ms, swap ≈ 750ms) — they settle as the surface is revealed, not before.
-   The OUT (back to orbit) runs with no delay so they clear quickly under the ascent
-   glare. `transform` is composed with each panel's own base transform via a custom
-   property so the hotbar's translateX(-50%) centring is preserved. */
 .hud-surface-panel {
-  /* `--hud-shift` is the view-transition offset; each panel folds it into its own
-     base transform (default: just the shift). Centred panels override the base. */
   --hud-shift: 14px;
   transform: translateY(var(--hud-shift));
   opacity: 0;
@@ -73,24 +31,18 @@
 .hud-stage.hud--surface .hud-surface-panel {
   --hud-shift: 0px;
   opacity: 1;
-  /* Land just after the glare peak as the surface settles. */
   transition-delay: 820ms;
 }
 
 .hud-stage.hud--orbit .hud-surface-panel {
-  /* Clear quickly on the way back up to the orbit vista. */
   transition-delay: 0ms;
   pointer-events: none;
 }
 
-/* The hotbar is horizontally centred via translateX(-50%); fold the view-transition
-   shift into the SAME transform so the centring is never dropped (it would jump
-   otherwise). */
 .hud-surface-panel.hotbar {
   transform: translateX(-50%) translateY(var(--hud-shift));
 }
 
-/* Respect reduced-motion: keep the fade, drop the slide. */
 @media (prefers-reduced-motion: reduce) {
   .hud-surface-panel,
   .hud-stage.hud--surface .hud-surface-panel {
@@ -99,16 +51,6 @@
   }
 }
 
-/* ---- diegetic legibility: re-tune the muted tier over the scene (Milestone 08) ----
-   The plateless HUD's only legibility aid is the four-way BLACK ink outline + halo
-   (--hud-ink-shadow), which adds contrast to LIGHT type only. Secondary labels were
-   still using --ink-mute (#5a5a5f) — a dark gray sized for the black marketing canvas
-   — so over a BRIGHT lunar surface they merged dark-fill-into-dark-outline and went
-   unreadable, while the white primary readouts held. Remap --ink-mute to the dimmed
-   white --hud-ink-mute inside each diegetic (plateless) cluster, so every secondary
-   label sits on the light side and gains contrast from the same outline/halo. Scoped
-   to the HUD roots ONLY: the dark-plate lab/partition/encore cards and the black
-   loading screen are NOT descendants, so they keep the original dark --ink-mute. */
 .topbar,
 .mission-hud,
 .kill-panel,
@@ -119,10 +61,6 @@
   --ink-mute: var(--hud-ink-mute);
 }
 
-/* Solid game-UI panel base — opaque plate, beveled 1px border with an inner
-   highlight, rounded, drop shadow. Applied alongside each panel's own class
-   (.ledger, .blueprint-palette, .controls-panel, .earth-panel, .kill-panel) so
-   the existing layout rules still win; this just reskins the surface. */
 .panel {
   background: var(--panel-bg);
   border: 1px solid var(--panel-edge);
@@ -133,12 +71,6 @@
     0 6px 18px rgba(0, 0, 0, 0.55);
 }
 
-/* ---- top nav (floating overlay, Epic 06 polish) ----
-   No background plate: the bar floats over the scene as minimal game-like
-   labels. The header itself is click-through (pointer-events:none) so the
-   transparent gaps never eat an orbit-drag; only its interactive children
-   re-arm pointer events. Text carries its own shadow for legibility over a
-   bright lunar surface. */
 .topbar {
   position: absolute;
   top: 0;
@@ -186,9 +118,6 @@
   color: var(--ink-mute);
 }
 
-/* Connection status pill (Epic 06 P0) → dot + caps label only (Milestone 08).
-   The pill outline/fill is dropped so the inner `.status` (functional dot + label)
-   reads as type-on-scene; the raw ws:// URL still lives on its `title=` tooltip. */
 .topbar-pill {
   display: inline-flex;
   align-items: center;
@@ -197,16 +126,10 @@
   border: 0;
 }
 
-/* The view toggle, lifted into the top bar (Epic 06 P0). margin-left:auto pushes
-   it into the right-hand corner, with the connection pill sitting next to the
-   brand on the left. */
 .topbar-view {
   margin-left: auto;
 }
 
-/* ---- connection indicator ----
-   Eyebrow caps microtext + a single functional telemetry dot. No pill fill,
-   no glow — the dot alone carries the signal. */
 .status {
   display: inline-flex;
   align-items: center;
@@ -239,7 +162,6 @@
   color: var(--on-primary);
 }
 
-/* ---- stage ---- */
 .stage {
   position: relative;
   flex: 1;
@@ -252,12 +174,6 @@
   height: 100%;
 }
 
-/* ---- loading screen (Epic 05 P1) ----
-   Branded SwarmBuild splash shown while EVERY asset preloads behind it; the Canvas
-   mounts only once it lifts (preload resolved or safety timeout), so nothing pops
-   in later. Styled off the dashboard tokens (pure black canvas, white display type,
-   hairline chrome). Fades out via opacity then unmounts; sits above the stage and
-   stops intercepting pointer events the moment it's revealed. */
 .loading-screen {
   position: absolute;
   inset: 0;
@@ -316,21 +232,12 @@
   color: var(--ink-mute);
 }
 
-/* ---- view-transition glare ----
-   A full-stage sunlit flash that masks the orbit⇄surface scene swap at the peak
-   of the descent camera move (Scene3D drives opacity imperatively via rAF). Sits
-   above the canvas (z 0) and below the chrome panels (z 2); never intercepts
-   clicks. opacity:0 at rest, so it's invisible until a transition plays. */
 .view-glare {
   position: absolute;
   inset: 0;
   z-index: 1;
   pointer-events: none;
   opacity: 0;
-  /* Off-center sun-bloom (#84): the flash blooms from the upper-right (toward the
-     scene's sun) rather than dead-center, with a tight bright warm core that — at
-     the brief peak opacity the rAF drives — still fully occludes the scene swap,
-     but reads as a directional bloom rather than a flat full-screen wash. */
   background: radial-gradient(
     circle at 64% 38%,
     rgba(255, 251, 242, 0.99) 0%,
@@ -340,11 +247,6 @@
   );
 }
 
-/* Warm regolith-DUST haze for the surface→surface ground drive (Scene3D adds
-   .view-dust to the glare overlay for the duration). A SUNLIT ochre cloud — lighter
-   and warmer than a mud curtain so the gentle raised-cosine fade reads as kicked-up
-   regolith catching the sun, not a dark wash slamming shut. The core stays near-opaque
-   so it still fully occludes the single site-swap frame at the far point of the drive. */
 .view-glare.view-dust {
   background: radial-gradient(
     circle at 50% 58%,
@@ -355,48 +257,27 @@
   );
 }
 
-/* ---- Mission HUD (Epic 06 P2) ----
-   Top-left compact game-UI widget that replaces the verbose task ledger. The
-   `.panel` base supplies the opaque plate + bevel + drop shadow; this lays out
-   the build-progress bar, the rovers-alive readout, the `?` legend tooltip, and
-   the expandable per-task detail list. Reads the self-heal story at a glance —
-   the build bar fills and the rover count holds as the swarm builds; both dip on
-   a Failure spike and recover on heal (pure snapshot derivations). */
 .mission-hud {
   position: absolute;
-  /* Cleared below the now-floating top bar so the brand never overlaps it. */
   top: 72px;
   left: var(--s-xl);
-  /* Footprint stays put (not wider). The inset/breathing room lives on the INNER
-     elements (.mission-hud-summary / .mission-hud-legend / .mission-task-list),
-     not this container — the padding is applied per-child below. */
   width: 244px;
   padding: 0;
   z-index: 2;
-  /* No panel-level scroll — the compact summary must never show a scrollbar.
-     Any overflow is confined to the expanded task list below. */
-  /* Diegetic: the `.panel` plate is removed in JSX (Milestone 08); the readout
-     reads as emitted light. The ink-shadow outline+halo inherits to every child
-     text node for legibility over the scene (the progress fill is not text). */
   background: transparent;
   border: 0;
   box-shadow: none;
   text-shadow: var(--hud-ink-shadow);
 }
 
-/* Bottom inset rides the bottom-most child (the legend when collapsed, the task
-   list when expanded), so the content is evenly inset whichever is last. */
 .mission-hud > *:last-child {
   padding-bottom: var(--s-xl);
 }
 
-/* The whole compact summary is one click target (the expand toggle); reset the
-   button chrome so it reads as part of the panel, not a control. */
 .mission-hud-summary {
   display: block;
   width: 100%;
   margin: 0;
-  /* Top + side inset; the bottom inset is carried by the last child (above). */
   padding: var(--s-xl) var(--s-xl) 0;
   border: none;
   background: none;
@@ -456,24 +337,16 @@
   color: var(--on-primary);
 }
 
-/* The rovers readout flips to the danger signal when the whole swarm is down. */
 .mission-row-value-down {
   color: var(--signal-down);
 }
 
-/* Build-progress bar — a thin track with a cyan-accent fill whose width is the
-   done/total fraction. The width transition lets it visibly tick up as tasks
-   solidify and dip back if a Failure spike re-opens tasks. */
-/* Build progress as a glowing THREAD, not a boxed track (Milestone 08): a 2px
-   hairline guide with a cyan-accent fill that blooms. The width transition still
-   ticks it up as tasks solidify and dips it back on a Failure spike. */
 .progress-bar {
   position: relative;
   height: 2px;
   margin: var(--s-xs) 0 var(--s-sm);
   background: color-mix(in srgb, var(--hairline-on-dark) 60%, transparent);
   border-radius: 0;
-  /* The bloom + leading dot extend past the track, so don't clip. */
   overflow: visible;
 }
 
@@ -487,7 +360,6 @@
   transition: width 320ms ease;
 }
 
-/* A small bright bloom-dot rides the leading edge of the thread. */
 .progress-bar-fill::after {
   content: "";
   position: absolute;
@@ -501,7 +373,6 @@
   transform: translate(50%, -50%);
 }
 
-/* `?` legend affordance — the static legend is hidden until hover/focus. */
 .mission-hud-legend {
   position: relative;
   margin-top: var(--s-sm);
@@ -552,18 +423,13 @@
   pointer-events: auto;
 }
 
-/* Expanded per-task detail list (reuses the old ledger row child classes).
-   Scroll is confined HERE (not the whole panel) so a long task list stays
-   contained while the compact summary never shows a scrollbar. */
 .mission-task-list {
   list-style: none;
   margin: var(--s-md) 0 0;
   padding: var(--s-md) var(--s-xl) var(--s-xl);
   max-height: 38vh;
   overflow-y: auto;
-  /* Never scroll sideways — rows truncate to the panel width instead. */
   overflow-x: hidden;
-  /* Diegetic divider above the expanded list — emitted light, not near-black. */
   border-top: 1px solid var(--hud-divider);
 }
 
@@ -578,8 +444,6 @@
   border-bottom: 1px solid var(--hud-divider);
 }
 
-/* The badge keeps its size; id + type share the remaining width and truncate
-   with an ellipsis so a long task id/type can't push a horizontal scrollbar. */
 .mission-task-list .badge {
   flex: none;
 }
@@ -628,7 +492,6 @@
   color: var(--ink-mute);
 }
 
-/* Legend rows — used inside the Mission HUD `?` hover tooltip (Epic 06 P2). */
 .legend {
   list-style: none;
   margin: 0;
@@ -648,10 +511,6 @@
   font-size: 12px;
 }
 
-/* ---- status badges → diegetic pip + tinted word (Milestone 08) ----
-   No bordered chip and no padding box; a small rotated-square "diamond" pip glows
-   in the signal tint, the uppercase micro-word reads in the same colour. State is
-   emitted light, never a filled box. (.st-* set `color`; pip + word inherit it.) */
 .badge {
   display: inline-flex;
   align-items: center;
@@ -668,7 +527,6 @@
   line-height: 1;
 }
 
-/* The diamond pip — a rotated square in `currentColor` with a soft glow halo. */
 .badge::before {
   content: "";
   width: 7px;
@@ -689,15 +547,8 @@
   color: var(--signal-ok);
 }
 
-/* ---- kill panel (selection affordance) ----
-   Top-RIGHT contextual game-UI card (Epic 06 P4): rendered ONLY for a live selected
-   rover (App gates the mount), so it never clutters an empty worksite. The shared
-   `.panel` base supplies the opaque beveled plate + drop shadow (consistent with the
-   hotbar / Mission HUD); this only lays out the card and tints the armed danger
-   border + KILL button. No legacy bg/border override — the `.panel` skin wins. */
 .kill-panel {
   position: absolute;
-  /* Cleared below the now-floating top bar's right-hand cluster. */
   top: 72px;
   right: var(--s-xl);
   width: 196px;
@@ -706,19 +557,12 @@
   display: flex;
   flex-direction: column;
   gap: var(--s-xs);
-  /* Diegetic: `.panel` plate removed in JSX (Milestone 08). No fill/border/bevel;
-     legibility via the inherited ink-shadow; structure via the NMS corner brackets
-     below. `position: absolute` already establishes the containing block for the
-     bracket pseudo-elements. */
   background: transparent;
   border: 0;
   box-shadow: none;
   text-shadow: var(--hud-ink-shadow);
 }
 
-/* NMS corner brackets — a region framed by only two diagonal L-corners (top-left +
-   bottom-right), stroked, never closed, offset just outside the cluster. Pure CSS
-   pseudo-elements; they retint to the danger signal when KILL is armed. */
 .kill-panel::before,
 .kill-panel::after {
   content: "";
@@ -731,21 +575,18 @@
   transition: border-color 220ms ease, filter 220ms ease;
 }
 
-/* Top-left corner: top + left strokes only. */
 .kill-panel::before {
   top: -6px;
   left: -6px;
   border-width: 1px 0 0 1px;
 }
 
-/* Bottom-right corner: bottom + right strokes only. */
 .kill-panel::after {
   right: -6px;
   bottom: -6px;
   border-width: 0 1px 1px 0;
 }
 
-/* Armed → the frame flares the danger signal with a soft glow (state via light). */
 .kill-panel-armed::before,
 .kill-panel-armed::after {
   border-color: var(--signal-down);
@@ -821,16 +662,6 @@
   color: var(--on-primary-mute);
 }
 
-/* ---- controls panel (stress dials) ----
-   Bottom-left dark chrome card, mirroring the ledger/kill treatment. Two range
-   sliders (failure + latency). Chrome stays black/white; the functional signal
-   color tints only the live numeric readout (a slider that is actively
-   stressing the swarm), never the chrome. */
-/* NB: the bottom-left `.controls-panel` (stress sliders) was retired in Epic 06
-   P1 — its sliders moved into the hotbar's ⚠/⏱ popovers (see `.hotbar-popover`),
-   its Site toggle into the hotbar `.hotbar-chip`. The shared `.control*` +
-   `.control-slider` rules below are still used inside the popovers (StressControls). */
-
 .controls-eyebrow {
   font-family: var(--ui);
   font-size: 12px;
@@ -869,14 +700,10 @@
   color: var(--ink-mute);
 }
 
-/* A control that is actively stressing the swarm reads in the warn signal. */
 .control-value.is-live {
   color: var(--signal-warn);
 }
 
-/* Camera view-mode toggle (issue #49) → diegetic (Milestone 08): no segmented
-   box, no borders, no segment divider — two ghost caps labels with a little air
-   between them; the active one is marked by a cyan underline + glow, not a fill. */
 .view-toggle {
   display: inline-flex;
   gap: var(--s-sm);
@@ -903,8 +730,6 @@
   background: transparent;
 }
 
-/* The active view's cyan underline — a 1px emitted-light rule with a soft glow,
-   not a filled tab. Inactive buttons have no underline. */
 .view-btn.is-active::after {
   content: "";
   position: absolute;
@@ -920,7 +745,6 @@
   color: var(--on-primary-mute);
 }
 
-/* Range input — hairline track, square white thumb; no fills/glows. */
 .control-slider {
   -webkit-appearance: none;
   appearance: none;
@@ -957,12 +781,6 @@
   line-height: 1.4;
 }
 
-/* ---- earth panel (delayed Earth uplink) ----
-   Bottom-RIGHT game-UI card (Epic 06 P4). Shows how far Earth lags the live world
-   and what Earth thinks the swarm has built. The shared `.panel` base supplies the
-   opaque beveled plate + drop shadow (consistent with the hotbar / Mission HUD); no
-   legacy bg/border override, so the `.panel` skin wins. The lag value is the live
-   signal: it reads ok-green while "live", warn-amber once it falls behind. */
 .earth-panel {
   position: absolute;
   bottom: var(--s-xl);
@@ -973,8 +791,6 @@
   display: flex;
   flex-direction: column;
   gap: var(--s-sm);
-  /* Diegetic: `.panel` plate removed in JSX (Milestone 08). Rows read as
-     type-on-scene; the existing per-row hairline rules stay as the anchors. */
   background: transparent;
   border: 0;
   box-shadow: none;
@@ -1016,7 +832,6 @@
   display: flex;
   align-items: baseline;
   justify-content: space-between;
-  /* Diegetic row rule — emitted-light hairline (not the near-black --hairline). */
   border-bottom: 1px solid var(--hud-divider);
   padding-bottom: var(--s-xs);
 }
@@ -1061,13 +876,6 @@
   color: var(--ink-mute);
 }
 
-/* ---- lab dock (stretch / encore affordances) ----
-   The opt-in "lab" layer — the CRDT partition narrative and the container
-   encore. Docked to the RIGHT EDGE and vertically centred so it never covers the
-   central worksite (the headline 3D money shot), and set apart from the four
-   corner panels so it reads as an opt-in layer, never headline chrome (ADR-0003).
-   Each card collapses to its header, so the operator only spends screen space on
-   what they are actively showing. */
 .encore-column {
   position: absolute;
   top: 50%;
@@ -1082,7 +890,6 @@
   gap: var(--s-md);
 }
 
-/* Shared dark-chrome card for the two lab panels, matching the corner panels. */
 .lab-card {
   background: var(--canvas-night-soft);
   border: 1px solid var(--hairline-on-dark);
@@ -1090,7 +897,6 @@
   overflow: hidden;
 }
 
-/* The header doubles as the collapse toggle: the whole row is the button. */
 .lab-head {
   width: 100%;
   display: flex;
@@ -1113,7 +919,6 @@
   color: var(--on-primary-mute);
 }
 
-/* Chevron: a corner glyph that points up when open, down when closed. */
 .lab-chevron {
   flex: none;
   width: 7px;
@@ -1128,7 +933,6 @@
   transform: rotate(45deg);
 }
 
-/* Collapsible body. */
 .lab-body {
   padding: 0 var(--s-lg) var(--s-lg);
   display: flex;
@@ -1136,9 +940,6 @@
   gap: var(--s-md);
 }
 
-/* ---- in-app live lab (bh-07a) ----
-   A pick-a-Task + Generate-live control plus the agent console: the streamed
-   "watch it think" feed of the real Generator↔Evaluator loop. Off the headline. */
 .lab-caption {
   margin: 0;
   font-family: var(--ui);
@@ -1200,7 +1001,6 @@
   color: var(--signal-down, #e74c3c);
 }
 
-/* The agent console — a scrollable, monospace-ish log of streamed events. */
 .lab-console {
   list-style: none;
   margin: 0;
@@ -1262,14 +1062,6 @@
   color: var(--ink-mute);
 }
 
-/* ---- partition narrative (CRDT, issue 10) ----
-   A self-contained, deterministic replay of the proven World Model merge: two
-   divergent rover views of the same task, shown SIDE BY SIDE, reconcile to the
-   single lower-rover-id winner. The three phase labels carry the narrative. */
-
-/* The three-state machine: PARTITIONED → RECONCILING → CONVERGED. The active
-   beat reads in the warn signal (mid-flight) until it lands on CONVERGED; past
-   beats brighten so the progression is legible. */
 .partition-phases {
   display: flex;
   align-items: center;
@@ -1294,7 +1086,6 @@
   color: var(--signal-warn);
 }
 
-/* The terminal CONVERGED beat reads in the ok signal once it is the active one. */
 .partition-phase:last-child.is-active {
   color: var(--signal-ok);
 }
@@ -1305,7 +1096,6 @@
   color: var(--hairline-on-dark);
 }
 
-/* The two divergent copies, SIDE BY SIDE so the split reads spatially. */
 .partition-split {
   display: grid;
   grid-template-columns: 1fr 1fr;
@@ -1351,7 +1141,6 @@
   color: var(--ink-mute);
 }
 
-/* On CONVERGED both copies agree → they read in the ok signal. */
 .partition-split.is-converged .partition-view {
   border-color: rgba(46, 204, 113, 0.4);
 }
@@ -1360,7 +1149,6 @@
   color: var(--signal-ok);
 }
 
-/* The merged result — the single winner the two copies fold into (CONVERGED). */
 .partition-merged {
   display: flex;
   align-items: center;
@@ -1417,10 +1205,6 @@
   cursor: not-allowed;
 }
 
-/* ---- encore panel (real container kill, issue 11) ----
-   The optional encore: a two-step guarded button that fails a REAL rover
-   container over the real bus. The danger signal tints the armed FIRE button
-   only — same restraint as the kill panel. */
 .encore-caption {
   margin: 0;
   font-family: var(--ui);
@@ -1449,7 +1233,6 @@
   border-color: var(--on-primary-mute);
 }
 
-/* The armed FIRE button carries the danger signal (it kills a real container). */
 .encore-btn-fire {
   color: var(--signal-down);
   border-color: var(--signal-down);
@@ -1482,13 +1265,6 @@
   color: var(--on-primary-mute);
 }
 
-/* ---- bottom hotbar (game-UI build bar, Epic 06 P1) ----
-   A single floating bar docked bottom-centre on the SURFACE view, replacing the
-   old top-left BlueprintPalette card list + the bottom-left stress slider panel.
-   It carries: footprint-glyph blueprint icons · a persistent LLM-Generated toggle
-   · ⚠/⏱ stress popovers · a 📍 site chip. The `.panel` base supplies the opaque
-   beveled plate; this lays out the segments and skins them against the cyan/amber
-   HUD tokens. */
 .hotbar {
   position: absolute;
   bottom: var(--s-xl);
@@ -1500,18 +1276,12 @@
   gap: var(--s-md);
   padding: var(--s-sm) var(--s-md);
   max-width: calc(100% - var(--s-xl) * 2);
-  /* Diegetic: `.panel` plate removed in JSX (Milestone 08). The slot/active/glyph
-     glows carry the read; a single faint hairline baseline (::before) keeps the
-     row reading as one group without enclosing it in a box. */
   background: transparent;
   border: 0;
   box-shadow: none;
   text-shadow: var(--hud-ink-shadow);
 }
 
-/* Faint hairline baseline under the slots — the only structure the plateless
-   hotbar keeps: a thin rule spanning the row, fading at its ends so it reads as a
-   light tray, not a border. */
 .hotbar::before {
   content: "";
   position: absolute;
@@ -1527,7 +1297,6 @@
     var(--hud-divider) 82%,
     transparent
   );
-  /* Float the tray off the surface for depth + contrast (matches .hotbar-sep). */
   filter: var(--hud-divider-glow);
 }
 
@@ -1537,10 +1306,6 @@
   gap: var(--s-xs);
 }
 
-/* Hairline divider between hotbar segments — diegetic (Milestone 08): an emitted
-   light rule, not a dark bar. A dimmed-white gradient fading to transparent at both
-   ends reads as a soft separator rather than a hard border; the dark halo floats it
-   off the bright regolith for depth + guaranteed contrast. */
 .hotbar-sep {
   width: 1px;
   align-self: stretch;
@@ -1554,8 +1319,6 @@
   filter: var(--hud-divider-glow);
 }
 
-/* A blueprint slot: the footprint glyph above its name, in a square-ish button.
-   Armed (placing) → cyan border + glow; hover → a softer cyan lift. */
 .hotbar-slot {
   display: flex;
   flex-direction: column;
@@ -1564,8 +1327,6 @@
   width: 64px;
   padding: var(--s-xs) 6px;
   background: transparent;
-  /* Minimal at rest: no border — the floating glyph carries the read. The
-     plate/glow only appears on hover/active. */
   border: 1px solid transparent;
   border-radius: var(--r-xs);
   color: var(--ink-mute);
@@ -1589,8 +1350,6 @@
   box-shadow: 0 0 0 1px var(--hud-accent), 0 0 14px color-mix(in srgb, var(--hud-accent) 45%, transparent);
 }
 
-/* The footprint schematic SVG. Cells are tinted via --hud-accent; the glyph
-   brightens (fuller fill + drop-glow) when the slot is hovered/armed. */
 .hotbar-glyph {
   width: 40px;
   height: 40px;
@@ -1622,79 +1381,6 @@
   line-height: 1.1;
 }
 
-/* Persistent "LLM Generated" toggle — no checkbox chrome. It's a text pill that
-   selects/deselects: OFF reads as a muted hairline label; ON fills with a
-   frosted cyan wash + glow (the "background blur change"). The native input is
-   kept for a11y/keyboard but visually removed (:has drives the styling). */
-.hotbar-toggle {
-  display: inline-flex;
-  align-items: center;
-  gap: 6px;
-  padding: 7px 2px;
-  font-family: var(--display);
-  font-size: 11px;
-  font-weight: 700;
-  letter-spacing: 0.8px;
-  text-transform: uppercase;
-  color: var(--ink-mute);
-  /* Diegetic (Milestone 08): no pill, no border. The leading status dot (::before)
-     + caps label carry ON/OFF as emitted light — the dot glows cyan when checked. */
-  background: transparent;
-  border: 0;
-  text-shadow: var(--hud-ink-shadow);
-  cursor: pointer;
-  white-space: nowrap;
-  transition:
-    color 160ms ease,
-    text-shadow 160ms ease;
-}
-
-/* The status dot leads the label so the ON/OFF read is instant. */
-.hotbar-toggle::before {
-  content: "";
-  width: 7px;
-  height: 7px;
-  border-radius: var(--r-full);
-  background: var(--ink-mute);
-  transition: background 160ms ease, box-shadow 160ms ease;
-}
-
-/* Visually-hidden native checkbox (kept for keyboard + screen readers). */
-.hotbar-toggle input {
-  position: absolute;
-  width: 1px;
-  height: 1px;
-  padding: 0;
-  margin: -1px;
-  overflow: hidden;
-  clip: rect(0 0 0 0);
-  white-space: nowrap;
-  border: 0;
-}
-
-.hotbar-toggle:hover {
-  color: var(--on-primary-mute);
-}
-
-/* Checked → ON: the label reads white and the leading dot lights cyan with a
-   glow. No wash, no border — the dot + label colour carry the state. */
-.hotbar-toggle:has(input:checked) {
-  color: var(--on-primary);
-}
-
-.hotbar-toggle:has(input:checked)::before {
-  background: var(--hud-accent);
-  box-shadow: 0 0 8px var(--hud-accent);
-}
-
-/* Keyboard focus ring on the hidden input lands on the label cluster. An outline
-   is focus state, not chrome, so it's allowed (a11y). */
-.hotbar-toggle:has(input:focus-visible) {
-  outline: 1px solid var(--hud-accent);
-  outline-offset: 2px;
-}
-
-/* Stress icon buttons (⚠ Failure / ⏱ Latency) with a popover anchor. */
 .hotbar-stress {
   align-items: center;
 }
@@ -1711,7 +1397,6 @@
   gap: 2px;
   padding: 6px var(--s-sm);
   background: transparent;
-  /* Minimal at rest (matches the blueprint slots): plate only on hover/active. */
   border: 1px solid transparent;
   border-radius: var(--r-xs);
   color: var(--ink-mute);
@@ -1743,11 +1428,6 @@
   text-transform: uppercase;
 }
 
-/* The slider popover floats ABOVE the bar, anchored to its icon button. It keeps
-   the `.panel` class in JSX, so we override the heavy plate HERE (Milestone 08):
-   a floating control cluster reads as a soft edgeless scrim + 1px hairline, no
-   inset bevel and no drop shadow. Single-class selector that sits after `.panel`
-   in source, so it wins at equal specificity. */
 .hotbar-popover {
   position: absolute;
   bottom: calc(100% + var(--s-sm));
@@ -1756,17 +1436,12 @@
   width: 240px;
   padding: var(--s-md);
   z-index: 3;
-  /* De-bevel the inherited `.panel` plate. */
   background: color-mix(in srgb, var(--canvas-night) 72%, transparent);
   border: 1px solid color-mix(in srgb, var(--hairline-on-dark) 80%, transparent);
   border-radius: 0;
   box-shadow: none;
 }
 
-/* The site chip — current worksite; click cycles + re-descends. The glyph is an
-   in-world-style line-diamond (echoing the NMS orbit markers) whose colour keys
-   off the site: cyan for Lunar Base, amber for Shackleton. Minimal pill: faint
-   tinted wash + hairline, lifting on hover. */
 .hotbar-chip {
   --chip-tint: var(--hud-accent);
   position: relative;
@@ -1779,9 +1454,6 @@
   font-weight: 700;
   letter-spacing: 0.8px;
   text-transform: uppercase;
-  /* Diegetic (Milestone 08): no filled pill, no border. The 📍 glyph + caps label
-     read as tinted on-scene text in the site colour, underlined to signal it's
-     interactive; hover brightens the label + blooms the matching glow. */
   color: var(--chip-tint);
   background: transparent;
   border: 0;
@@ -1791,7 +1463,6 @@
   transition: color 140ms ease, text-shadow 140ms ease;
 }
 
-/* The interactive underline — a 1px rule in the site tint, faint at rest. */
 .hotbar-chip::after {
   content: "";
   position: absolute;
@@ -1816,7 +1487,6 @@
   text-shadow: var(--hud-ink-shadow), var(--hud-glow-amber);
 }
 
-/* Hover lights the underline to full tint + glow. */
 .hotbar-chip:hover::after {
   background: var(--chip-tint);
   box-shadow: var(--hud-glow-cyan);
@@ -1826,7 +1496,6 @@
   box-shadow: var(--hud-glow-amber);
 }
 
-/* Line-diamond site glyph (inline SVG), tinted by the chip's site colour. */
 .hotbar-chip-glyph {
   width: 13px;
   height: 13px;
@@ -1847,12 +1516,6 @@
   stroke: none;
 }
 
-/* ---- placement gestures (Epic 06 P1, #151) ----
-   The in-scene placement HUD that replaces the old BlueprintPalette sub-panel:
-   (1) `.place-tip` — a cursor-anchored ✓/✗ validity tick rendered as an R3F <Html>
-   billboard at the ghost (so the operator reads validity right where they aim); and
-   (2) `.place-hint` — a one-line key hint docked just above the hotbar while placing.
-   Both are transient client UI, never the snapshot (ADR-0004). */
 .place-tip {
   display: inline-flex;
   align-items: center;
@@ -1863,8 +1526,6 @@
   font-weight: 600;
   line-height: 1.2;
   white-space: nowrap;
-  /* Diegetic (Milestone 08): no plate-bg/border on the in-scene tick — the
-     ink-shadow outline+halo carries it as a billboard right at the ghost. */
   background: transparent;
   border: 0;
   text-shadow: var(--hud-ink-shadow);
@@ -1891,7 +1552,6 @@
   font-weight: 500;
 }
 
-/* One-line key hint, docked just above the hotbar while a placement is armed. */
 .place-hint {
   position: absolute;
   bottom: calc(var(--s-xl) + 86px);
@@ -1906,8 +1566,6 @@
   font-size: 12px;
   letter-spacing: 0.3px;
   color: var(--on-primary-mute);
-  /* Diegetic (Milestone 08): no plate — the key hint floats over the scene with
-     the ink-shadow carrying legibility; the cyan key glyph (`b`) stays. */
   background: transparent;
   border: 0;
   text-shadow: var(--hud-ink-shadow);
@@ -1921,69 +1579,3 @@
   font-weight: 700;
 }
 
-/* Cinematic "armed" affordance (Epic 07 S2 · #155). A subtle top-centre badge,
-   shown ONLY while the operator has armed cinematic mode (`?reel=1` or `R`). It
-   is a SIBLING of `.hud-stage`, so the `H` HUD-hide never fades it — the
-   operator must keep seeing the armed state on a clean stage. Pointer-inert
-   (purely informational). Disarmed ⇒ the inner badge is not mounted, so nothing
-   renders and the normal app is byte-for-byte unchanged. */
-.reel-arm {
-  position: absolute;
-  top: calc(var(--s-xl) + 44px);
-  left: 50%;
-  transform: translateX(-50%);
-  z-index: 4;
-  pointer-events: none;
-  user-select: none;
-}
-
-.reel-arm__badge {
-  display: inline-flex;
-  align-items: center;
-  gap: 7px;
-  padding: 4px 12px;
-  font-family: var(--ui);
-  font-size: 11px;
-  font-weight: 600;
-  letter-spacing: 1px;
-  text-transform: uppercase;
-  color: var(--on-primary-mute);
-  background: color-mix(in srgb, var(--panel-bg) 90%, transparent);
-  border: 1px solid color-mix(in srgb, var(--signal-down) 55%, var(--panel-edge));
-  border-radius: var(--r-pill);
-  box-shadow: 0 0 0 1px rgba(0, 0, 0, 0.35),
-    0 0 16px color-mix(in srgb, var(--signal-down) 30%, transparent);
-  white-space: nowrap;
-}
-
-.reel-arm__badge b {
-  color: var(--on-primary);
-  font-weight: 700;
-}
-
-/* The live "REC"-style pulse dot — a recording-armed tell. */
-.reel-arm__dot {
-  width: 7px;
-  height: 7px;
-  border-radius: 50%;
-  background: var(--signal-down);
-  box-shadow: 0 0 8px var(--signal-down);
-  animation: reel-arm-pulse 1.4s ease-in-out infinite;
-}
-
-@keyframes reel-arm-pulse {
-  0%,
-  100% {
-    opacity: 1;
-  }
-  50% {
-    opacity: 0.35;
-  }
-}
-
-/* Respect reduced-motion: hold the dot steady rather than pulsing. */
-@media (prefers-reduced-motion: reduce) {
-  .reel-arm__dot {
-    animation: none;
-  }
-}

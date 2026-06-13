@@ -1,4 +1,3 @@
-// connection.test.ts — the three-state header indicator logic (vitest node env).
 
 import { describe, expect, it } from "vitest";
 import { connectionStatus } from "./connection";

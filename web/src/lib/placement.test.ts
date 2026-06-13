@@ -1,9 +1,3 @@
-// placement.test.ts — the drag-to-place transform is pure math (no three, no
-// DOM), so it runs in vitest's node env. We assert the two invariants the ghost
-// preview rides on: (1) the origin+rotation transform matches the Go
-// blueprint.Place math, so the ghost and the server-injected tasks land on the
-// same spot; (2) the envelope→footprint projection centres the ground quad on the
-// task with half-extents from the envelope size.
 
 import { describe, expect, it } from "vitest";
 import {
@@ -28,7 +22,6 @@ describe("placeRel — origin + rotation transform", () => {
   });
 
   it("rotates a relative offset about the origin (90°)", () => {
-    // (16,0) rotated +90° → (0,16), matching the Go side's rx/ry math.
     const p = placeRel(v(16, 0), v(0, 0), Math.PI / 2);
     expect(p.X).toBeCloseTo(0, 6);
     expect(p.Y).toBeCloseTo(16, 6);
@@ -78,8 +71,7 @@ describe("ghostTasks — instantiate a catalog blueprint for preview", () => {
       { id: "b", type: "wall", rel: v(10, 0), envelope: { center: { X: 0, Y: 0, Z: 0 }, size: { X: 4, Y: 4, Z: 1 } } },
     ];
     const ghosts = ghostTasks(tasks, v(5, 5), Math.PI / 2);
-    expect(ghosts[0].pos).toEqual(v(5, 5)); // (0,0) → origin
-    // (10,0) rotated +90° about origin → (5, 15)
+    expect(ghosts[0].pos).toEqual(v(5, 5));
     expect(ghosts[1].pos.X).toBeCloseTo(5, 6);
     expect(ghosts[1].pos.Y).toBeCloseTo(15, 6);
   });
@@ -90,10 +82,10 @@ describe("ghostTasks — instantiate a catalog blueprint for preview", () => {
     const ghosts = ghostTasks(solar!.tasks, v(0, 0), 0);
     const pad2 = ghosts.find((g) => g.id === "pad-2");
     expect(pad2).toBeDefined();
-    expect(pad2!.pos).toEqual(v(5, 0)); // solar pads sit shoulder-to-shoulder (±5) since a91b5ae
+    expect(pad2!.pos).toEqual(v(5, 0));
     const f = footprintOf(pad2!);
-    expect(f.halfX).toBe(8); // size.X 16 / 2
-    expect(f.halfY).toBe(6); // size.Y 12 / 2
+    expect(f.halfX).toBe(8);
+    expect(f.halfY).toBe(6);
   });
 });
 
@@ -112,7 +104,6 @@ describe("placementValid — client mirror of the server gate", () => {
   });
 
   it("rejects a placement overlapping an existing structure", () => {
-    // An obstacle footprint right where the solar array's pad-1 lands (-16,0).
     const obstacle: Footprint = { cx: -16, cy: 0, halfX: 6, halfY: 6 };
     const reason = placementValid(solarGhosts(v(0, 0)), [obstacle]);
     expect(reason).not.toBeNull();
@@ -125,23 +116,15 @@ describe("placementValid — client mirror of the server gate", () => {
   });
 });
 
-describe("placeBlueprintControl — per-placement build mode (bh-08c)", () => {
-  it("threads the chosen LIVE mode into the placeBlueprint control", () => {
-    const ctl = placeBlueprintControl("dome", v(10, -5), Math.PI / 4, "live");
+describe("placeBlueprintControl", () => {
+  it("builds the placeBlueprint control", () => {
+    const ctl = placeBlueprintControl("dome", v(10, -5), Math.PI / 4);
     expect(ctl).toEqual({
       cmd: "placeBlueprint",
       blueprint_id: "dome",
       origin: v(10, -5),
       rotation: Math.PI / 4,
-      mode: "live",
     });
-  });
-
-  it("carries REPLAY as the default mode, leaving existing placements unchanged", () => {
-    const ctl = placeBlueprintControl("solar-array", v(0, 0), 0, "replay");
-    expect(ctl.mode).toBe("replay");
-    expect(ctl.cmd).toBe("placeBlueprint");
-    expect(ctl.blueprint_id).toBe("solar-array");
   });
 });
 

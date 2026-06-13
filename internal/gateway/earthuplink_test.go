@@ -25,10 +25,6 @@ func sampleEarthUplink() wire.EarthUplink {
 	}
 }
 
-// TestEarthUplinkRoundTrip publishes a wire.EarthUplink on earth.uplink and
-// asserts a connected websocket client receives it as a frame with type "earth"
-// — proving the gateway forwards the delayed Earth feed (issue 09) as a dumb,
-// unmodified fan-out alongside the tactical snapshot.
 func TestEarthUplinkRoundTrip(t *testing.T) {
 	conn, addr := startGateway(t)
 
@@ -55,9 +51,6 @@ func TestEarthUplinkRoundTrip(t *testing.T) {
 	}
 }
 
-// readEarthUntilReceived publishes want on earth.uplink every 50ms until ws
-// delivers an "earth"-typed frame matching it, ignoring any snapshot frames that
-// happen to arrive first. Deterministic: no fixed sleeps.
 func readEarthUntilReceived(ctx context.Context, t *testing.T, conn *bus.Conn, ws *websocket.Conn, want wire.EarthUplink) wire.EarthUplink {
 	t.Helper()
 
@@ -73,7 +66,6 @@ func readEarthUntilReceived(ctx context.Context, t *testing.T, conn *bus.Conn, w
 				ch <- result{err: err}
 				return
 			}
-			// Frames carry a "type" discriminator: route earth apart from snapshot.
 			var probe struct {
 				Type string `json:"type"`
 			}

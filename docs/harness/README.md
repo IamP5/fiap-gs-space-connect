@@ -20,7 +20,7 @@ repo's actual stack (Go deep modules + NATS + React/R3F dashboard + Docker demo)
 |---|---|---|
 | **Instructions** | Startup path, working rules, definition of done | [`AGENTS.md`](../../AGENTS.md), [`CONTEXT.md`](../../CONTEXT.md) (domain language), `docs/` |
 | **State** | Current feature, status, evidence, next step | [`feature_list.json`](../../feature_list.json), [`PROGRESS.md`](../../PROGRESS.md) |
-| **Verification** | Checks the agent must pass before claiming done | [`init.sh`](../../init.sh), `make check`, [`deploy/smoke.sh`](../../deploy/smoke.sh), CI |
+| **Verification** | Checks the agent must pass before claiming done | [`init.sh`](../../init.sh), `make check`, [`deploy/k8s/up.sh`](../../deploy/k8s/up.sh), CI |
 | **Scope** | Stops overreach and half-finished work | `feature_list.json` (WIP=1 + dependency DAG), `docs/**/issues/`, ADRs |
 | **Lifecycle** | Makes the next session restartable | Startup/End-of-session routines in `AGENTS.md`, [`clean-state-checklist.md`](./clean-state-checklist.md), [`session-handoff.md`](./session-handoff.md) |
 

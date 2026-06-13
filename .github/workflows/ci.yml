@@ -132,9 +132,6 @@ jobs:
       - name: Test
         run: npm test
 
-  # Single stable check to mark as "required" in branch protection.
-  # Passes when every job either succeeded or was skipped; fails only on a
-  # real failure or cancellation.
   ci-success:
     name: CI Success
     needs: [go-lint, go-test, web]
